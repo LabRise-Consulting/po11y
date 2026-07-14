@@ -1,0 +1,8 @@
+# Namespace for the whole po11y stack. Every other manifest sets
+# metadata.namespace: po11y so `kubectl apply -f deploy/k8s/` lands here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: po11y
+  labels:
+    app.kubernetes.io/part-of: po11y

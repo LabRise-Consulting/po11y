@@ -1,0 +1,11 @@
+# Provisioned only when the OTel override is used (mounted into Grafana's
+# provisioning dir by docker-compose.otel.yml). Points Grafana at Tempo so
+# n8n execution traces show up in the existing Grafana, no separate UI.
+apiVersion: 1
+datasources:
+  - name: n8n-tempo
+    uid: n8n-tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    isDefault: false

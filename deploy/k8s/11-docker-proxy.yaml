@@ -1,0 +1,69 @@
+# Read-only Docker API proxy (tecnativa/docker-socket-proxy:0.2).
+#
+# ============================ SECURITY / CAVEAT ============================
+# In the compose stack this sidecar bind-mounts the host's /var/run/docker.sock
+# (read-only) and exposes ONLY GET /containers/json (CONTAINERS=1, POST=0), so
+# n8n can render the "Running containers" list WITHOUT ever touching the host
+# Docker daemon directly.
+#
+# On generic Kubernetes there is NO Docker socket to proxy — pods run under the
+# node's container runtime (containerd/CRI-O) and the runtime socket is
+# deliberately NOT exposed to workloads. We therefore do NOT mount any host
+# socket here (mounting /var/run/docker.sock would be a serious host-escape
+# risk and usually would not even exist).
+#
+# CONSEQUENCE: the containers section of status.json degrades to EMPTY. n8n's
+# call to http://docker-proxy:2375/containers/json returns nothing usable, so
+# the dashboard's "Running containers" card shows no rows. Everything else
+# (workflow map, notifications, metrics, grafana) works normally. To list k8s
+# workloads instead, a future workflow would query the Kubernetes API via a
+# scoped ServiceAccount + RBAC — intentionally out of scope here to preserve
+# the "no node runtime access" posture.
+#
+# This Deployment is kept (image + Service) so n8n's HTTP call resolves to a
+# real endpoint that simply returns an empty container list, rather than a DNS
+# error. It has NO volumes and NO host access.
+# ==========================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docker-proxy
+  namespace: po11y
+  labels:
+    app: docker-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docker-proxy
+  template:
+    metadata:
+      labels:
+        app: docker-proxy
+    spec:
+      containers:
+        - name: docker-proxy
+          image: tecnativa/docker-socket-proxy:0.2
+          env:
+            - name: CONTAINERS
+              value: "1"   # GET /containers/json only
+            - name: POST
+              value: "0"   # deny all writes
+          ports:
+            - containerPort: 2375
+          # NOTE: no volumeMounts. The host Docker socket is intentionally NOT
+          # mounted on k8s (see caveat above). With no upstream socket the proxy
+          # cannot reach a daemon, which is exactly the intended posture.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docker-proxy
+  namespace: po11y
+spec:
+  type: ClusterIP
+  selector:
+    app: docker-proxy
+  ports:
+    - port: 2375
+      targetPort: 2375

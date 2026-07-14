@@ -1,0 +1,66 @@
+# Opt-in OpenTelemetry tracing for n8n executions.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d
+#
+# n8n has built-in OTLP tracing (n8n >= 2.19; the pinned image already
+# qualifies), so no custom image or community package is needed — this override
+# just enables it and adds a Grafana Tempo backend so traces surface in the
+# same Grafana as the metrics. Tracing is a newer, still-evolving n8n feature;
+# it is intentionally left out of the default stack (extra container, higher
+# data volume than the built-in Prometheus metrics) and opt-in here.
+services:
+  n8n:
+    environment:
+      - N8N_OTEL_ENABLED=true
+      # Base endpoint; n8n appends /v1/traces. Point at the Tempo receiver.
+      - N8N_OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
+      # Trace real runs, not manual editor test-runs; sample everything on a
+      # single box. Tune down if trace volume gets heavy.
+      - N8N_OTEL_TRACES_PRODUCTION_ONLY=true
+      - N8N_OTEL_TRACES_SAMPLE_RATE=1.0
+    depends_on:
+      - tempo
+
+  grafana:
+    # The base compose mounts provisioning-src read-only and copies it into a
+    # writable /tmp tree at startup, so we can't drop a file into it directly.
+    # Mount the Tempo datasource at a fresh path and extend the entrypoint to
+    # copy it into the provisioning tree. Keep the rest of this block in sync
+    # with the grafana entrypoint in docker-compose.yml.
+    volumes:
+      - ./deploy/otel/tempo-datasource.yml:/etc/po11y-otel/tempo-datasource.yml:ro
+      - ./deploy/otel/n8n-traces-dashboard.json:/etc/po11y-otel/n8n-traces-dashboard.json:ro
+    entrypoint:
+      - sh
+      - -euc
+      - |
+        rm -rf /tmp/grafana-provisioning
+        cp -r /etc/grafana/provisioning-src /tmp/grafana-provisioning
+        cp /etc/po11y-otel/tempo-datasource.yml /tmp/grafana-provisioning/datasources/tempo.yml
+        cp /etc/po11y-otel/n8n-traces-dashboard.json /tmp/grafana-provisioning/dashboards/json/n8n-traces.json
+        sed -i "s|__WEB_BIND_ADDR__|$$BIND_ADDR|g" /tmp/grafana-provisioning/dashboards/json/*.json
+        sed -i "s|/etc/grafana/provisioning/|/tmp/grafana-provisioning/|g" /tmp/grafana-provisioning/dashboards/dashboards.yml
+        exec /run.sh
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: po11y-tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./deploy/otel/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    # Ports stay internal (Grafana proxies to :3200); n8n pushes to :4318.
+
+  # Tempo's metrics-generator remote-writes span/service-graph metrics here, so
+  # Prometheus needs the remote-write receiver on. Command mirrors the base
+  # compose plus that flag (compose replaces the command, so keep them in sync).
+  prometheus:
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-180d}
+      - --web.enable-remote-write-receiver
+
+volumes:
+  tempo_data:

@@ -12,17 +12,16 @@ services:
       # Plain HTTP — acceptable on localhost / a private network only.
       - N8N_SECURE_COOKIE=false
       - WEBHOOK_URL=http://${BIND_ADDR:-127.0.0.1}:5678/
-      # Code nodes write /po11y-status/*.json via the fs builtin; the ai-map
-      # workflow reads its AI_MAP_* config via $env.
+      # Code nodes write /po11y-status/*.json via the fs builtin (the only
+      # builtin allowed). $env is blocked in nodes so a workflow cannot read
+      # the DB / Grafana passwords out of the process environment; the ai-map
+      # workflow reads its optional AI config from /run/po11y/ai-map.json
+      # (rendered by bootstrap from .env, mounted read-only, not web-served).
       - NODE_FUNCTION_ALLOW_BUILTIN=fs
-      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
-      # --- AI architecture map (optional; skipped when unset) ---
-      # Any OpenAI-compatible chat-completions endpoint.
-      - AI_MAP_BASE_URL=${AI_MAP_BASE_URL:-}
-      - AI_MAP_API_KEY=${AI_MAP_API_KEY:-}
-      - AI_MAP_MODEL=${AI_MAP_MODEL:-}
-      # n8n >=2.0 disables Execute Command by default; the status publisher
-      # (docker ps) and workflow map (n8n export:workflow) need it.
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=true
+      # n8n >=2.0 disables Execute Command by default; the workflow map
+      # (n8n export:workflow) still needs it. The host Docker socket is no
+      # longer mounted here, so this shell is confined to the n8n container.
       - NODES_EXCLUDE=[]
       # --- datastore ---
       - DB_TYPE=postgresdb
@@ -35,19 +34,38 @@ services:
       # --- metrics (scraped by prometheus) ---
       - N8N_METRICS=true
       - N8N_METRICS_INCLUDE_WORKFLOW_ID_LABEL=true
+      # Feed the bundled Webhook/Form execution dashboards (from the official
+      # n8n-io/n8n-observability set). WORKFLOW_INFO adds the n8n_workflow_info
+      # gauge both dashboards join against.
+      - N8N_METRICS_INCLUDE_WEBHOOK_METRICS=true
+      - N8N_METRICS_INCLUDE_FORM_METRICS=true
+      - N8N_METRICS_INCLUDE_WORKFLOW_INFO=true
     volumes:
       - n8n_data:/home/node/.n8n
-      # Host docker socket for the containers section of the dashboard.
-      # Root-equivalent on the host — single-user box assumption; remove this
-      # mount (the publisher degrades gracefully) if that is not acceptable.
-      - /var/run/docker.sock:/var/run/docker.sock
       - ./workflows:/workflows:ro
       - ./packs:/packs:ro
+      # Optional AI-map config, not on the web-served status volume. bootstrap
+      # renders it from .env; empty file = heuristic map (no LLM).
+      - ./secrets/ai-map.json:/run/po11y/ai-map.json:ro
       - po11y_status:/po11y-status
-    group_add:
-      - "${DOCKER_GID:?run ./bootstrap.sh (or set DOCKER_GID in .env)}"
     depends_on:
       - postgres
+      - docker-proxy
+
+  # Read-only Docker API proxy. n8n reads the containers list for the dashboard
+  # through this instead of mounting the host socket directly: only the
+  # container-list endpoint is exposed (CONTAINERS=1), every mutating and
+  # sensitive endpoint is denied, and the real socket is never reachable from
+  # n8n. A compromised n8n therefore cannot control the host's Docker daemon.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    container_name: po11y-docker-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1   # GET /containers/json only
+      - POST=0         # deny all writes (default, set explicit)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   postgres:
     image: postgres:16-alpine

@@ -48,21 +48,20 @@ get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/[[:space:]
 [ -n "$(get_env GRAFANA_ADMIN_PASSWORD)" ] || set_env GRAFANA_ADMIN_PASSWORD "$(openssl rand -hex 16)"
 [ -n "$(get_env N8N_OWNER_PASSWORD)" ]     || set_env N8N_OWNER_PASSWORD "A1$(openssl rand -hex 16)"
 
-# Docker socket GID. On macOS the host-side gid is meaningless — Docker
-# Desktop mounts the socket root:root (gid 0) INSIDE containers.
-if [ -S /var/run/docker.sock ]; then
-  case "$(uname)" in
-    Darwin) GID_NOW=0 ;;
-    *) GID_NOW="$(stat -c '%g' /var/run/docker.sock)" ;;
-  esac
-  [ "$(get_env DOCKER_GID)" = "$GID_NOW" ] || set_env DOCKER_GID "$GID_NOW"
-else
-  echo "bootstrap: warning — /var/run/docker.sock not found; containers section will be empty"
-fi
+# The read-only docker-socket-proxy (not n8n) mounts the host socket; without
+# it the dashboard's containers section is simply empty.
+[ -S /var/run/docker.sock ] || echo "bootstrap: warning — /var/run/docker.sock not found; containers section will be empty"
 
 # Instance config: live copy is git-ignored, seeded from the example.
 [ -f config.json ] || { cp config.example.json config.json; echo "bootstrap: created config.json from config.example.json — edit it to taste"; }
-mkdir -p packs site
+mkdir -p packs site secrets
+
+# Optional AI-map config → a non-served file the ai-map workflow reads (env
+# access is blocked inside n8n Code nodes, so config cannot come from the
+# container environment). Empty values just mean the heuristic (no-LLM) map.
+# Rendered before 'compose up' so the bind mount is a file, not a directory.
+python3 -c 'import json,sys; json.dump({"base_url":sys.argv[1],"api_key":sys.argv[2],"model":sys.argv[3]}, open("secrets/ai-map.json","w"))' \
+  "$(get_env AI_MAP_BASE_URL)" "$(get_env AI_MAP_API_KEY)" "$(get_env AI_MAP_MODEL)"
 
 # ---- 2. stack up ----------------------------------------------------------------
 docker compose --env-file "$ENV_FILE" up -d --build

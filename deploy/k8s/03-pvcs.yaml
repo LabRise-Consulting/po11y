@@ -1,0 +1,76 @@
+# PersistentVolumeClaims — the k8s equivalent of the named volumes in
+# docker-compose.yml (n8n_data, postgres_data, prometheus_data, grafana_data,
+# po11y_status).
+#
+# All are ReadWriteOnce (RWO). The four per-service data volumes are only ever
+# mounted by their single owning pod, so RWO is exactly right; the owning
+# Deployments use strategy: Recreate so a rollout never tries to attach the
+# same RWO volume to two pods at once.
+#
+# po11y_status is the exception: n8n WRITES it and dashboard READS it, i.e. two
+# pods. RWO only permits multi-pod mounting when both pods are on the SAME node.
+# Trade-off / options:
+#   * simplest (assumed here): keep RWO and co-schedule dashboard onto n8n's
+#     node via podAffinity (see 50-dashboard.yaml). Fine for a single-node or
+#     pinned deployment — matches the single-host compose stack.
+#   * portable: change po11y-status to ReadWriteMany (RWX) and use an RWX-capable
+#     StorageClass (NFS, CephFS, EFS, Longhorn-RWX, ...). Then drop the affinity.
+# Adjust storageClassName / sizes to your cluster; blank storageClassName uses
+# the cluster default.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: n8n-data
+  namespace: po11y
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: po11y
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: po11y
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: po11y
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Shared status volume: n8n writes *.json here, dashboard serves them read-only.
+# See the header note on RWO vs RWX and the co-scheduling affinity.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: po11y-status
+  namespace: po11y
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 256Mi

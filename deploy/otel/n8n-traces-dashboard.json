@@ -1,0 +1,161 @@
+{
+  "uid": "n8n-exec-traces",
+  "title": "n8n Execution Traces",
+  "tags": ["n8n", "traces", "tempo"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "workflow",
+        "label": "Workflow",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+        "query": "label_values(traces_spanmetrics_calls_total{span_name=\"workflow.execute\"}, n8n_workflow_name)",
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Workflow executions / min",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+          "expr": "sum(rate(traces_spanmetrics_calls_total{span_name=\"workflow.execute\", n8n_workflow_name=~\"$workflow\"}[5m])) * 60"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Workflow errors (range)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+          "expr": "sum(increase(traces_spanmetrics_calls_total{span_name=\"workflow.execute\", n8n_execution_status=\"error\", n8n_workflow_name=~\"$workflow\"}[$__range]))"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Node p95 latency (worst)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+          "expr": "max(histogram_quantile(0.95, sum by (le, n8n_node_name) (rate(traces_spanmetrics_latency_bucket{span_name=\"node.execute\"}[5m]))))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Node executions (range)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+          "expr": "sum(increase(traces_spanmetrics_calls_total{span_name=\"node.execute\"}[$__range]))"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Workflow executions by status",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" } } } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+          "legendFormat": "{{n8n_execution_status}}",
+          "expr": "sum by (n8n_execution_status) (rate(traces_spanmetrics_calls_total{span_name=\"workflow.execute\", n8n_workflow_name=~\"$workflow\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Node p95 latency (per node)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+          "legendFormat": "{{n8n_node_name}}",
+          "expr": "histogram_quantile(0.95, sum by (le, n8n_node_name) (rate(traces_spanmetrics_latency_bucket{span_name=\"node.execute\"}[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Executions per workflow (range)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+          "expr": "sum by (n8n_workflow_name, n8n_execution_status) (increase(traces_spanmetrics_calls_total{span_name=\"workflow.execute\", n8n_workflow_name=~\"$workflow\"}[$__range]))"
+        }
+      ],
+      "transformations": [
+        { "id": "labelsToFields", "options": {} },
+        { "id": "organize", "options": { "excludeByName": { "Time": true } } }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Slowest nodes (p95, range)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "datasource": { "type": "prometheus", "uid": "n8n-prometheus" },
+          "expr": "topk(15, histogram_quantile(0.95, sum by (le, n8n_node_name, n8n_node_type) (rate(traces_spanmetrics_latency_bucket{span_name=\"node.execute\"}[$__range]))))"
+        }
+      ],
+      "transformations": [
+        { "id": "labelsToFields", "options": {} },
+        { "id": "organize", "options": { "excludeByName": { "Time": true } } }
+      ]
+    }
+  ]
+}

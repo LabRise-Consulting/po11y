@@ -1,0 +1,117 @@
+# Grafana — dashboards over the n8n postgres + prometheus. Compose:
+# grafana/grafana-oss:11.3.1. The custom entrypoint is mirrored verbatim: it
+# copies the read-only provisioning source to a writable /tmp copy, seds the
+# n8n deep-link host into the dashboard JSON, and rewrites the dashboards.yml
+# provider path. Grafana serves from the /grafana/ subpath behind nginx.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: po11y
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # RWO grafana-data
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      # grafana image runs as uid/gid 472; make the PVC writable by it.
+      securityContext:
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: grafana/grafana-oss:11.3.1
+          # Verbatim copy of the compose entrypoint (sh -euc <script>).
+          command: ["sh", "-euc"]
+          args:
+            - |
+              rm -rf /tmp/grafana-provisioning
+              cp -r /etc/grafana/provisioning-src /tmp/grafana-provisioning
+              sed -i "s|__WEB_BIND_ADDR__|$BIND_ADDR|g" /tmp/grafana-provisioning/dashboards/json/*.json
+              sed -i "s|/etc/grafana/provisioning/|/tmp/grafana-provisioning/|g" /tmp/grafana-provisioning/dashboards/dashboards.yml
+              exec /run.sh
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: po11y-secrets
+                  key: GRAFANA_ADMIN_PASSWORD
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: DB_POSTGRESDB_DATABASE
+              value: "n8n"
+            - name: DB_POSTGRESDB_USER
+              value: "n8n"
+            - name: DB_POSTGRESDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: po11y-secrets
+                  key: DB_POSTGRESDB_PASSWORD
+            # Deep-link host baked into the dashboard JSON by the entrypoint sed.
+            - name: BIND_ADDR
+              value: "127.0.0.1"
+            - name: GF_PATHS_PROVISIONING
+              value: "/tmp/grafana-provisioning"
+            # http://${BIND_ADDR}:${DASHBOARD_PORT}/grafana/ with defaults.
+            - name: GF_SERVER_ROOT_URL
+              value: "http://127.0.0.1:8080/grafana/"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
+            # DASHBOARD_GRAFANA_EMBED default (true): anonymous Viewer + iframes.
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Viewer"
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "true"
+          volumeMounts:
+            # Provisioning source tree, assembled from two ConfigMaps into the
+            # layout the entrypoint expects under /etc/grafana/provisioning-src.
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning-src/datasources/datasources.yml
+              subPath: datasources.yml
+              readOnly: true
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning-src/dashboards/dashboards.yml
+              subPath: dashboards.yml
+              readOnly: true
+            # Dashboard JSON dir (create imperatively, see README).
+            - name: dashboards-json
+              mountPath: /etc/grafana/provisioning-src/dashboards/json
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: provisioning
+          configMap:
+            name: grafana-provisioning
+        - name: dashboards-json
+          configMap:
+            name: grafana-dashboards-json
+        - name: data
+          persistentVolumeClaim:
+            claimName: grafana-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: po11y
+spec:
+  type: ClusterIP
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000

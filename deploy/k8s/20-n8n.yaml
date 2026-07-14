@@ -1,0 +1,142 @@
+# n8n — the workflow engine that publishes status.json / map.json etc.
+#
+# IMAGE: this is a LOCAL BUILD from the repo Dockerfile (FROM n8nio/n8n:2.29.8
+# plus the static docker CLI and a pre-created /po11y-status owned by node).
+# There is no public image — you MUST build and push it, then set the image
+# below to your registry ref. Placeholder used here: po11y-n8n:latest
+#   docker build -t <registry>/po11y-n8n:latest .
+#   docker push  <registry>/po11y-n8n:latest
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n
+  namespace: po11y
+  labels:
+    app: n8n
+spec:
+  replicas: 1
+  # Recreate: n8n-data (and the RWO po11y-status) must not double-attach.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: n8n
+  template:
+    metadata:
+      labels:
+        app: n8n
+    spec:
+      containers:
+        - name: n8n
+          # <-- REPLACE with your pushed image (built from ./Dockerfile).
+          image: po11y-n8n:latest
+          ports:
+            - containerPort: 5678
+          env:
+            - name: GENERIC_TIMEZONE
+              value: "Europe/Berlin"
+            - name: TZ
+              value: "Europe/Berlin"
+            - name: N8N_DIAGNOSTICS_ENABLED
+              value: "false"
+            # Plain HTTP — acceptable on a private cluster / behind a TLS ingress.
+            - name: N8N_SECURE_COOKIE
+              value: "false"
+            # Point at however the dashboard is reached; adjust host as needed.
+            - name: WEBHOOK_URL
+              value: "http://127.0.0.1:5678/"
+            # Security posture preserved from compose: only the fs builtin is
+            # allowed in Code nodes, and $env access is blocked so a workflow
+            # cannot read DB/Grafana passwords out of the process environment.
+            - name: NODE_FUNCTION_ALLOW_BUILTIN
+              value: "fs"
+            - name: N8N_BLOCK_ENV_ACCESS_IN_NODE
+              value: "true"
+            - name: NODES_EXCLUDE
+              value: "[]"
+            # --- datastore ---
+            - name: DB_TYPE
+              value: "postgresdb"
+            - name: DB_POSTGRESDB_HOST
+              value: "postgres"
+            - name: DB_POSTGRESDB_PORT
+              value: "5432"
+            - name: DB_POSTGRESDB_DATABASE
+              value: "n8n"
+            - name: DB_POSTGRESDB_USER
+              value: "n8n"
+            - name: DB_POSTGRESDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: po11y-secrets
+                  key: DB_POSTGRESDB_PASSWORD
+            - name: EXECUTIONS_DATA_MAX_AGE
+              value: "4380"
+            # --- metrics (scraped by prometheus) ---
+            - name: N8N_METRICS
+              value: "true"
+            - name: N8N_METRICS_INCLUDE_WORKFLOW_ID_LABEL
+              value: "true"
+            # Feed the bundled Webhook/Form execution dashboards.
+            - name: N8N_METRICS_INCLUDE_WEBHOOK_METRICS
+              value: "true"
+            - name: N8N_METRICS_INCLUDE_FORM_METRICS
+              value: "true"
+            - name: N8N_METRICS_INCLUDE_WORKFLOW_INFO
+              value: "true"
+          volumeMounts:
+            - name: n8n-data
+              mountPath: /home/node/.n8n
+            # Optional AI-map config (Secret), read-only, NOT on the web-served
+            # status volume. Empty JSON = heuristic map (no LLM).
+            - name: ai-map
+              mountPath: /run/po11y/ai-map.json
+              subPath: ai-map.json
+              readOnly: true
+            # Shared status volume: n8n writes *.json here; dashboard serves them.
+            - name: status
+              mountPath: /po11y-status
+            # --- workflows / packs (compose bind-mounts ./workflows, ./packs) ---
+            # These are nested directories, which a ConfigMap cannot represent.
+            # RECOMMENDED: bake them into the image (COPY workflows /workflows,
+            # COPY packs /packs) at build time. If you flatten them you can
+            # instead create ConfigMaps and mount them read-only here, e.g.:
+            #   kubectl -n po11y create configmap n8n-workflows --from-file=workflows/
+            # - name: workflows
+            #   mountPath: /workflows
+            #   readOnly: true
+            # - name: packs
+            #   mountPath: /packs
+            #   readOnly: true
+      volumes:
+        - name: n8n-data
+          persistentVolumeClaim:
+            claimName: n8n-data
+        - name: ai-map
+          secret:
+            secretName: po11y-ai-map
+        - name: status
+          persistentVolumeClaim:
+            claimName: po11y-status
+        # - name: workflows
+        #   configMap:
+        #     name: n8n-workflows
+        # - name: packs
+        #   configMap:
+        #     name: n8n-packs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n
+  namespace: po11y
+spec:
+  # ClusterIP: internal only. prometheus scrapes n8n:5678/metrics; the dashboard
+  # deep-links to the editor via the browser (config.json {host}), so expose the
+  # editor separately (ingress/port-forward) only if you want editor access.
+  type: ClusterIP
+  selector:
+    app: n8n
+  ports:
+    - port: 5678
+      targetPort: 5678

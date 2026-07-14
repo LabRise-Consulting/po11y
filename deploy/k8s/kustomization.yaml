@@ -1,0 +1,18 @@
+# Optional convenience: `kubectl apply -k deploy/k8s/`.
+# NOTE: the ConfigMaps/Secrets for large static files (po11y-html, po11y-vendor,
+# po11y-site, grafana-dashboards-json) are created imperatively (see README) and
+# are intentionally NOT generated here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: po11y
+resources:
+  - 00-namespace.yaml
+  - 01-secrets.yaml
+  - 02-configmaps.yaml
+  - 03-pvcs.yaml
+  - 10-postgres.yaml
+  - 11-docker-proxy.yaml
+  - 20-n8n.yaml
+  - 30-prometheus.yaml
+  - 40-grafana.yaml
+  - 50-dashboard.yaml

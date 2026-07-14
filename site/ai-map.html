@@ -56,7 +56,8 @@
     font-weight:600;letter-spacing:.04em}
   .node .name{font-size:13.5px;font-weight:600;margin-top:1px;letter-spacing:-.01em}
   .node .sub{font-family:var(--mono);font-size:10.5px;color:var(--muted);
-    margin-top:4px;line-height:1.35;word-break:break-word}
+    margin-top:4px;line-height:1.35;word-break:break-word;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .stage.dim .node:not(.hot){opacity:.32}
   .stage.dim .node.hot{box-shadow:0 0 0 2px var(--nc,var(--cyan)),var(--shadow)}
   path.edge{fill:none;stroke:var(--edge);stroke-width:1.6;opacity:.85;
@@ -147,7 +148,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   } catch (e) { meta.textContent = e.message; return; }
   meta.hidden = true;
   document.getElementById("setup").remove();
-  for (const el of document.querySelectorAll("[hidden]")) el.hidden = false;
+  for (const el of document.querySelectorAll("header[hidden],.board[hidden],.notes[hidden],footer[hidden]")) el.hidden = false;
 
   const cs = getComputedStyle(document.documentElement);
   const colVar = (kind) => {
@@ -167,7 +168,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   const ids = new Set(N.map((n) => n.id));
   const E = (d.edges || []).filter((e) => Array.isArray(e) && ids.has(e[0]) && ids.has(e[1]));
 
-  const NODE_W = 190, NODE_H = 66, VGAP = 26, PAD_TOP = 52, PAD_BOT = 28;
+  const NODE_W = 190, NODE_H = 74, VGAP = 24, PAD_TOP = 66, PAD_BOT = 30;
   const STAGE_W = Math.max(760, 220 + (COLS.length - 1) * 235);
   const COL_X = COLS.map((_, c) => COLS.length === 1 ? STAGE_W / 2 : 110 + c * ((STAGE_W - 220) / (COLS.length - 1)));
 

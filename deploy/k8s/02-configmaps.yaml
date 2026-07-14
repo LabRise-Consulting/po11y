@@ -1,0 +1,216 @@
+# ConfigMaps holding the small text config files that compose bind-mounts.
+#
+# Large static asset directories are NOT inlined here (a ConfigMap is capped at
+# ~1 MiB and cannot represent nested directories). Create those imperatively —
+# see deploy/k8s/README.md. In particular:
+#
+#   # Dashboard static site (html/ incl. the 2.5 MB html/vendor/mermaid.min.js):
+#   kubectl -n po11y create configmap po11y-html   --from-file=html/
+#   kubectl -n po11y create configmap po11y-vendor  --from-file=html/vendor/
+#   kubectl -n po11y create configmap po11y-site    --from-file=site/
+#
+#   # Grafana dashboard JSON (34 KB + 57 KB — too large / churny to inline):
+#   kubectl -n po11y create configmap grafana-dashboards-json \
+#     --from-file=observability/grafana/provisioning/dashboards/json/
+#
+# The grafana entrypoint sed-loops over dashboards/json/*.json, so the
+# grafana-dashboards-json ConfigMap MUST exist before grafana starts or the
+# container crash-loops on an unmatched glob.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: po11y-nginx
+  namespace: po11y
+data:
+  # Verbatim copy of ./nginx.conf. Upstreams (grafana:3000, prometheus:9090)
+  # resolve to the ClusterIP Services of the same name in this namespace.
+  # The resolver line is Docker's embedded DNS (127.0.0.11); on k8s it is
+  # harmless — nginx also passes literal Service names to kube-dns via the
+  # variable-upstream form, so backends being down never blocks nginx start.
+  default.conf: |
+    server {
+      listen 80;
+      server_name _;
+
+      resolver 127.0.0.11 valid=10s ipv6=off;
+
+      root /usr/share/nginx/html;
+      index index.html;
+
+      location = /config.json {
+        alias /run/po11y/config.json;
+        add_header Cache-Control "no-store";
+      }
+
+      location = /status.json {
+        alias /po11y-status/status.json;
+        add_header Cache-Control "no-store";
+      }
+      location = /notifications.json {
+        alias /po11y-status/notifications.json;
+        add_header Cache-Control "no-store";
+      }
+
+      location = /map.json {
+        alias /po11y-status/map.json;
+        add_header Cache-Control "no-store";
+      }
+
+      location = /ai-map.json {
+        alias /po11y-status/ai-map.json;
+        add_header Cache-Control "no-store";
+      }
+
+      location = /forms.json {
+        alias /po11y-status/forms.json;
+        add_header Cache-Control "no-store";
+      }
+
+      location /site/ {
+        alias /usr/share/nginx/site/;
+      }
+
+      location /grafana/ {
+        set $grafana_upstream http://grafana:3000;
+        proxy_pass $grafana_upstream;
+        proxy_set_header Host $http_host;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+      }
+
+      location = /prom/api/v1/query {
+        limit_except GET { deny all; }
+        set $prometheus_upstream http://prometheus:9090;
+        rewrite ^/prom(/.*)$ $1 break;
+        proxy_pass $prometheus_upstream;
+      }
+      location = /prom/api/v1/query_range {
+        limit_except GET { deny all; }
+        set $prometheus_upstream http://prometheus:9090;
+        rewrite ^/prom(/.*)$ $1 break;
+        proxy_pass $prometheus_upstream;
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: po11y-config
+  namespace: po11y
+data:
+  # From config.example.json. Mounted at /run/po11y/config.json and served by
+  # nginx at /config.json. {host} is resolved client-side by the dashboard JS.
+  config.json: |
+    {
+      "title": "Po11y",
+      "eyebrow": "po11y · status",
+      "lede": "Live view of this stack: containers and notifications refresh every 30 s from status.json (published by the n8n workflows); the Map tab is generated from the n8n instance itself.",
+      "footer": [
+        { "text": "po11y", "href": "https://gitlab.com/labrise/po11y" }
+      ],
+      "cards": {
+        "Actions": [
+          { "name": "New workflow", "sub": "open the n8n editor", "href": "http://{host}:5678/workflow/new" }
+        ],
+        "Monitoring": [
+          { "name": "n8n", "sub": "workflow editor", "href": "http://{host}:5678/" },
+          { "name": "Execution analytics", "sub": "grafana", "href": "/grafana/d/adfcxfk" },
+          { "name": "System health", "sub": "n8n process metrics", "href": "/grafana/d/adv6qmb" },
+          { "name": "Prometheus", "sub": "raw metrics", "href": "http://{host}:9090/" }
+        ]
+      },
+      "tabs": [
+        { "id": "map", "label": "Map", "src": "/site/map.html" },
+        { "id": "arch", "label": "Architecture", "src": "/site/ai-map.html" }
+      ],
+      "sections": {
+        "containers": "Running containers",
+        "notifications": "Notifications"
+      },
+      "metrics": {
+        "heading": "Metrics",
+        "grafana": {
+          "embed": true,
+          "base": "/grafana",
+          "dashboard": "adfcxfk",
+          "panels": [ { "id": 19 }, { "id": 26, "wide": true } ],
+          "range": "now-7d"
+        },
+        "promBase": "/prom",
+        "stats": [
+          { "label": "n8n", "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}" }
+        ]
+      },
+      "refreshSec": 30,
+      "staleAfterMin": 5,
+      "statusHint": "status.json missing — first schedule tick lands within ~2 min of bootstrap"
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: po11y-prometheus
+  namespace: po11y
+data:
+  # Verbatim ./observability/prometheus.yml. Target n8n:5678 is the n8n Service.
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+
+    scrape_configs:
+      - job_name: n8n
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["n8n:5678"]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: po11y
+data:
+  # ./observability/grafana/provisioning/datasources/datasources.yml
+  # Grafana interpolates ${VAR} in provisioning YAML from the pod env, so the
+  # DB_POSTGRESDB_* env vars on the grafana Deployment fill these in.
+  datasources.yml: |
+    apiVersion: 1
+
+    datasources:
+      - name: n8n-postgres
+        uid: n8n-postgres
+        type: postgres
+        access: proxy
+        url: postgres:5432
+        database: ${DB_POSTGRESDB_DATABASE}
+        user: ${DB_POSTGRESDB_USER}
+        secureJsonData:
+          password: ${DB_POSTGRESDB_PASSWORD}
+        jsonData:
+          sslmode: disable
+          postgresVersion: 1600
+          maxOpenConns: 5
+        isDefault: false
+
+      - name: n8n-prometheus
+        uid: n8n-prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+  # ./observability/grafana/provisioning/dashboards/dashboards.yml
+  # The grafana entrypoint rewrites the /etc/grafana/provisioning/ path prefix
+  # to /tmp/grafana-provisioning/ at start, so this path is correct as-is.
+  dashboards.yml: |
+    apiVersion: 1
+
+    providers:
+      - name: n8n
+        orgId: 1
+        folder: n8n
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        options:
+          path: /etc/grafana/provisioning/dashboards/json

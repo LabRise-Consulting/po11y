@@ -2,3 +2,4 @@
 config.json
 packs/*
 !packs/.gitkeep
+secrets/

@@ -1,0 +1,25 @@
+{
+  "_comment": "OTel traces card group for config.json. Merge into cards: {}. Needs the OTel override running; the Explore links open Grafana Explore (log in \u2014 Explore requires Editor, not the anonymous Viewer). TraceQL: {status=error}, {duration>2s}, {}.",
+  "Traces (OTel)": [
+    {
+      "name": "Execution traces",
+      "sub": "grafana dashboard",
+      "href": "/grafana/d/n8n-exec-traces"
+    },
+    {
+      "name": "Recent errors",
+      "sub": "grafana explore \u00b7 tempo",
+      "href": "/grafana/explore?schemaVersion=1&orgId=1&panes=%7B%22err%22%3A%7B%22datasource%22%3A%22n8n-tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22n8n-tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7Bstatus%3Derror%7D%22%2C%22limit%22%3A20%2C%22tableType%22%3A%22traces%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-24h%22%2C%22to%22%3A%22now%22%7D%7D%7D"
+    },
+    {
+      "name": "Slow runs (>2s)",
+      "sub": "grafana explore \u00b7 tempo",
+      "href": "/grafana/explore?schemaVersion=1&orgId=1&panes=%7B%22slow%22%3A%7B%22datasource%22%3A%22n8n-tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22n8n-tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7Bduration%3E2s%7D%22%2C%22limit%22%3A20%2C%22tableType%22%3A%22traces%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-24h%22%2C%22to%22%3A%22now%22%7D%7D%7D"
+    },
+    {
+      "name": "All recent traces",
+      "sub": "grafana explore \u00b7 tempo",
+      "href": "/grafana/explore?schemaVersion=1&orgId=1&panes=%7B%22all%22%3A%7B%22datasource%22%3A%22n8n-tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22n8n-tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%7D%22%2C%22limit%22%3A20%2C%22tableType%22%3A%22traces%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-1h%22%2C%22to%22%3A%22now%22%7D%7D%7D"
+    }
+  ]
+}
