@@ -1,0 +1,28 @@
+{
+  "id": "po11yhnnotify000",
+  "name": "Po11y example - HN notify",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a4000000-0000-0000-0000-000000000001",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sink writer for the /po11y-status/notifications.json contract: dedupe\n// by link, newest first, capped at 50, atomic tmp+rename. Called as a\n// sub-workflow by 'HN tech news' — and reusable by any other feeder that\n// passes { stories: [{ ts, title, message, status, link }] }.\nconst fs = require('fs');\nconst FILE = '/po11y-status/notifications.json';\nconst stories = $json.stories || [];\nconst existing = (() => { try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch { return []; } })();\nconst seen = new Set(existing.map((e) => e.link));\nconst fresh = stories.filter((s) => s.link && s.title && !seen.has(s.link));\nif (fresh.length) {\n  const merged = [...fresh, ...existing].slice(0, 50);\n  fs.writeFileSync(FILE + '.tmp', JSON.stringify(merged));\n  fs.renameSync(FILE + '.tmp', FILE);\n}\nreturn [{ json: { added: fresh.length } }];"
+      },
+      "id": "a4000000-0000-0000-0000-000000000002",
+      "name": "Publish notifications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "When called": { "main": [[{ "node": "Publish notifications", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,44 @@
+{
+  "title": "Po11y",
+  "eyebrow": "po11y · status",
+  "lede": "Live view of this stack: containers and notifications refresh every 30 s from status.json (published by the n8n workflows); the Map tab is generated from the n8n instance itself.",
+  "footer": [
+    { "text": "po11y", "href": "https://gitlab.com/labrise/po11y" }
+  ],
+  "cards": {
+    "Actions": [
+      { "name": "New workflow", "sub": "open the n8n editor", "href": "http://{host}:5678/workflow/new" }
+    ],
+    "Monitoring": [
+      { "name": "n8n", "sub": "workflow editor", "href": "http://{host}:5678/" },
+      { "name": "Execution analytics", "sub": "grafana", "href": "/grafana/d/adfcxfk" },
+      { "name": "System health", "sub": "n8n process metrics", "href": "/grafana/d/adv6qmb" },
+      { "name": "Prometheus", "sub": "raw metrics", "href": "http://{host}:9090/" }
+    ]
+  },
+  "tabs": [
+    { "id": "map", "label": "Map", "src": "/site/map.html" },
+    { "id": "arch", "label": "Architecture", "src": "/site/ai-map.html" }
+  ],
+  "sections": {
+    "containers": "Running containers",
+    "notifications": "Notifications"
+  },
+  "metrics": {
+    "heading": "Metrics",
+    "grafana": {
+      "embed": true,
+      "base": "/grafana",
+      "dashboard": "adfcxfk",
+      "panels": [ { "id": 19 }, { "id": 26, "wide": true } ],
+      "range": "now-7d"
+    },
+    "promBase": "/prom",
+    "stats": [
+      { "label": "n8n", "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}" }
+    ]
+  },
+  "refreshSec": 30,
+  "staleAfterMin": 5,
+  "statusHint": "status.json missing — first schedule tick lands within ~2 min of bootstrap"
+}

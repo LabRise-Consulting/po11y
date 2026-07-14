@@ -1,0 +1,60 @@
+{
+  "id": "po11yhnnews00000",
+  "name": "Po11y example - HN tech news",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 30 }] }
+      },
+      "id": "a2000000-0000-0000-0000-000000000001",
+      "name": "Every 30 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, -80]
+    },
+    {
+      "parameters": {
+        "path": "hn-fetch-now",
+        "formTitle": "Fetch HN now",
+        "formDescription": "Pull the current Hacker News top stories into the notification feed immediately.",
+        "formFields": { "values": [] },
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a2000000-0000-0000-0000-000000000003",
+      "name": "Fetch now (form)",
+      "webhookId": "hn-fetch-now",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [0, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Example feeder: fetch the top Hacker News stories (zero credentials).\n// Publishing is delegated to the dependent 'HN notify' sub-workflow, which\n// owns the notifications.json contract (dedupe + atomic write).\nconst ids = await this.helpers.httpRequest({ url: 'https://hacker-news.firebaseio.com/v0/topstories.json', json: true });\nconst stories = [];\nfor (const id of ids.slice(0, 10)) {\n  const it = await this.helpers.httpRequest({ url: `https://hacker-news.firebaseio.com/v0/item/${id}.json`, json: true });\n  if (!it || !it.title) continue;\n  stories.push({\n    ts: new Date((it.time || 0) * 1000).toISOString(),\n    title: it.title,\n    message: `HN · ${it.score || 0} points`,\n    status: 'info',\n    link: it.url || `https://news.ycombinator.com/item?id=${id}`,\n  });\n}\nreturn [{ json: { stories } }];"
+      },
+      "id": "a2000000-0000-0000-0000-000000000002",
+      "name": "Fetch top stories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": { "__rl": true, "value": "po11yhnnotify000", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "a2000000-0000-0000-0000-000000000004",
+      "name": "Notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Every 30 min": { "main": [[{ "node": "Fetch top stories", "type": "main", "index": 0 }]] },
+    "Fetch now (form)": { "main": [[{ "node": "Fetch top stories", "type": "main", "index": 0 }]] },
+    "Fetch top stories": { "main": [[{ "node": "Notify", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,24 @@
+apiVersion: 1
+
+datasources:
+  - name: n8n-postgres
+    uid: n8n-postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: ${DB_POSTGRESDB_DATABASE}
+    user: ${DB_POSTGRESDB_USER}
+    secureJsonData:
+      password: ${DB_POSTGRESDB_PASSWORD}
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      maxOpenConns: 5
+    isDefault: false
+
+  - name: n8n-prometheus
+    uid: n8n-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

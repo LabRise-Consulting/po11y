@@ -1,0 +1,42 @@
+{
+  "id": "po11ystatuspub00",
+  "name": "Po11y - Status publish",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 2 }] }
+      },
+      "id": "a0000000-0000-0000-0000-000000000001",
+      "name": "Every 2 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "command": "docker ps --format '{{.Names}}|{{.Image}}|{{.Status}}'"
+      },
+      "id": "a0000000-0000-0000-0000-000000000002",
+      "name": "List containers",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [220, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Publish live state for the dashboard. fs is an allowed builtin\n// (NODE_FUNCTION_ALLOW_BUILTIN=fs); tmp + rename so nginx never serves a\n// torn file. If the docker socket is absent the previous node errored\n// through (onError) — publish without the containers section, the dashboard\n// simply hides it.\nconst fs = require('fs');\nconst raw = $json.stdout || '';\nconst status = { generated_at: new Date().toISOString() };\nif (!$json.error && raw.trim()) {\n  status.containers = raw.split('\\n').filter(Boolean).map((l) => {\n    const [name, image, st] = l.split('|');\n    return { name, image, status: st };\n  });\n}\nfs.writeFileSync('/po11y-status/status.json.tmp', JSON.stringify(status));\nfs.renameSync('/po11y-status/status.json.tmp', '/po11y-status/status.json');\nreturn [{ json: { published: true, containers: (status.containers || []).length } }];"
+      },
+      "id": "a0000000-0000-0000-0000-000000000003",
+      "name": "Publish status.json",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Every 2 min": { "main": [[{ "node": "List containers", "type": "main", "index": 0 }]] },
+    "List containers": { "main": [[{ "node": "Publish status.json", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

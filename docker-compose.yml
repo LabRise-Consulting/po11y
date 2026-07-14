@@ -1,0 +1,137 @@
+services:
+  n8n:
+    build: .
+    container_name: po11y-n8n
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:5678:5678"
+    environment:
+      - GENERIC_TIMEZONE=${TZ:-Europe/Berlin}
+      - TZ=${TZ:-Europe/Berlin}
+      - N8N_DIAGNOSTICS_ENABLED=false
+      # Plain HTTP — acceptable on localhost / a private network only.
+      - N8N_SECURE_COOKIE=false
+      - WEBHOOK_URL=http://${BIND_ADDR:-127.0.0.1}:5678/
+      # Code nodes write /po11y-status/*.json via the fs builtin; the ai-map
+      # workflow reads its AI_MAP_* config via $env.
+      - NODE_FUNCTION_ALLOW_BUILTIN=fs
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # --- AI architecture map (optional; skipped when unset) ---
+      # Any OpenAI-compatible chat-completions endpoint.
+      - AI_MAP_BASE_URL=${AI_MAP_BASE_URL:-}
+      - AI_MAP_API_KEY=${AI_MAP_API_KEY:-}
+      - AI_MAP_MODEL=${AI_MAP_MODEL:-}
+      # n8n >=2.0 disables Execute Command by default; the status publisher
+      # (docker ps) and workflow map (n8n export:workflow) need it.
+      - NODES_EXCLUDE=[]
+      # --- datastore ---
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE:-n8n}
+      - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD:?run ./bootstrap.sh (or set in .env)}
+      - EXECUTIONS_DATA_MAX_AGE=${EXECUTIONS_DATA_MAX_AGE:-4380}
+      # --- metrics (scraped by prometheus) ---
+      - N8N_METRICS=true
+      - N8N_METRICS_INCLUDE_WORKFLOW_ID_LABEL=true
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Host docker socket for the containers section of the dashboard.
+      # Root-equivalent on the host — single-user box assumption; remove this
+      # mount (the publisher degrades gracefully) if that is not acceptable.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./workflows:/workflows:ro
+      - ./packs:/packs:ro
+      - po11y_status:/po11y-status
+    group_add:
+      - "${DOCKER_GID:?run ./bootstrap.sh (or set DOCKER_GID in .env)}"
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: po11y-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${DB_POSTGRESDB_DATABASE:-n8n}
+      - POSTGRES_USER=${DB_POSTGRESDB_USER:-n8n}
+      - POSTGRES_PASSWORD=${DB_POSTGRESDB_PASSWORD:?run ./bootstrap.sh (or set in .env)}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: po11y-prometheus
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:9090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-180d}
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - n8n
+
+  grafana:
+    image: grafana/grafana-oss:11.3.1
+    container_name: po11y-grafana
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?run ./bootstrap.sh (or set in .env)}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE:-n8n}
+      - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD:?run ./bootstrap.sh (or set in .env)}
+      # Grafana interpolates ${VAR} in provisioning YAML but NOT in dashboard
+      # JSON — the entrypoint seds the n8n deep-link host into a rendered copy.
+      - BIND_ADDR=${BIND_ADDR:-127.0.0.1}
+      - GF_PATHS_PROVISIONING=/tmp/grafana-provisioning
+      - GF_SERVER_ROOT_URL=http://${BIND_ADDR:-127.0.0.1}:${DASHBOARD_PORT:-8080}/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_AUTH_ANONYMOUS_ENABLED=${DASHBOARD_GRAFANA_EMBED:-true}
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_SECURITY_ALLOW_EMBEDDING=${DASHBOARD_GRAFANA_EMBED:-true}
+    entrypoint:
+      - sh
+      - -euc
+      - |
+        rm -rf /tmp/grafana-provisioning
+        cp -r /etc/grafana/provisioning-src /tmp/grafana-provisioning
+        sed -i "s|__WEB_BIND_ADDR__|$$BIND_ADDR|g" /tmp/grafana-provisioning/dashboards/json/*.json
+        sed -i "s|/etc/grafana/provisioning/|/tmp/grafana-provisioning/|g" /tmp/grafana-provisioning/dashboards/dashboards.yml
+        exec /run.sh
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning-src:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - postgres
+      - prometheus
+
+  dashboard:
+    image: nginx:1.27-alpine
+    container_name: po11y-dashboard
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${DASHBOARD_PORT:-8080}:80"
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+      - ./site:/usr/share/nginx/site:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./config.json:/run/po11y/config.json:ro
+      - po11y_status:/po11y-status:ro
+    depends_on:
+      - grafana
+
+volumes:
+  n8n_data:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  po11y_status:

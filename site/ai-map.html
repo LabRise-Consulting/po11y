@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture map</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --panel:#ffffff; --ink:#141a22; --muted:#5b6774;
+    --line:#d3dae2; --grid:#e7ebf0;
+    --neutral:#64748b; --cyan:#0e93b0; --amber:#c07a10; --emerald:#0f9d6b;
+    --sky:#2f74d0; --violet:#7c53d6; --sink:#7a8695;
+    --edge:#aab4c0;
+    --shadow:0 1px 2px rgba(20,30,45,.06),0 6px 20px rgba(20,30,45,.07);
+    --mono:ui-monospace,"SF Mono",Menlo,"Cascadia Code",Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0e131a; --panel:#161d27; --ink:#e7edf4; --muted:#93a1b1;
+      --line:#28323f; --grid:#1b2430;
+      --neutral:#8b98a8; --cyan:#38bdf8; --amber:#e0a13c; --emerald:#34d399;
+      --sky:#6aa6f5; --violet:#a888f0; --sink:#8a97a8;
+      --edge:#3a4657;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 56px}
+  header .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--cyan);margin:0 0 10px}
+  h1{font-size:clamp(24px,4vw,34px);line-height:1.1;margin:0 0 8px;
+    letter-spacing:-.02em;font-weight:680}
+  .lede{color:var(--muted);max-width:64ch;margin:0;font-size:15px}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:22px 0 0;
+    font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+  .swatch{width:22px;height:3px;border-radius:2px;display:inline-block}
+
+  .board{margin-top:26px;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;box-shadow:var(--shadow);overflow-x:auto;overflow-y:hidden}
+  .stage{position:relative;margin:0 auto}
+  .stage svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .colhead{position:absolute;top:14px;transform:translateX(-50%);
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--muted);white-space:nowrap}
+
+  .node{position:absolute;transform:translate(-50%,-50%);width:190px;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--nc,var(--neutral));
+    border-radius:9px;padding:10px 12px;box-shadow:var(--shadow);cursor:default;
+    transition:transform .12s ease,box-shadow .12s ease,opacity .12s ease}
+  .node:hover{transform:translate(-50%,-50%) translateY(-2px)}
+  .node .tag{font-family:var(--mono);font-size:10px;color:var(--nc,var(--neutral));
+    font-weight:600;letter-spacing:.04em}
+  .node .name{font-size:13.5px;font-weight:600;margin-top:1px;letter-spacing:-.01em}
+  .node .sub{font-family:var(--mono);font-size:10.5px;color:var(--muted);
+    margin-top:4px;line-height:1.35;word-break:break-word}
+  .stage.dim .node:not(.hot){opacity:.32}
+  .stage.dim .node.hot{box-shadow:0 0 0 2px var(--nc,var(--cyan)),var(--shadow)}
+  path.edge{fill:none;stroke:var(--edge);stroke-width:1.6;opacity:.85;
+    transition:opacity .12s ease,stroke-width .12s ease}
+  .stage.dim path.edge{opacity:.12}
+  .stage.dim path.edge.hot{opacity:1;stroke-width:2.4}
+
+  .notes{margin-top:26px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+    padding:15px 16px;box-shadow:var(--shadow)}
+  .card h3{margin:0 0 6px;font-size:12px;font-family:var(--mono);letter-spacing:.06em;
+    text-transform:uppercase;color:var(--cyan)}
+  .card p{margin:0;font-size:13px;color:var(--muted)}
+  footer{margin-top:28px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .meta{color:var(--muted);font-size:13px;padding:24px}
+  code{font-family:var(--mono);font-size:.92em;background:var(--grid);
+    border:1px solid var(--line);border-radius:4px;padding:1px 5px;white-space:nowrap}
+  .setup .notes{margin-top:20px}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="meta" id="meta">loading architecture map…</p>
+  <div class="setup" id="setup" hidden>
+    <header>
+      <p class="eyebrow">architecture</p>
+      <h1>No architecture map yet</h1>
+      <p class="lede">The maps workflow publishes this tab automatically within ~10 minutes
+        of bootstrap (structure is computed from the live workflow export). An LLM can
+        enrich it with curated one-liners and insight cards — two ways:</p>
+    </header>
+    <div class="notes">
+      <div class="card">
+        <h3>A · API endpoint</h3>
+        <p>Set <code>AI_MAP_BASE_URL</code>, <code>AI_MAP_API_KEY</code> and
+          <code>AI_MAP_MODEL</code> in <code>.env</code> — any OpenAI-compatible
+          chat-completions endpoint (Mistral, OpenAI, Anthropic, local Ollama) —
+          then <code>docker compose up -d n8n</code>. The maps workflow rebuilds
+          it daily — or use the "Build maps now" action for an immediate result.</p>
+      </div>
+      <div class="card">
+        <h3>B · Local AI CLI — no API key</h3>
+        <p>Run <code>./ai-map-cli.sh</code> on the host. It pipes the workflow
+          export through a local CLI — <code>claude -p</code> by default; set
+          <code>AI_MAP_CLI</code> for <code>llm</code>, <code>ollama run …</code>
+          or anything that reads a prompt on stdin — and publishes the map here.</p>
+      </div>
+    </div>
+  </div>
+  <header hidden>
+    <p class="eyebrow" id="eyebrow"></p>
+    <h1 id="title"></h1>
+    <p class="lede" id="lede"></p>
+    <div class="legend" id="legend"></div>
+  </header>
+  <div class="board" hidden><div class="stage" id="stage"></div></div>
+  <div class="notes" id="notes" hidden></div>
+  <footer id="footer" hidden></footer>
+</div>
+
+<script>
+// Renders /ai-map.json (written by the ai-map workflow — an LLM reads the
+// live n8n workflow export and emits this schema):
+//   { generated_at, model, eyebrow, title, lede,
+//     columns: ["Triggers", ...],                     // 2-6 ordered column titles
+//     kinds: { "<kind>": "cyan|amber|emerald|sky|violet|neutral|sink" },
+//     nodes: [{ id, col, kind, tag, name, sub }],     // col indexes columns
+//     edges: [[fromId, toId, kind?]],
+//     legend: [[label, kind]], notes: [{ title, text }] }
+// All strings are model-generated — everything goes through esc().
+const PALETTE = ["neutral","cyan","amber","emerald","sky","violet","sink"];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+(async () => {
+  const meta = document.getElementById("meta");
+  let d;
+  try {
+    const r = await fetch("/ai-map.json", { cache: "no-store" });
+    if (!r.ok) { // not generated yet — show the setup placeholder
+      meta.hidden = true;
+      document.getElementById("setup").hidden = false;
+      return;
+    }
+    d = await r.json();
+    if (!Array.isArray(d.columns) || !Array.isArray(d.nodes)) throw new Error("ai-map.json has an unexpected shape");
+  } catch (e) { meta.textContent = e.message; return; }
+  meta.hidden = true;
+  document.getElementById("setup").remove();
+  for (const el of document.querySelectorAll("[hidden]")) el.hidden = false;
+
+  const cs = getComputedStyle(document.documentElement);
+  const colVar = (kind) => {
+    // models sometimes emit palette names directly instead of kind keys
+    const name = (d.kinds || {})[kind] ?? kind;
+    return cs.getPropertyValue("--" + (PALETTE.includes(name) ? name : "neutral")).trim();
+  };
+
+  document.getElementById("eyebrow").textContent = d.eyebrow || "architecture";
+  document.getElementById("title").textContent = d.title || "How it links";
+  document.getElementById("lede").textContent = d.lede || "";
+  document.getElementById("footer").textContent =
+    `generated ${new Date(d.generated_at).toLocaleString()} by ${d.model || "?"} from the live n8n workflow export`;
+
+  const COLS = d.columns.slice(0, 6);
+  const N = d.nodes.filter((n) => Number.isInteger(n.col) && n.col >= 0 && n.col < COLS.length);
+  const ids = new Set(N.map((n) => n.id));
+  const E = (d.edges || []).filter((e) => Array.isArray(e) && ids.has(e[0]) && ids.has(e[1]));
+
+  const NODE_W = 190, NODE_H = 66, VGAP = 26, PAD_TOP = 52, PAD_BOT = 28;
+  const STAGE_W = Math.max(760, 220 + (COLS.length - 1) * 235);
+  const COL_X = COLS.map((_, c) => COLS.length === 1 ? STAGE_W / 2 : 110 + c * ((STAGE_W - 220) / (COLS.length - 1)));
+
+  const stage = document.getElementById("stage");
+  const byCol = COLS.map((_, c) => N.filter((n) => n.col === c));
+  const heights = byCol.map((list) => Math.max(NODE_H, list.length * NODE_H + (list.length - 1) * VGAP));
+  const maxH = Math.max(...heights);
+  const STAGE_H = PAD_TOP + maxH + PAD_BOT;
+  const pos = {};
+  byCol.forEach((list, c) => {
+    const top = PAD_TOP + (maxH - heights[c]) / 2;
+    list.forEach((n, i) => { pos[n.id] = { x: COL_X[c], y: top + i * (NODE_H + VGAP) + NODE_H / 2 }; });
+  });
+  stage.style.width = STAGE_W + "px";
+  stage.style.height = STAGE_H + "px";
+
+  COLS.forEach((t, c) => {
+    const h = document.createElement("div"); h.className = "colhead";
+    h.style.left = COL_X[c] + "px"; h.textContent = t; stage.appendChild(h);
+  });
+
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${STAGE_W} ${STAGE_H}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  stage.appendChild(svg);
+  const edgeEls = [];
+  E.forEach(([a, b, k]) => {
+    const p1 = pos[a], p2 = pos[b]; if (!p1 || !p2) return;
+    const x1 = p1.x + NODE_W / 2, y1 = p1.y, x2 = p2.x - NODE_W / 2, y2 = p2.y;
+    const dx = Math.max(40, (x2 - x1) * 0.5);
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`);
+    path.setAttribute("class", "edge");
+    if (k) path.style.stroke = colVar(k);
+    svg.appendChild(path);
+    edgeEls.push({ el: path, a, b });
+  });
+
+  const nodeEls = {};
+  N.forEach((n) => {
+    const p = pos[n.id]; const el = document.createElement("div");
+    el.className = "node"; el.style.left = p.x + "px"; el.style.top = p.y + "px";
+    el.style.setProperty("--nc", colVar(n.kind));
+    el.innerHTML = `<div class="tag">${esc(n.tag)}</div><div class="name">${esc(n.name)}</div><div class="sub">${esc(n.sub)}</div>`;
+    stage.appendChild(el); nodeEls[n.id] = el;
+    const focus = () => {
+      stage.classList.add("dim");
+      const hot = new Set([n.id]);
+      E.forEach(([a, b]) => { if (a === n.id) hot.add(b); if (b === n.id) hot.add(a); });
+      Object.entries(nodeEls).forEach(([id, e]) => e.classList.toggle("hot", hot.has(id)));
+      edgeEls.forEach((o) => o.el.classList.toggle("hot", o.a === n.id || o.b === n.id));
+    };
+    const blur = () => {
+      stage.classList.remove("dim");
+      Object.values(nodeEls).forEach((e) => e.classList.remove("hot"));
+      edgeEls.forEach((o) => o.el.classList.remove("hot"));
+    };
+    el.addEventListener("mouseenter", focus);
+    el.addEventListener("mouseleave", blur);
+    el.tabIndex = 0; el.addEventListener("focus", focus); el.addEventListener("blur", blur);
+  });
+
+  document.getElementById("legend").innerHTML = (d.legend || []).slice(0, 8).map(([t, k]) =>
+    `<span><i class="swatch" style="background:${colVar(k)}"></i>${esc(t)}</span>`).join("");
+
+  document.getElementById("notes").innerHTML = (d.notes || []).slice(0, 4).map((n) =>
+    `<div class="card"><h3>${esc(n.title)}</h3><p>${esc(n.text)}</p></div>`).join("");
+})();
+</script>
+</body>
+</html>
