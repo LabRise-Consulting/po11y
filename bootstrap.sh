@@ -67,7 +67,16 @@ python3 -c 'import json,sys; json.dump({"base_url":sys.argv[1],"api_key":sys.arg
 docker compose --env-file "$ENV_FILE" up -d --build
 
 BIND="$(get_env BIND_ADDR)"; BIND="${BIND:-127.0.0.1}"
-BASE="http://$BIND:5678"
+# Host this script uses to reach n8n (readiness polls + /rest/ owner setup).
+# Defaults to $BIND, but 0.0.0.0 is a bind address, not a connectable one, so
+# map it to 127.0.0.1. PO11Y_CONNECT_HOST (environment only — a CI/runtime
+# concern, never instance config in .env) overrides it: in CI the compose
+# stack lives on a docker-in-docker daemon reachable as `docker`, not on this
+# job container's localhost, so bootstrap must connect there while the stack
+# still binds 0.0.0.0 to publish its ports.
+CONNECT_HOST="$BIND"; [ "$CONNECT_HOST" = "0.0.0.0" ] && CONNECT_HOST="127.0.0.1"
+CONNECT_HOST="${PO11Y_CONNECT_HOST:-$CONNECT_HOST}"
+BASE="http://$CONNECT_HOST:5678"
 # Readiness (NOT liveness): /healthz answers while first-boot DB migrations
 # are still running, and a CLI import started then runs its own migration
 # pass and races the server's ('duplicate key ... pg_type_typname_nsp_index').

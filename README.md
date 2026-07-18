@@ -1,15 +1,15 @@
 # Po11y
 
-Po11y is a status dashboard and observability stack for 
-[n8n](https://n8n.io), the self-hostable workflow automation tool. 
-Once your n8n workflows are live, Po11y answers the critical question: 
+Po11y is a status dashboard and observability stack for
+[n8n](https://n8n.io), the self-hostable workflow automation tool.
+Once your n8n workflows are live, Po11y answers the critical question:
 "What is running right now, and how does it all fit together?"
 
 The dashboard is boring technology: one nginx container, three static files, no build step.
 Grafana provides detailed metrics and insights.
 
 Start everything with one `./bootstrap.sh`: n8n, Postgres, Prometheus, Grafana.
-Instance-specific config lives in `config.json`, and all live data comes as 
+Instance-specific config lives in `config.json`, and all live data comes as
 small JSON files that n8n workflows write to a shared volume. Any publisher works; n8n is included.
 
 ## What you get
@@ -111,10 +111,13 @@ that:
    and prints the answer).
 
 **Cost is near zero.** The map's structure is free (built from code). The LLM
-is only called when the workflow structure actually changed — an unchanged,
-fresh map skips the call entirely — so a stable stack makes essentially no
-requests. A cheap model (e.g. `mistral-small-latest`) is plenty, and the
-keyless heuristic and local-Ollama paths cost nothing at all.
+is only called when a workflow actually changed, and the call is
+differential: per-node content signatures (`sigs` in the published map) let
+unchanged nodes keep their previous prose, so the prompt carries only the
+changed workflows' digest. An unchanged map skips the call entirely; the
+"Build maps now" form forces a full re-annotation. A cheap model (e.g.
+`mistral-small-latest`) is plenty, and the keyless heuristic and
+local-Ollama paths cost nothing at all.
 
 ## Security posture
 
@@ -136,6 +139,10 @@ Po11y runs on a single box bound to `127.0.0.1`. The parts that matter:
   container.
 - Everything binds to `127.0.0.1`, so plain HTTP is acceptable. Put it behind a
   TLS reverse proxy before exposing it beyond the box.
+- **Optional dashboard gate**: set `DASHBOARD_BASIC_AUTH=user:password` in
+  `.env` to require HTTP Basic Auth for everything the dashboard serves
+  (static app, feeds, the grafana/prometheus proxies). Useful when
+  `BIND_ADDR` is a private LAN/VPN IP; it is not a substitute for TLS.
 
 Residual, and inherent to n8n: anyone who can add or edit workflows can run
 JavaScript in a Code node. Treat editor access as trusted.
@@ -157,6 +164,11 @@ dashboard:
     - ./dashboard/config.json:/run/po11y/config.json:ro              # your config
     - status-volume:/po11y-status:ro                                 # your publisher writes here
 ```
+
+(If you use the `/n8n-table/` proxy, render `nginx.conf`'s
+`${N8N_READ_API_KEY}` reference yourself before mounting it — see the
+`dashboard` service entrypoint in this repo's `docker-compose.yml` for the
+one-line `envsubst` that does it.)
 
 Pin Po11y as a git submodule so updates are deliberate:
 
@@ -276,13 +288,15 @@ bundled too, no CDN).
 ### `/forms.json` (written by the Maps workflow)
 
 ```json
-{ "generated_at": "…", "forms": [{ "name": "…", "sub": "…", "path": "…" }] }
+{ "generated_at": "…", "forms": [{ "name": "…", "sub": "…", "path": "…", "fields": 0 }] }
 ```
 
 Live inventory of every active workflow's form triggers. The dashboard
 merges it into the "Actions" card group (config-declared cards win), so a
 new form trigger becomes a dashboard button within one Maps tick, without
-touching config.json.
+touching config.json. Field-less forms (`fields: 0`) fire in place — a
+`fetch` POST through the same-origin `/form/` nginx proxy with a toast for
+the result; forms with inputs open n8n's own form page as before.
 
 ### `/ai-map.json` (written by the Maps workflow)
 
@@ -291,12 +305,14 @@ touching config.json.
   "columns": ["Triggers", "…"], "kinds": {"sched": "neutral"},
   "nodes": [{ "id": "…", "col": 0, "kind": "sched", "tag": "…", "name": "…", "sub": "…" }],
   "edges": [["fromId", "toId", "sched"]],
-  "legend": [["label", "sched"]], "notes": [{ "title": "…", "text": "…" }] }
+  "legend": [["label", "sched"]], "notes": [{ "title": "…", "text": "…" }],
+  "sigs": { "<node id>": "…" } }
 ```
 
 Structure is computed deterministically from the live workflow export; an
-LLM (optional, see above) only writes the prose. Rendered by
-[`site/ai-map.html`](site/ai-map.html).
+LLM (optional, see above) only writes the prose. `sigs` are per-node content
+signatures the Maps workflow uses to re-annotate only changed nodes.
+Rendered by [`site/ai-map.html`](site/ai-map.html).
 
 ### `/prom/*` and `/grafana/*` (optional)
 
@@ -306,11 +322,43 @@ under `promBase`; Grafana embeds need Grafana served under
 enabled (the default here; set `DASHBOARD_GRAFANA_EMBED=false` in `.env` to
 turn that off). The bundled [`nginx.conf`](nginx.conf) has both blocks ready.
 
+### n8n DataTable read proxy (optional)
+
+The `/n8n-table/` location proxies `GET` requests to n8n's public API and adds
+a read-scoped `X-N8N-API-KEY` server-side, so a `list` tab (see
+[`site/list.html`](site/list.html)) can read a Data Table live without the
+browser ever holding a key. It's GET-only (`limit_except GET { deny all; }`)
+and the key is injected by the `dashboard` service entrypoint in
+`docker-compose.yml` — the committed `nginx.conf` only ever carries the
+`${N8N_READ_API_KEY}` reference.
+
+One-time setup:
+1. In n8n -> **Settings -> n8n API**, create an API key. Scope it to
+   **data-table row: read** only.
+2. Put it in `.env` as `N8N_READ_API_KEY` (keep it out of git — `.env` is
+   already gitignored).
+3. Point a `list` tab's `endpoint` at
+   `/n8n-table/data-tables/<dataTableId>/rows?sort=firstSeen:desc` (confirm
+   the exact rows path/params against your n8n version's API docs at
+   `/api/v1/docs` — the DataTable API is young and has moved between minors).
+
 ## Instance pages (`tabs`)
 
 A tab page is any HTML you serve under `/site/`. Copy the design tokens from
 [`html/style.css`](html/style.css) if you want it to match. The iframe gets
 `class="tabframe"` sizing from the shell; pages load lazily on first open.
+
+### `list` tab
+
+A generic tab (`/site/list.html`) that renders any row feed as day-grouped,
+sortable cards. Add a `tabs[]` entry with a `list` block:
+
+- `endpoint` — URL the tab fetches. A relative `/n8n-table/…` proxy path for live
+  n8n Data Table reads, or any static JSON (`{items:[…]}`, `[…]`, or `{data:[…]}`).
+- `mapping` — source-column → card-field map: `title`, `url`, `score`, `day`
+  (ISO string, bucketed by date), and `meta` (list of extra columns shown as a
+  detail line).
+- `defaultSort` — `"day"` (newest, grouped) or `"score"` (best-fit first).
 
 ## Kubernetes and Podman
 

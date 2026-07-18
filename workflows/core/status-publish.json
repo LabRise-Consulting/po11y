@@ -14,6 +14,22 @@
     },
     {
       "parameters": {
+        "path": "status-refresh",
+        "formTitle": "Refresh status now",
+        "formDescription": "Re-poll containers and republish status.json immediately.",
+        "formFields": { "values": [] },
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a0000000-0000-0000-0000-000000000004",
+      "name": "Refresh now (form)",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [0, 160],
+      "webhookId": "status-refresh"
+    },
+    {
+      "parameters": {
         "url": "http://docker-proxy:2375/containers/json",
         "options": {}
       },
@@ -37,6 +53,7 @@
   ],
   "connections": {
     "Every 2 min": { "main": [[{ "node": "List containers", "type": "main", "index": 0 }]] },
+    "Refresh now (form)": { "main": [[{ "node": "List containers", "type": "main", "index": 0 }]] },
     "List containers": { "main": [[{ "node": "Publish status.json", "type": "main", "index": 0 }]] }
   },
   "settings": { "executionOrder": "v1" }

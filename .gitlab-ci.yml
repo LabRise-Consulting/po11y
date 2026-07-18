@@ -1,0 +1,107 @@
+# Po11y CI — the first pipeline for the stack. Four jobs:
+#   test       node's built-in test runner over the site/ (+ future lib/) libs
+#   lint       shellcheck over every shell script
+#   manifests  kustomize build + kubeconform schema validation of deploy/k8s
+#   smoke      full docker-in-docker bring-up via bootstrap.sh + HTTP smoke,
+#              run twice to also prove bootstrap idempotency
+#
+# All image tags are pinned. test/lint/manifests are skipped on scheduled
+# pipelines (the nightly schedule only cares about the smoke build against a
+# fresh upstream n8n image); smoke runs on every pipeline.
+
+stages:
+  - validate
+  - smoke
+
+workflow:
+  rules:
+    # Merge request pipelines.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    # Scheduled pipelines (the nightly latest-n8n-image build).
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    # A branch push that already has an open MR would otherwise create a
+    # duplicate branch pipeline alongside the MR pipeline — suppress it.
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    # Pushes to the default branch (main).
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Skip on schedules; run on every other pipeline the workflow rules allow.
+.not-on-schedule:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+
+test:
+  stage: validate
+  image: node:22-alpine
+  extends: .not-on-schedule
+  script:
+    # Directory-scoped node test runner. Node expands the ** glob itself (it is
+    # quoted so the shell leaves it alone); a follow-up appends "lib/**/*.test.mjs"
+    # when phase 2 adds lib/.
+    - node --test "site/**/*.test.mjs"
+
+lint:
+  stage: validate
+  image: koalaman/shellcheck-alpine:v0.10.0
+  extends: .not-on-schedule
+  script:
+    - shellcheck bootstrap.sh ai-map-cli.sh ci/smoke.sh
+
+manifests:
+  stage: validate
+  image: alpine/k8s:1.31.1
+  extends: .not-on-schedule
+  variables:
+    KUBECONFORM_VERSION: "0.6.7"
+  script:
+    # alpine/k8s ships kustomize + curl; add a pinned kubeconform release.
+    - curl -sSLf "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar -xz -C /usr/local/bin kubeconform
+    - kustomize build deploy/k8s | kubeconform -strict -summary
+
+smoke:
+  stage: smoke
+  image: docker:27
+  # dind needs a privileged runner, and untagged jobs can land on runners
+  # that don't provide one. po11y-dind = a self-hosted privileged runner.
+  tags:
+    - po11y-dind
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    # Per-build network so the dind service is reachable by its `docker`
+    # alias — legacy links networking does not add it on all runners.
+    FF_NETWORK_PER_BUILD: "true"
+    # The compose stack runs on the dind daemon, reachable from this job as
+    # `docker` — tell bootstrap to poll n8n/readiness there, not localhost.
+    PO11Y_CONNECT_HOST: docker
+  timeout: 30m
+  before_script:
+    # curl+jq for smoke.sh; python3+openssl+compose plugin are what bootstrap.sh
+    # itself needs (python3 hard-required, openssl for the generated secrets,
+    # docker-cli-compose for `docker compose`) — the base docker image has none.
+    - apk add --no-cache curl jq python3 openssl docker-cli-compose
+  script:
+    # Minimal .env: bootstrap generates the secrets and appends them. 0.0.0.0
+    # so the published ports are reachable from this job at the dind alias.
+    - printf 'BIND_ADDR=0.0.0.0\n' > .env
+    # Bring up, smoke, then bring up again (idempotency) and re-smoke. On any
+    # failure capture compose logs for the artifact before failing the job.
+    - |
+      if ! (
+        ./bootstrap.sh --no-examples &&
+        BASE_URL=http://docker:8080 ci/smoke.sh &&
+        ./bootstrap.sh --no-examples &&
+        BASE_URL=http://docker:8080 ci/smoke.sh
+      ); then
+        docker compose logs --tail 200 > compose-logs.txt 2>&1 || true
+        exit 1
+      fi
+  artifacts:
+    when: on_failure
+    paths:
+      - compose-logs.txt

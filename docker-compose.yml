@@ -1,6 +1,9 @@
 services:
   n8n:
-    build: .
+    build:
+      context: .
+      args:
+        N8N_IMAGE: ${N8N_IMAGE:-docker.io/n8nio/n8n:2.29.8}
     container_name: po11y-n8n
     restart: unless-stopped
     ports:
@@ -138,10 +141,37 @@ services:
     restart: unless-stopped
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${DASHBOARD_PORT:-8080}:80"
+    environment:
+      # Read-scoped n8n API key for the /n8n-table/ proxy (optional — see
+      # README "n8n DataTable read proxy"). Empty is fine when no list tab
+      # is configured; nginx still starts, the proxy just forwards no key.
+      - N8N_READ_API_KEY=${N8N_READ_API_KEY:-}
+      # Optional "user:password" gate for the whole dashboard (see .env.example).
+      - DASHBOARD_BASIC_AUTH=${DASHBOARD_BASIC_AUTH:-}
+    entrypoint:
+      - sh
+      - -euc
+      - |
+        # Explicit variable list: only the key is substituted; every other
+        # dollar-variable in the template stays an nginx runtime variable.
+        # The key is whitelisted to the n8n API-key (JWT) charset first, so
+        # no value can break out of the quoted header directive into nginx
+        # syntax.
+        N8N_READ_API_KEY="$$(printf %s "$$N8N_READ_API_KEY" | tr -cd 'A-Za-z0-9._~+/=-')" \
+          envsubst '$${N8N_READ_API_KEY}' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf
+        if [ -n "$$DASHBOARD_BASIC_AUTH" ]; then
+          user="$${DASHBOARD_BASIC_AUTH%%:*}"
+          pass="$${DASHBOARD_BASIC_AUTH#*:}"
+          printf '%s:%s\n' "$$user" "$$(cryptpw -m sha512 "$$pass")" > /etc/nginx/.htpasswd
+          printf 'auth_basic "po11y";\nauth_basic_user_file /etc/nginx/.htpasswd;\n' > /etc/nginx/auth.conf
+        else
+          : > /etc/nginx/auth.conf
+        fi
+        exec nginx -g 'daemon off;'
     volumes:
       - ./html:/usr/share/nginx/html:ro
       - ./site:/usr/share/nginx/site:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf.template:ro
       - ./config.json:/run/po11y/config.json:ro
       - po11y_status:/po11y-status:ro
     depends_on:

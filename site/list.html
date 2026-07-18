@@ -1,0 +1,112 @@
+<!-- site/list.html — generic list/cards tab. Config-driven; see config.example.json tabs[]. -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>List</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font: 15px/1.5 system-ui, sans-serif; padding: 12px; }
+    .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+    .bar button { padding: 4px 10px; cursor: pointer; }
+    .bar button.active { font-weight: 700; }
+    h2.day { margin: 18px 0 8px; font-size: 14px; opacity: .7; }
+    .card { display: block; padding: 10px 12px; margin: 6px 0; border: 1px solid #8883;
+            border-radius: 8px; text-decoration: none; color: inherit; }
+    .card h3 { margin: 0 0 4px; font-size: 15px; }
+    .card .meta { font-size: 13px; opacity: .75; }
+    .score { float: right; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid #8886; }
+    .empty { opacity: .6; }
+    .more { margin: 14px 0; padding: 6px 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <span>Sort:</span>
+    <button id="sort-day">Newest</button>
+    <button id="sort-score">Best fit</button>
+    <span id="count" style="margin-left:auto;opacity:.6"></span>
+  </div>
+  <div id="list"><p class="empty">loading…</p></div>
+  <button class="more" id="more" hidden>load more</button>
+
+  <script type="module">
+    import { normalizeRows, sortItems, groupByDay } from './list.lib.js';
+
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+      (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    const safeUrl = (u) => /^(https?:\/\/|\/)/i.test(String(u ?? '')) ? esc(u) : '#';
+
+    const $ = (id) => document.getElementById(id);
+    let settings = { endpoint: '', mapping: {}, defaultSort: 'day', title: 'List' };
+    let sortBy = 'day';
+    let limit = 100;
+
+    // Which tab am I? Match the config tabs[] entry whose src ends with list.html.
+    async function loadSettings() {
+      try {
+        const cfg = await (await fetch('/config.json', { cache: 'no-store' })).json();
+        const me = (cfg.tabs || []).find((t) => String(t.src || '').includes('list.html'));
+        if (me && me.list) settings = { ...settings, ...me.list };
+      } catch { /* defaults */ }
+      sortBy = settings.defaultSort || 'day';
+      document.title = settings.title || 'List';
+    }
+
+    function url() {
+      // Endpoint may already carry query params; append sort + limit.
+      const u = new URL(settings.endpoint, location.origin);
+      u.searchParams.set('limit', String(limit));
+      return u.pathname + u.search;
+    }
+
+    function todayIso() {
+      // Browser-local date-only; group labels are cosmetic so local tz is fine.
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    function cardHtml(it) {
+      const parts = Object.entries(it.meta).filter(([, v]) => v !== null && v !== '')
+        .map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(' · ');
+      const score = it.score === null ? '' : `<span class="score">${esc(it.score)}</span>`;
+      const inner = `${score}<h3>${esc(it.title)}</h3><div class="meta">${parts}</div>`;
+      return it.url
+        ? `<a class="card" href="${safeUrl(it.url)}" target="_blank" rel="noopener">${inner}</a>`
+        : `<div class="card">${inner}</div>`;
+    }
+
+    async function render() {
+      let payload;
+      try { payload = await (await fetch(url(), { cache: 'no-store' })).json(); }
+      catch { $('list').innerHTML = '<p class="empty">feed unavailable</p>'; return; }
+      const items = sortItems(normalizeRows(payload, settings.mapping), sortBy);
+      $('count').textContent = `${items.length} shown`;
+      $('more').hidden = items.length < limit;   // full page ⇒ maybe more
+      if (!items.length) { $('list').innerHTML = '<p class="empty">nothing yet</p>'; return; }
+      if (sortBy === 'score') {
+        $('list').innerHTML = items.map(cardHtml).join('');
+      } else {
+        $('list').innerHTML = groupByDay(items, todayIso())
+          .map((g) => `<h2 class="day">${esc(g.label)}</h2>` + g.items.map(cardHtml).join(''))
+          .join('');
+      }
+    }
+
+    function setSort(by) {
+      sortBy = by;
+      $('sort-day').classList.toggle('active', by === 'day');
+      $('sort-score').classList.toggle('active', by === 'score');
+      render();
+    }
+
+    $('sort-day').addEventListener('click', () => setSort('day'));
+    $('sort-score').addEventListener('click', () => setSort('score'));
+    $('more').addEventListener('click', () => { limit += 100; render(); });
+
+    await loadSettings();
+    setSort(sortBy);
+  </script>
+</body>
+</html>

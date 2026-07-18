@@ -49,6 +49,19 @@ const ago = (iso) => {
   const h = Math.round(m / 60);
   return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
 };
+const toast = (msg, ok) => {
+  let box = $('toasts');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'toasts';
+    document.body.appendChild(box);
+  }
+  const t = document.createElement('div');
+  t.className = 'toast ' + (ok ? 'ok' : 'fail');
+  t.textContent = msg;
+  box.appendChild(t);
+  setTimeout(() => t.remove(), 6000);
+};
 
 // ---- static chrome ------------------------------------------------------------
 function buildChrome() {
@@ -98,7 +111,7 @@ function buildChrome() {
     });
   });
 
-  // Overview skeleton: card groups, then opted-in status sections, then metrics.
+  // Overview skeleton: metrics first, then card groups, then status sections.
   // Every heading collapses its section; the choice sticks via localStorage.
   const ov = $('view-overview');
   const block = (heading, id, cls = '') => {
@@ -107,9 +120,9 @@ function buildChrome() {
       <div id="${id}"${cls ? ` class="${cls}"` : ''}${closed ? ' hidden' : ''}></div>`;
   };
   ov.innerHTML =
+    (cfg.metrics ? block(cfg.metrics.heading || 'Metrics', 'metrics', 'cards') : '') +
     Object.keys(cfg.cards || {}).map((g, i) => block(g, `cards-${i}`, 'cards')).join('') +
-    Object.entries(cfg.sections || {}).map(([k, h]) => block(h, `sec-${k}`)).join('') +
-    (cfg.metrics ? block(cfg.metrics.heading || 'Metrics', 'metrics', 'cards') : '');
+    Object.entries(cfg.sections || {}).map(([k, h]) => block(h, `sec-${k}`)).join('');
   ov.querySelectorAll('.sec-h').forEach((h) => h.addEventListener('click', () => {
     const body = $(h.dataset.sec);
     body.hidden = !body.hidden;
@@ -117,10 +130,59 @@ function buildChrome() {
     localStorage.setItem(`po11y-sec-${h.dataset.sec}`, body.hidden ? 'closed' : 'open');
   }));
 
-  const card = (l) =>
-    `<a class="card" href="${safeUrl(withHost(l.href))}"><h3>${esc(l.name)}</h3><p>${esc(l.sub || '')}</p></a>`;
+  // Filter box in the containers/MRs headings — narrows the cached render
+  // immediately; the poll re-render keeps the filter applied.
+  [['sec-containers', renderContainers], ['sec-mrs', renderMrs]].forEach(([id, rerender]) => {
+    const h = ov.querySelector(`.sec-h[data-sec="${id}"]`);
+    if (!h) return;
+    const inp = document.createElement('input');
+    inp.className = 'filter';
+    inp.type = 'search';
+    inp.placeholder = 'filter…';
+    inp.addEventListener('click', (e) => e.stopPropagation()); // don't collapse
+    inp.addEventListener('input', () => { filters[id] = inp.value.toLowerCase(); rerender(); });
+    h.appendChild(inp);
+  });
+  // Status tabs on the notifications heading: all / ok / fail.
+  const nh = ov.querySelector('.sec-h[data-sec="sec-notifications"]');
+  if (nh) {
+    const seg = document.createElement('span');
+    seg.className = 'seg';
+    seg.innerHTML = ['all', 'ok', 'fail'].map((f, i) =>
+      `<button class="segbtn${i === 0 ? ' active' : ''}" data-f="${f}">${f}</button>`).join('');
+    seg.addEventListener('click', (e) => {
+      const b = e.target.closest('.segbtn');
+      if (!b) return;
+      e.stopPropagation();
+      notifFilter = b.dataset.f;
+      seg.querySelectorAll('.segbtn').forEach((x) => x.classList.toggle('active', x === b));
+      renderNotifications();
+    });
+    nh.appendChild(seg);
+  }
+
+  // Field-less form triggers ({action}) run in place via the same-origin
+  // /form/ nginx proxy; everything else is a plain link card.
+  const card = (l) => l.action
+    ? `<button class="card action" data-form="${esc(l.action)}" data-name="${esc(l.name)}">
+        <h3>${esc(l.name)}</h3><p>${esc(l.sub || '')}</p></button>`
+    : `<a class="card" href="${safeUrl(withHost(l.href))}"><h3>${esc(l.name)}</h3><p>${esc(l.sub || '')}</p></a>`;
   Object.values(cfg.cards || {}).forEach((links, i) => {
     $(`cards-${i}`).innerHTML = links.map(card).join('');
+  });
+  ov.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-form]');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    const name = btn.dataset.name;
+    try {
+      const r = await fetch(`/form/${encodeURIComponent(btn.dataset.form)}`,
+        { method: 'POST', body: new FormData() });
+      toast(r.ok ? `${name}: triggered` : `${name}: failed (HTTP ${r.status})`, r.ok);
+    } catch {
+      toast(`${name}: failed — n8n unreachable`, false);
+    }
+    btn.disabled = false;
   });
   $('sec-containers')?.classList.add('cards');
 
@@ -166,55 +228,88 @@ async function renderStat(stat, i) {
 }
 
 // ---- live status ----------------------------------------------------------------
-async function renderStatus() {
-  const containers = $('sec-containers');
-  const mrs = $('sec-mrs');
-  let st;
+// Renders come from the cached last-good payload: a fetch failure after a
+// successful poll keeps the data on screen and raises the "unreachable"
+// badge instead of wiping the sections ("stale" stays age-based).
+let lastStatus = null;
+const filters = { 'sec-containers': '', 'sec-mrs': '' };
+
+async function refreshStatus() {
   try {
-    st = await fetchJson('/status.json');
+    lastStatus = await fetchJson('/status.json');
+    $('offline').hidden = true;
   } catch {
-    $('stale').hidden = false;
-    $('updated').textContent = cfg.statusHint;
-    if (containers) containers.innerHTML = '<p class="empty">no data yet</p>';
-    if (mrs) mrs.innerHTML = '<p class="empty">no data yet</p>';
-    return;
+    if (!lastStatus) {
+      $('stale').hidden = false;
+      $('updated').textContent = cfg.statusHint;
+      const c = $('sec-containers');
+      if (c) c.innerHTML = '<p class="empty">no data yet</p>';
+      const m = $('sec-mrs');
+      if (m) m.innerHTML = '<p class="empty">no data yet</p>';
+      return;
+    }
+    $('offline').hidden = false;
   }
-  const ageMin = (Date.now() - new Date(st.generated_at).getTime()) / 60000;
+  const ageMin = (Date.now() - new Date(lastStatus.generated_at).getTime()) / 60000;
   $('stale').hidden = ageMin <= (cfg.staleAfterMin ?? 5);
-  $('updated').textContent = `updated ${ago(st.generated_at)}`;
+  $('updated').textContent = `updated ${ago(lastStatus.generated_at)}`;
+  renderContainers();
+  renderMrs();
+}
 
-  if (containers) containers.innerHTML = (st.containers || []).length
-    ? st.containers.map((c) =>
+function renderContainers() {
+  const el = $('sec-containers');
+  if (!el || !lastStatus) return;
+  const f = filters['sec-containers'];
+  const rows = (lastStatus.containers || []).filter((c) =>
+    !f || `${c.name} ${c.status} ${c.image}`.toLowerCase().includes(f));
+  el.innerHTML = rows.length
+    ? rows.map((c) =>
         `<div class="card"><h3>${esc(c.name)}</h3><p><b>${esc(c.status)}</b><br>${esc(c.image)}</p></div>`).join('')
-    : '<p class="empty">none running</p>';
+    : `<p class="empty">${f ? 'no match' : 'none running'}</p>`;
+}
 
-  if (mrs) mrs.innerHTML = (st.mrs || []).length
+function renderMrs() {
+  const el = $('sec-mrs');
+  if (!el || !lastStatus) return;
+  const f = filters['sec-mrs'];
+  const rows = (lastStatus.mrs || []).filter((m) =>
+    !f || `${m.project} !${m.iid} ${m.title} ${(m.labels || []).join(' ')}`.toLowerCase().includes(f));
+  el.innerHTML = rows.length
     ? `<table><tr><th>project</th><th>MR</th><th>title</th><th>labels</th><th>updated</th></tr>` +
-      st.mrs.map((m) =>
+      rows.map((m) =>
         `<tr><td>${esc(m.project)}</td>
          <td><a href="${safeUrl(m.web_url)}">!${esc(m.iid)}</a>${m.draft ? ' <span class="label">draft</span>' : ''}</td>
          <td class="wide">${esc(m.title)}</td>
          <td>${(m.labels || []).map((l) => `<span class="label">${esc(l)}</span>`).join('')}</td>
          <td>${esc(ago(m.updated_at))}</td></tr>`).join('') + '</table>'
-    : '<p class="empty">no open MRs</p>';
+    : `<p class="empty">${f ? 'no match' : 'no open MRs'}</p>`;
 }
 
 // ---- notification feed ------------------------------------------------------------
 // Shows the newest NOTIF_LIMIT entries; "show all" expands to the full feed.
-// The choice survives the poll re-render via notifExpanded.
+// The choice survives the poll re-render via notifExpanded; notifFilter is
+// the heading's all/ok/fail tab.
 const NOTIF_LIMIT = 5;
 let notifExpanded = false;
-async function renderNotifications() {
+let notifFilter = 'all';
+let lastFeed = null;
+
+async function refreshNotifications() {
+  try {
+    lastFeed = await fetchJson('/notifications.json');
+  } catch { /* keep the last-good feed (see refreshStatus) */ }
+  renderNotifications();
+}
+
+function renderNotifications() {
   const el = $('sec-notifications');
   if (!el) return;
-  let feed;
-  try {
-    feed = await fetchJson('/notifications.json');
-  } catch {
-    el.innerHTML = '<p class="empty">none yet</p>';
-    return;
-  }
-  if (!feed.length) { el.innerHTML = '<p class="empty">none yet</p>'; return; }
+  if (!lastFeed || !lastFeed.length) { el.innerHTML = '<p class="empty">none yet</p>'; return; }
+  const feed = lastFeed.filter((n) =>
+    notifFilter === 'all' ? true
+      : notifFilter === 'ok' ? n.status === 'success' : n.status === 'failure');
+  if (!feed.length) { el.innerHTML = '<p class="empty">none with this status</p>'; return; }
   const shown = notifExpanded ? feed : feed.slice(0, NOTIF_LIMIT);
   let html = shown.map((n) => {
     const dot = n.status === 'success' ? 'ok' : n.status === 'failure' ? 'fail' : 'info';
@@ -247,12 +342,16 @@ async function renderNotifications() {
     const have = new Set(actions.map((c) => (c.href || '').split('/form/')[1]).filter(Boolean));
     for (const f of feed.forms || []) {
       if (have.has(f.path)) continue;
-      actions.push({ name: f.name, sub: f.sub, href: `http://{host}:5678/form/${f.path}` });
+      // Field-less forms fire in place (fetch POST via the /form/ proxy);
+      // forms with inputs still open n8n's own form page.
+      actions.push(f.fields === 0
+        ? { name: f.name, sub: f.sub, action: f.path }
+        : { name: f.name, sub: f.sub, href: `http://{host}:5678/form/${f.path}` });
     }
     if (!actions.length) delete cfg.cards.Actions;
   } catch { /* feed optional */ }
   buildChrome();
-  renderStatus();
-  renderNotifications();
-  setInterval(() => { renderStatus(); renderNotifications(); }, (cfg.refreshSec ?? 30) * 1000);
+  refreshStatus();
+  refreshNotifications();
+  setInterval(() => { refreshStatus(); refreshNotifications(); }, (cfg.refreshSec ?? 30) * 1000);
 })();
