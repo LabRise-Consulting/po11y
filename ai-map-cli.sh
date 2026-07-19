@@ -28,7 +28,7 @@ echo "ai-map-cli: exporting workflows…"
 docker compose exec -T n8n sh -c \
   'rm -f /tmp/wf-export-cli.json && n8n export:workflow --all --output=/tmp/wf-export-cli.json >/dev/null 2>&1'
 
-# Digest logic mirrors workflows/core/maps.json — keep the two in sync.
+# Digest logic mirrors lib/build-ai-map.mjs (the source of truth; maps.json is generated from it) — keep the two in sync.
 CONTEXT=$(docker compose exec -T n8n node -e '
 const fs = require("fs");
 const wfs = JSON.parse(fs.readFileSync("/tmp/wf-export-cli.json", "utf8")).filter((w) => !w.isArchived);
@@ -51,7 +51,7 @@ const map = JSON.parse(fs.readFileSync("/po11y-status/ai-map.json", "utf8"));
 const skeleton = (map.nodes || []).map(({ id, kind, tag, name }) => ({ id, kind, tag, name }));
 process.stdout.write(JSON.stringify({ skeleton, digest }));')
 
-# Prompt mirrors the annotation prompt in workflows/core/maps.json — keep in sync.
+# Prompt mirrors the annotation prompt in lib/build-ai-map.mjs — keep in sync.
 PROMPT=$(cat <<EOF
 You annotate a fixed architecture map of an n8n automation stack. The structure is already decided — you ONLY write text.
 

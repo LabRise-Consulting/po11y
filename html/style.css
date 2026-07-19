@@ -58,6 +58,10 @@ code{font-family:var(--mono);font-size:.92em;background:var(--grid);
   color:var(--muted);font:inherit;font-size:14px;font-weight:600;
   padding:8px 12px;cursor:pointer}
 .tab.active{color:var(--ink);border-bottom-color:var(--cyan)}
+.scope-switch{font:inherit;font-size:13px;font-weight:600;color:var(--ink);
+  background:var(--panel);border:1px solid var(--line);border-radius:7px;
+  padding:5px 8px;margin:0 4px 4px;cursor:pointer}
+.scope-switch:focus{outline:none;border-color:var(--cyan)}
 .spacer{flex:1}
 .badge{font-family:var(--mono);font-size:11px;color:#fff;background:var(--red);
   border-radius:5px;padding:2px 8px}
@@ -77,18 +81,7 @@ code{font-family:var(--mono);font-size:.92em;background:var(--grid);
 a.card{text-decoration:none}
 .empty{color:var(--muted);font-size:13.5px;font-style:italic;margin:4px 0}
 
-table{width:100%;border-collapse:collapse;background:var(--panel);
-  border:1px solid var(--line);border-radius:11px;overflow:hidden;
-  box-shadow:var(--shadow);font-size:13.5px;display:block;overflow-x:auto}
-th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);
-  white-space:nowrap}
-td.wide{white-space:normal;min-width:220px}
-th{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
-  text-transform:uppercase;color:var(--muted);background:var(--grid)}
-tr:last-child td{border-bottom:none}
 a{color:var(--sky)}
-.label{display:inline-block;font-family:var(--mono);font-size:10.5px;
-  background:var(--grid);border-radius:4px;padding:1px 6px;margin-right:4px}
 
 .notif{display:flex;gap:10px;align-items:flex-start;background:var(--panel);
   border:1px solid var(--line);border-radius:11px;padding:10px 14px;
@@ -98,6 +91,7 @@ a{color:var(--sky)}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:6px}
 .dot.ok{background:var(--emerald)} .dot.fail{background:var(--red)}
 .dot.info{background:var(--muted)}
+.err{color:var(--red)}
 
 button.card.action{appearance:none;font:inherit;text-align:left;cursor:pointer;
   color:inherit;width:100%}

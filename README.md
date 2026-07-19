@@ -1,16 +1,32 @@
-# Po11y
+<img src="html/logo.svg" alt="Po11y" width="215">
 
 Po11y is a status dashboard and observability stack for
 [n8n](https://n8n.io), the self-hostable workflow automation tool.
 Once your n8n workflows are live, Po11y answers the critical question:
 "What is running right now, and how does it all fit together?"
 
-The dashboard is boring technology: one nginx container, three static files, no build step.
-Grafana provides detailed metrics and insights.
+The dashboard is boring technology: one nginx container, three static files,
+no build step. Grafana provides detailed metrics. Instance-specific config
+lives in `config.json`, and all live data arrives as small JSON files on a
+shared volume — written by n8n workflows in Mode A, by the collector in
+Mode B.
 
-Start everything with one `./bootstrap.sh`: n8n, Postgres, Prometheus, Grafana.
-Instance-specific config lives in `config.json`, and all live data comes as
-small JSON files that n8n workflows write to a shared volume. Any publisher works; n8n is included.
+| | Mode A — bundled | Mode B — collector |
+|---|---|---|
+| n8n | installed & managed by Po11y | yours, untouched |
+| setup | `./bootstrap.sh` | set 4 env vars, `docker compose -f docker-compose.readonly.yml up -d` |
+| writes to n8n | yes | **never** (GET-only, test-enforced) |
+| Docker socket | read-only proxy | none |
+| Execute Command | enabled instance-wide | not needed |
+| identity | one shared login (CE limit) | whatever your n8n has |
+| for | one person, homelab | teams, existing deployments |
+
+**Which mode?** Mode A is the fastest way to get the whole stack running on
+your own box — no existing n8n required. Mode B adds Po11y read-only beside an
+n8n you (or your team) already run. Identity is the deciding factor for teams:
+n8n Community Edition has no sharing, projects, or RBAC — on free n8n, "team
+Po11y" means everyone shares the one Owner login. Mode B exists so Po11y can
+sit beside a paid or managed n8n and let n8n own identity instead.
 
 ## What you get
 
@@ -18,31 +34,31 @@ small JSON files that n8n workflows write to a shared volume. Any publisher work
   <a href="docs/intro.mp4">Watch the 16 second intro video</a>.
 </video>
 
-The **Overview** tab: action buttons (each active form trigger in n8n becomes a
-button automatically), monitoring links, running containers, a notification
+The **Overview** tab: action buttons (each active form trigger in n8n becomes
+a button automatically), monitoring links, running containers, a notification
 feed and Grafana panels.
 
 ![Dashboard overview](docs/img/dashboard.png)
 
-The **Architecture** tab: an interactive map of your workflows, rebuilt from the
-live n8n instance every 10 minutes. Hover a box to trace its wiring. The
-structure (columns, boxes, edges) is computed deterministically from the
-workflow export; an LLM only writes the one-line descriptions and insight
-cards, and plain heuristic text is used when no LLM is configured.
+The **Architecture** tab: an interactive map of your workflows, rebuilt from
+the live n8n instance every 10 minutes. The structure is computed
+deterministically from the workflow export; an LLM (optional — see
+[docs/ai-map.md](docs/ai-map.md)) only writes the one-line descriptions, with
+heuristic text when none is configured.
 
 ![Architecture map](docs/img/architecture.png)
 
 **Grafana**, prewired with four dashboards: n8n execution analytics, system
-health, and the official webhook/form execution dashboards from
+health, and the official webhook/form dashboards from
 [n8n-io/n8n-observability](https://github.com/n8n-io/n8n-observability):
 
 ![Grafana execution analytics](docs/img/grafana.png)
 
-Plus a simpler auto-generated **Map** tab (mermaid graph of workflows and their
-triggers), a staleness badge when the status feed stops updating, dark/light
-theme following your system, and extra tabs for any pages you want to serve.
+Plus a simpler auto-generated **Map** tab, a staleness badge when the status
+feed stops updating, dark/light theme, and extra tabs for any pages you want
+to serve.
 
-## Quickstart
+## Quickstart — Mode A (bundled)
 
 ```sh
 git clone https://gitlab.com/labrise/po11y && cd po11y
@@ -53,385 +69,107 @@ git clone https://gitlab.com/labrise/po11y && cd po11y
 Then open:
 
 - Dashboard: `http://127.0.0.1:8080`
-- n8n editor: `http://127.0.0.1:5678` (an owner account is created for you;
-  the credentials are written into `.env`)
+- n8n editor: `http://127.0.0.1:5678` (a single owner account is created for
+  you — the only account, see "Which mode?" above — with credentials written
+  into `.env`)
 
-Everything binds to `127.0.0.1` by default, so it is only reachable from
-your machine. To reach it from other devices, set `BIND_ADDR` in `.env` to a
-private VPN or LAN IP.
+Everything binds to `127.0.0.1` by default. To reach it from other devices,
+set `BIND_ADDR` in `.env` to a private VPN or LAN IP (and set
+`DASHBOARD_BASIC_AUTH` — see [docs/security.md](docs/security.md)).
 
-Out of the box you get the running-containers section, the two generated
-maps, Grafana dashboards, and (unless `--no-examples`) a notification feed
-of Hacker News top stories that demonstrates the whole pipeline end to end.
-
-### The included workflows
-
-Bootstrap imports and activates a few n8n workflows. They are normal
-workflows; open them in the editor to see how they work.
+Bootstrap imports and activates a few normal n8n workflows; open them in the
+editor to see how they work:
 
 | workflow | what it does |
 |----------|--------------|
 | Po11y - Status publish | every 2 min, lists Docker containers and writes `status.json` |
-| Po11y - Maps | every 10 min, exports all workflows and rebuilds the Map, Architecture and Actions feeds; the "Build maps now" form rebuilds them on demand |
-| Po11y example - HN tech news | every 30 min (or the "Fetch HN now" form), fetches Hacker News top stories |
-| Po11y example - HN notify | called by HN tech news as a sub-workflow; deduplicates and writes `notifications.json` |
+| Po11y - Maps | every 10 min, exports all workflows and rebuilds the Map, Architecture and Actions feeds |
+| Po11y example - HN tech news | every 30 min, fetches Hacker News top stories |
+| Po11y example - HN notify | sub-workflow; deduplicates and writes `notifications.json` |
 
 The two HN workflows are the template to copy for your own feeds: an entry
 workflow fetches data, a sub-workflow owns the file it publishes.
 
-### Importing your own workflows
-
-Any repo or directory of standard n8n workflow exports works (one JSON file
-per workflow, which is what the n8n UI and `n8n export:workflow --separate`
-produce):
+**Importing your own workflows.** Any repo or directory of standard n8n
+workflow exports works (one JSON file per workflow):
 
 ```sh
 ./bootstrap.sh --pack https://gitlab.com/you/your-workflows
 ./bootstrap.sh --pack ./my-local-dir
 ```
 
-n8n's command line import does not assign ownership on an instance that already has an owner,
-and such workflows run but stay invisible in the editor's list. If that
-happens, re-import them through the editor UI instead.
+n8n's command line import does not assign ownership on an instance that
+already has an owner, and such workflows run but stay invisible in the
+editor's list. If that happens, re-import them through the editor UI.
 
-## The AI architecture map
+## Quickstart — Mode B (read-only collector)
 
-The Architecture tab always renders: its structure comes from code, not from
-a model. An LLM is optional and improves the text. Two ways to enable
-that:
+Point Po11y at an n8n you already run without touching it. `collector/` polls
+the remote n8n's public API and publishes the same four feeds that the Mode A
+workflows write; the dashboard doesn't know or care which mode produced them.
 
-1. **API endpoint**: set `AI_MAP_BASE_URL`, `AI_MAP_API_KEY` and
-   `AI_MAP_MODEL` in `.env` (any OpenAI-compatible chat endpoint works:
-   Mistral, OpenAI, Anthropic, a local Ollama), then `docker compose up -d
-   n8n`. The Maps workflow refreshes the text daily, or immediately via the
-   "Build maps now" button.
-2. **Local AI CLI, no API key**: run `./ai-map-cli.sh` on the host. It pipes
-   the map through a local CLI (`claude -p` by default; set `AI_MAP_CLI` to
-   use `llm`, `ollama run <model>`, or anything that reads a prompt on stdin
-   and prints the answer).
+**Prerequisites**
 
-**Cost is near zero.** The map's structure is free (built from code). The LLM
-is only called when a workflow actually changed, and the call is
-differential: per-node content signatures (`sigs` in the published map) let
-unchanged nodes keep their previous prose, so the prompt carries only the
-changed workflows' digest. An unchanged map skips the call entirely; the
-"Build maps now" form forces a full re-annotation. A cheap model (e.g.
-`mistral-small-latest`) is plenty, and the keyless heuristic and
-local-Ollama paths cost nothing at all.
+- An n8n API key. On Community Edition keys are unconditionally full-access —
+  CE cannot scope keys — so create it under a dedicated, low-privilege
+  operator account. On Enterprise, scope it to `workflow:read`.
+- Optionally, set `N8N_METRICS=true` on the remote n8n so Prometheus has
+  something to scrape. Without it the Grafana tab is simply empty.
 
-## Security posture
+**Env vars** (`.env`; see the "Mode B" block in [`.env.example`](.env.example)
+for the full list with defaults):
 
-Po11y runs on a single box bound to `127.0.0.1`. The parts that matter:
+| var | required | notes |
+|-----|----------|-------|
+| `N8N_API_URL` | yes | base URL of the remote n8n |
+| `N8N_API_KEY` | yes | GET-only use, see prerequisites above |
+| `N8N_METRICS_TARGET` | yes | `host:port` of the remote n8n's `/metrics` |
+| `GRAFANA_ADMIN_PASSWORD` | yes | no `bootstrap.sh` here to generate one |
+| `POLL_INTERVAL` | no | seconds between polls, default `600` |
+| `STATUS_DIR` | no | feed directory, default `/po11y-status`; set `/po11y-status/<scope>` for a scoped collector ([docs/configuration.md](docs/configuration.md)) |
+| `AI_MAP_BASE_URL` / `AI_MAP_API_KEY` / `AI_MAP_MODEL` | no | optional AI prose, empty = heuristic map |
+| `ENABLE_FORM_PROXY` / `FORM_PROXY_UPSTREAM` | no | default `false` in this mode ([docs/security.md](docs/security.md)) |
 
-- **No host Docker socket in n8n.** The container list comes from a read-only
-  `docker-socket-proxy` sidecar that exposes only `GET /containers/json` and
-  denies every write and every other endpoint. A compromised n8n cannot reach
-  the host Docker daemon. Remove the proxy and the containers section simply
-  goes empty.
-- **Env access is blocked in Code nodes** (`N8N_BLOCK_ENV_ACCESS_IN_NODE=true`),
-  so a workflow can't read the DB or Grafana passwords out of the process
-  environment. The optional AI-map key lives in a file that is *not*
-  web-served, never in the environment.
-- **`fs` is the only allowed Code-node builtin**, scoped to the shared status
-  volume it has to write.
-- **Execute Command** stays enabled for one job (`n8n export:workflow`, used by
-  the Maps workflow). With the host socket gone it is confined to the n8n
-  container.
-- Everything binds to `127.0.0.1`, so plain HTTP is acceptable. Put it behind a
-  TLS reverse proxy before exposing it beyond the box.
-- **Optional dashboard gate**: set `DASHBOARD_BASIC_AUTH=user:password` in
-  `.env` to require HTTP Basic Auth for everything the dashboard serves
-  (static app, feeds, the grafana/prometheus proxies). Useful when
-  `BIND_ADDR` is a private LAN/VPN IP; it is not a substitute for TLS.
-
-Residual, and inherent to n8n: anyone who can add or edit workflows can run
-JavaScript in a Code node. Treat editor access as trusted.
-
-## Using Po11y inside an existing stack
-
-The dashboard is just static files plus a config, so you can mount it into a
-compose stack you already have:
-
-```yaml
-# docker-compose.yml
-dashboard:
-  image: nginx:1.27-alpine
-  ports: ["8080:80"]
-  volumes:
-    - ./external/po11y/html:/usr/share/nginx/html:ro
-    - ./external/po11y/nginx.conf:/etc/nginx/conf.d/default.conf:ro  # or your copy
-    - ./dashboard/site:/usr/share/nginx/site:ro                      # your tab pages
-    - ./dashboard/config.json:/run/po11y/config.json:ro              # your config
-    - status-volume:/po11y-status:ro                                 # your publisher writes here
-```
-
-(If you use the `/n8n-table/` proxy, render `nginx.conf`'s
-`${N8N_READ_API_KEY}` reference yourself before mounting it — see the
-`dashboard` service entrypoint in this repo's `docker-compose.yml` for the
-one-line `envsubst` that does it.)
-
-Pin Po11y as a git submodule so updates are deliberate:
+**Quickstart**
 
 ```sh
-git submodule add https://gitlab.com/labrise/po11y external/po11y
+git clone https://gitlab.com/labrise/po11y && cd po11y
+cp .env.example .env   # fill in N8N_API_URL, N8N_API_KEY, N8N_METRICS_TARGET, GRAFANA_ADMIN_PASSWORD
+docker compose -f docker-compose.readonly.yml up -d
 ```
 
-### Feeding it from n8n
+No `bootstrap.sh`, no owner account, no secrets on disk — everything the
+collector needs comes from those env vars.
 
-The dashboard only reads files; n8n writes them. Two prerequisites on the
-n8n service, then one small scheduled workflow.
+You get the same Map, Architecture and Actions feeds as Mode A, rebuilt every
+`POLL_INTERVAL`, plus Grafana. `status.json` carries an execution summary
+instead of a container list (there's no Docker socket); enable it with
+`"executions": "Workflow executions"` under `config.json`'s `sections`, and
+set `baseUrl` so `{host}` deep links point at the remote n8n. What you don't
+get: form buttons don't fire by default (`ENABLE_FORM_PROXY=false` — see
+[docs/security.md](docs/security.md)), there is never a container list, and
+the `/n8n-table/` list-tab proxy isn't wired up for a remote n8n yet.
 
-Existing n8n: mount the shared volume and allow the `fs` builtin in Code
-nodes, then restart:
+## Going further
 
-```yaml
-n8n:
-  environment:
-    - NODE_FUNCTION_ALLOW_BUILTIN=fs
-  volumes:
-    - status-volume:/po11y-status
-```
-
-New n8n: add the service next to the dashboard in the same compose file:
-
-```yaml
-n8n:
-  image: n8nio/n8n:latest
-  ports: ["5678:5678"]
-  environment:
-    - NODE_FUNCTION_ALLOW_BUILTIN=fs
-  volumes:
-    - n8n_data:/home/node/.n8n
-    - status-volume:/po11y-status
-```
-
-Either way, create a workflow: a Schedule Trigger (every 1 to 2 minutes)
-into a Code node that gathers whatever you want on the dashboard and writes
-the status contract atomically (write a tmp file, then rename, so nginx
-never serves a half-written file):
-
-```js
-const fs = require('fs');
-const status = {
-  generated_at: new Date().toISOString(),
-  // fill from earlier nodes: docker ps output, API calls, queue depths, ...
-  containers: [],
-  mrs: [],
-};
-fs.writeFileSync('/po11y-status/status.json.tmp', JSON.stringify(status));
-fs.renameSync('/po11y-status/status.json.tmp', '/po11y-status/status.json');
-return [{ json: { published: true } }];
-```
-
-A second workflow (or the same one) can append to `notifications.json` the
-same way. A first card for `config.json` is the n8n editor itself:
-`{"name": "n8n", "sub": "workflow editor", "href": "http://{host}:5678/"}`.
-
-Instead of writing a publisher from scratch, you can also import
-[`workflows/core/*.json`](workflows/core) (status publisher and maps) into
-your existing n8n directly. Mount your status volume at `/po11y-status` in
-that n8n and the write paths match.
-
-## Contracts
-
-### `/config.json`
-
-See [`config.example.json`](config.example.json). Everything is optional;
-omitted pieces don't render.
-
-| key | what |
-|-----|------|
-| `title`, `eyebrow`, `lede`, `footer` | branding; `footer` is `[{text, href?}]` |
-| `cards` | `{ "Group heading": [{name, sub, href}] }`, ordered groups of link cards |
-| `tabs` | `[{id, label, src}]`, iframe tabs; serve `src` yourself (e.g. under `/site/`) |
-| `sections` | which status sections render, and their headings: `{containers, mrs, notifications}` |
-| `metrics` | `{heading, grafana: {embed, base, dashboard, panels: [{id, wide?}], range}, promBase, stats: [{label, up, mem?}]}` |
-| `refreshSec` | poll interval for status + notifications (default 30) |
-| `staleAfterMin` | staleness threshold (default 5) |
-| `statusHint` | text shown while `status.json` is missing |
-
-`{host}` inside any `href`/`src` is replaced with the browser's hostname, so
-one config works from every device that can reach the box.
-
-### `/status.json` (your publisher writes this)
-
-```json
-{
-  "generated_at": "2026-07-10T12:00:00Z",
-  "containers": [ { "name": "…", "status": "Up 2 hours", "image": "…" } ],
-  "mrs": [ { "project": "…", "iid": 7, "title": "…", "web_url": "…",
-             "labels": ["…"], "draft": false, "updated_at": "…" } ]
-}
-```
-
-Write it atomically (tmp file plus rename on the same volume). Sections you
-don't enable in `config.json` can simply be absent.
-
-### `/notifications.json` (optional)
-
-Newest first. The dashboard shows the newest 5 with a "show all" toggle.
-
-```json
-[ { "ts": "…", "title": "…", "message": "…", "status": "success|failure|info",
-    "link": "https://…" } ]
-```
-
-### `/map.json` (written by the Maps workflow)
-
-```json
-{ "generated_at": "…", "mermaid": "graph TD\n …", "workflows": 4 }
-```
-
-Rendered by the bundled [`site/map.html`](site/map.html) tab (mermaid is
-bundled too, no CDN).
-
-### `/forms.json` (written by the Maps workflow)
-
-```json
-{ "generated_at": "…", "forms": [{ "name": "…", "sub": "…", "path": "…", "fields": 0 }] }
-```
-
-Live inventory of every active workflow's form triggers. The dashboard
-merges it into the "Actions" card group (config-declared cards win), so a
-new form trigger becomes a dashboard button within one Maps tick, without
-touching config.json. Field-less forms (`fields: 0`) fire in place — a
-`fetch` POST through the same-origin `/form/` nginx proxy with a toast for
-the result; forms with inputs open n8n's own form page as before.
-
-### `/ai-map.json` (written by the Maps workflow)
-
-```json
-{ "generated_at": "…", "model": "…", "eyebrow": "…", "title": "…", "lede": "…",
-  "columns": ["Triggers", "…"], "kinds": {"sched": "neutral"},
-  "nodes": [{ "id": "…", "col": 0, "kind": "sched", "tag": "…", "name": "…", "sub": "…" }],
-  "edges": [["fromId", "toId", "sched"]],
-  "legend": [["label", "sched"]], "notes": [{ "title": "…", "text": "…" }],
-  "sigs": { "<node id>": "…" } }
-```
-
-Structure is computed deterministically from the live workflow export; an
-LLM (optional, see above) only writes the prose. `sigs` are per-node content
-signatures the Maps workflow uses to re-annotate only changed nodes.
-Rendered by [`site/ai-map.html`](site/ai-map.html).
-
-### `/prom/*` and `/grafana/*` (optional)
-
-`metrics.stats` needs the two read-only Prometheus query endpoints proxied
-under `promBase`; Grafana embeds need Grafana served under
-`metrics.grafana.base` in subpath mode with anonymous viewing and embedding
-enabled (the default here; set `DASHBOARD_GRAFANA_EMBED=false` in `.env` to
-turn that off). The bundled [`nginx.conf`](nginx.conf) has both blocks ready.
-
-### n8n DataTable read proxy (optional)
-
-The `/n8n-table/` location proxies `GET` requests to n8n's public API and adds
-a read-scoped `X-N8N-API-KEY` server-side, so a `list` tab (see
-[`site/list.html`](site/list.html)) can read a Data Table live without the
-browser ever holding a key. It's GET-only (`limit_except GET { deny all; }`)
-and the key is injected by the `dashboard` service entrypoint in
-`docker-compose.yml` — the committed `nginx.conf` only ever carries the
-`${N8N_READ_API_KEY}` reference.
-
-One-time setup:
-1. In n8n -> **Settings -> n8n API**, create an API key. Scope it to
-   **data-table row: read** only.
-2. Put it in `.env` as `N8N_READ_API_KEY` (keep it out of git — `.env` is
-   already gitignored).
-3. Point a `list` tab's `endpoint` at
-   `/n8n-table/data-tables/<dataTableId>/rows?sort=firstSeen:desc` (confirm
-   the exact rows path/params against your n8n version's API docs at
-   `/api/v1/docs` — the DataTable API is young and has moved between minors).
-
-## Instance pages (`tabs`)
-
-A tab page is any HTML you serve under `/site/`. Copy the design tokens from
-[`html/style.css`](html/style.css) if you want it to match. The iframe gets
-`class="tabframe"` sizing from the shell; pages load lazily on first open.
-
-### `list` tab
-
-A generic tab (`/site/list.html`) that renders any row feed as day-grouped,
-sortable cards. Add a `tabs[]` entry with a `list` block:
-
-- `endpoint` — URL the tab fetches. A relative `/n8n-table/…` proxy path for live
-  n8n Data Table reads, or any static JSON (`{items:[…]}`, `[…]`, or `{data:[…]}`).
-- `mapping` — source-column → card-field map: `title`, `url`, `score`, `day`
-  (ISO string, bucketed by date), and `meta` (list of extra columns shown as a
-  detail line).
-- `defaultSort` — `"day"` (newest, grouped) or `"score"` (best-fit first).
-
-## Kubernetes and Podman
-
-The compose stack is one deployment, not the product — the product is the file
-contract (small JSON files on a shared volume) plus a static dashboard, which
-is deployment-agnostic.
-
-- **Podman**: the compose file runs under `podman-compose`. Point the
-  `docker-proxy` sidecar at the Podman socket (it speaks the Docker API); or
-  drop the proxy and the containers section is simply empty.
-- **Kubernetes**: plain manifests live in [`deploy/k8s/`](deploy/k8s) — build
-  and push the n8n image, create the static-file ConfigMaps, set the Secrets,
-  then `kubectl apply -k deploy/k8s`. Generic clusters have no Docker socket, so
-  the containers feed is empty there; everything else works. See
-  [`deploy/k8s/README.md`](deploy/k8s/README.md).
-
-## Tracing with OpenTelemetry (opt-in)
-
-n8n emits OpenTelemetry traces for workflow and node executions natively (no
-extra package). Enable it with the bundled override, which also starts a
-Grafana Tempo backend so traces surface in the same Grafana as the metrics:
-
-```sh
-docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d
-```
-
-It is opt-in on purpose: tracing is a newer n8n feature and heavier than the
-built-in Prometheus metrics, so the default stack leaves it off. The metrics
-dashboards need nothing extra.
-
-**What tracing adds over the metrics.** The Prometheus dashboards are
-aggregates (counts, rates, average durations). Traces are per-execution: a
-single run split into spans (each node, sub-workflow call, outbound HTTP
-request) with timing and parent/child. Use them to answer *why was this run
-slow* or *which node failed in this execution* — the drill-down the aggregates
-can't give.
-
-**A dashboard for it.** Tempo's metrics-generator derives span metrics (and a
-service graph) from the trace stream and remote-writes them to Prometheus, so
-the override also ships an **n8n Execution Traces** Grafana dashboard:
-per-workflow execution/error counts and per-node p95 latency, broken down by
-n8n's own span attributes (`n8n_workflow_name`, `n8n_node_name`, ...). This is
-node-level, unlike the workflow-level metrics dashboards.
-
-**Deep links from the Po11y dashboard.** Grafana Explore takes a TraceQL query
-in the URL, so you can wire one-click links like *recent errors*
-(`{status=error}`), *slow runs* (`{duration>2s}`), or *all recent traces*
-(`{}`). A ready-made card group is in
-[`deploy/otel/config-cards.json`](deploy/otel/config-cards.json) — merge it into
-your `config.json` `cards`. The Explore links need a Grafana login (Explore is
-Editor-only; the anonymous Viewer can't open it); the Execution Traces
-dashboard link works anonymously.
-
-## How it compares
-
-- **[n8n-io/n8n-observability](https://github.com/n8n-io/n8n-observability)**
-  (official, MIT) — Prometheus + Grafana with Webhook/Form execution
-  dashboards. Po11y builds on the same idea and adds the status page, the live
-  container feed, the interactive workflow maps and the automatic form buttons.
-  Its two dashboards are bundled here (Grafana ships four in total); the Form
-  one populates immediately, the Webhook one once you run webhook workflows.
-- **Workflow visualizers** (e.g. [n8nmermaid](https://github.com/jwa91/n8nmermaid))
-  — turn exported JSON into diagrams for pull-request review. Po11y does it
-  live from the running instance every 10 minutes.
-- **n8n execution viewers** (e.g. n8nTrace) — push-based dashboards for
-  execution history and errors, aimed at giving non-admins a safe debug view.
-  Po11y is a system-health, documentation and action panel, not a per-execution
-  log viewer.
-- **DIY (Retool / Appsmith + the n8n REST API)** — maximum control, more to
-  build and maintain. Po11y is the pre-packaged, one-command version.
+- [docs/security.md](docs/security.md) — the security posture of both modes,
+  the exposure interlock, and why read authorization is out of scope.
+- [docs/forward-auth.md](docs/forward-auth.md) — optional OIDC overlay
+  (Keycloak/Authentik/Google/GitLab) replacing Basic Auth with real identity,
+  and per-group authorization for form firing.
+- [docs/configuration.md](docs/configuration.md) — `config.json` reference,
+  every feed contract, multi-team scopes, the DataTable read proxy, and
+  custom tab pages.
+- [docs/ai-map.md](docs/ai-map.md) — enabling LLM prose on the architecture
+  map, and why it costs near zero.
+- [docs/integration.md](docs/integration.md) — mounting the dashboard into an
+  existing compose stack and feeding it from your own n8n.
+- [docs/deployment.md](docs/deployment.md) — Podman, Kubernetes,
+  OpenTelemetry tracing, and how Po11y compares to alternatives.
 
 ## About
 
-Po11y is built and maintained by **[Labrise Consulting](https://labrise-consulting.com)**.
+Po11y is built and maintained by
+**[Labrise Consulting](https://labrise-consulting.com)**.
 
 Released under the [MIT License](LICENSE).

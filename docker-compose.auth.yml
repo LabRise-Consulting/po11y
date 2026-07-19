@@ -1,0 +1,77 @@
+# Po11y forward-auth overlay — real identity via oauth2-proxy (generic OIDC).
+#
+# OPT-IN. The shared DASHBOARD_BASIC_AUTH gate stays the zero-config default;
+# it can say "a password was known", never "who". This overlay swaps that for
+# an OIDC login so every request carries a verified identity (email + groups) —
+# the thing that actually survives offboarding, and what /form/ authorization
+# builds on (see docs/forward-auth.md).
+#
+# Bring up ON TOP OF either base stack (the -f order matters — this file second):
+#   Mode A:  docker compose -f docker-compose.yml          -f docker-compose.auth.yml up -d
+#   Mode B:  docker compose -f docker-compose.readonly.yml -f docker-compose.auth.yml up -d
+#
+# It adds one service (oauth2-proxy) and flips FORWARD_AUTH=true on the existing
+# dashboard, which makes the dashboard entrypoint render the nginx auth_request
+# wiring (see nginx.conf's /oauth2/ locations + the entrypoint FORWARD_AUTH
+# branch). No new published ports: oauth2-proxy is reachable only on the compose
+# network, exclusively as nginx's auth_request upstream.
+#
+# See the "Forward auth (optional overlay)" block in .env.example for every var
+# and how to generate the cookie secret.
+
+services:
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    container_name: po11y-oauth2-proxy
+    restart: unless-stopped
+    environment:
+      # --- provider: generic OIDC. Works with any compliant IdP (Keycloak,
+      #     Authentik, Google, GitLab, Okta, …) — only the issuer URL changes.
+      - OAUTH2_PROXY_PROVIDER=oidc
+      - OAUTH2_PROXY_OIDC_ISSUER_URL=${OAUTH2_PROXY_OIDC_ISSUER_URL:?set the OIDC issuer URL (see .env.example)}
+      - OAUTH2_PROXY_CLIENT_ID=${OAUTH2_PROXY_CLIENT_ID:?set the OIDC client id}
+      - OAUTH2_PROXY_CLIENT_SECRET=${OAUTH2_PROXY_CLIENT_SECRET:?set the OIDC client secret}
+      # Generate with:  openssl rand -base64 32 | tr -- '+/' '-_'
+      - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_PROXY_COOKIE_SECRET:?set a cookie secret (see .env.example forward auth block)}
+      # Which e-mail domains may sign in. '*' = any authenticated account the IdP
+      # returns; narrow it to your org's domain(s) in .env.
+      - OAUTH2_PROXY_EMAIL_DOMAINS=${OAUTH2_PROXY_EMAIL_DOMAINS:-*}
+      # Claim to read group membership from. oauth2-proxy surfaces it as
+      # X-Auth-Request-Groups; the dashboard's /form/ authorization
+      # (FORM_ALLOWED_GROUPS) matches against it. Default matches
+      # Keycloak/Authentik/GitLab.
+      - OAUTH2_PROXY_OIDC_GROUPS_CLAIM=${OAUTH2_PROXY_OIDC_GROUPS_CLAIM:-groups}
+      # --- mode: auth endpoint only. We never proxy real traffic through
+      #     oauth2-proxy; nginx's auth_request calls /oauth2/auth and oauth2-proxy
+      #     answers 202 (authenticated) or 401. static://202 is that stub upstream
+      #     — no backend is ever contacted. NOTE: the arg is multi-value, so the
+      #     env var is pluralised (OAUTH2_PROXY_UPSTREAMS), see .env.example.
+      - OAUTH2_PROXY_UPSTREAMS=static://202
+      # Trust the X-Forwarded-* headers nginx sets (it is the only client).
+      - OAUTH2_PROXY_REVERSE_PROXY=true
+      # Emit X-Auth-Request-Email / X-Auth-Request-Groups on the /oauth2/auth
+      # response so nginx can lift them via auth_request_set. This is THE header
+      # source of truth for identity — nginx reads it from the subrequest
+      # response ($upstream_http_*), never from the client request.
+      - OAUTH2_PROXY_SET_XAUTHREQUEST=true
+      # Listen on the compose network (default binds 127.0.0.1, unreachable from
+      # the nginx container). Still no *published* port — compose-network only.
+      - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
+      # Plain HTTP on a localhost bind by default, so the session cookie must not
+      # be Secure-only or the browser never sends it back. Set true behind TLS.
+      - OAUTH2_PROXY_COOKIE_SECURE=${OAUTH2_PROXY_COOKIE_SECURE:-false}
+      # In reverse-proxy mode oauth2-proxy derives its callback URL from the
+      # forwarded Host/Proto. Override only if your IdP pins an exact redirect
+      # URL that differs (e.g. behind a TLS proxy on another hostname).
+      - OAUTH2_PROXY_REDIRECT_URL=${OAUTH2_PROXY_REDIRECT_URL:-}
+    expose:
+      - "4180"
+
+  # Overlay onto the existing dashboard: turn forward-auth on. The entrypoint
+  # (base compose files) reads FORWARD_AUTH and renders the auth_request include;
+  # when true it also disables DASHBOARD_BASIC_AUTH (forward-auth wins — a Basic
+  # prompt on top of an OIDC redirect is double auth / broken UX). `environment`
+  # is merged by key, so this just adds FORWARD_AUTH to the base list.
+  dashboard:
+    environment:
+      - FORWARD_AUTH=true

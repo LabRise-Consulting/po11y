@@ -1,5 +1,10 @@
 # po11y on Kubernetes
 
+> **Support level: community.** These manifests are schema-validated in CI
+> (`kustomize build deploy/k8s | kubeconform -strict`) but not smoke-tested —
+> the compose stack is the maintained reference deployment. Reviewed PRs
+> welcome.
+
 Plain-YAML translation of the repo's `docker-compose.yml`. No Helm, no operator.
 An optional `kustomization.yaml` lets you `kubectl apply -k .`.
 
@@ -95,9 +100,6 @@ For a real exposure, uncomment the Ingress or NodePort block in
   `strategy: Recreate`, so rollouts never double-attach a volume. Do not scale
   these Deployments beyond `replicas: 1`.
 
-## Validation status
-
-These manifests were **syntax / schema validated only** (YAML parse via `yq`;
-`kubectl apply --dry-run=client`). They have **not** been deployed to a live
-cluster — treat image ref, StorageClass, exposure and the n8n workflow/pack
-provisioning as things to confirm in your own environment before relying on it.
+Treat image ref, StorageClass, exposure and the n8n workflow/pack provisioning
+as things to confirm in your own environment — see the support-level note at
+the top of this file for what has (and hasn't) been checked.

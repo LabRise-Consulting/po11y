@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Po11y mark: pulse line ending in a node dot, on the ink tile.
+       Colors match style.css tokens (ink tile, dark-mode cyan). -->
+  <rect width="64" height="64" rx="14" fill="#141a22"/>
+  <path d="M10 38h10l7-18 9 30 5-12h5" fill="none" stroke="#38bdf8"
+        stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="53" cy="38" r="4.5" fill="#38bdf8"/>
+</svg>

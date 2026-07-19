@@ -7,7 +7,9 @@
 //   metrics       grafana embeds (or a deep-link card) + prometheus stat cards
 // Live data: /status.json + /notifications.json, polled every refreshSec.
 // "{host}" in any href/src is replaced with the browser's current hostname,
-// so one config works from every device that can reach the box.
+// so one config works from every device that can reach the box. Set
+// config.json's "baseUrl" (a bare host, not a URL prefix) to substitute a
+// different host instead — e.g. a remote n8n in Mode B.
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -15,7 +17,51 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
 // hrefs from external data: escaping keeps attributes intact but not URL
 // schemes — allow only http(s)/relative so a hostile `javascript:` can't land.
 const safeUrl = (u) => /^(https?:\/\/|\/)/i.test(String(u ?? '')) ? esc(u) : '#';
-const withHost = (u) => String(u ?? '').replaceAll('{host}', window.location.hostname);
+const withHost = (u) => String(u ?? '').replaceAll('{host}',
+  (typeof cfg.baseUrl === 'string' && cfg.baseUrl) ? cfg.baseUrl : window.location.hostname);
+
+// ---- scopes -----------------------------------------------------------------
+// Multi-team views: config "scopes" ({ "<scope>": "Display name", … }) lets
+// several publishers each feed their own namespace. On disk the default scope
+// is the flat canonical files (/status.json …); a non-default scope <s> lives
+// under /status/<s>/ (nginx maps both — see nginx.conf). 0 or 1 entry keeps
+// exactly today's behavior (flat paths, no switcher). activeScope is null in
+// that flat case; otherwise the localStorage-remembered scope key.
+// nginx's namespaced route only matches [a-z0-9-]+ (see nginx.conf); a key
+// outside that charset would 404 silently instead of ever fetching, so drop
+// it here — same charset guard the site pages (map.html/ai-map.html) use.
+const scopeKeys = () => (cfg.scopes && typeof cfg.scopes === 'object') ? Object.keys(cfg.scopes).filter((k) => {
+  if (/^[a-z0-9-]+$/.test(k)) return true;
+  console.warn(`po11y: dropping invalid scope key "${k}" (must match [a-z0-9-]+)`);
+  return false;
+}) : [];
+let activeScope = null;
+function initScope() {
+  const keys = scopeKeys();
+  if (keys.length <= 1) { activeScope = null; return; } // flat, no switcher
+  let s = localStorage.getItem('po11y-scope');
+  if (!keys.includes(s)) s = keys.includes('default') ? 'default' : keys[0];
+  activeScope = s;
+}
+// One helper every feed fetch routes through: default (or no scopes) → the
+// legacy flat path (/status.json); else the namespaced path.
+const feedUrl = (feed) => (!activeScope || activeScope === 'default')
+  ? `/${feed}.json`
+  : `/status/${activeScope}/${feed}.json`;
+// iframe tabs (map/ai-map) fetch their own feed; pass the active non-default
+// scope down the tab URL so those pages can scope their fetch too.
+const scopedSrc = (src) => (!activeScope || activeScope === 'default') ? src
+  : String(src ?? '') + (String(src).includes('?') ? '&' : '?') + 'scope=' + encodeURIComponent(activeScope);
+function setScope(next) {
+  if (!scopeKeys().includes(next) || next === activeScope) return;
+  localStorage.setItem('po11y-scope', next);
+  // Re-fetch everything for the new scope: reload re-runs boot() (config stays
+  // global; status/notifications/forms + the iframe tab srcs all rebuild
+  // scoped), which is the clean way to re-derive the whole view — buildChrome
+  // fixes the card-group skeleton at build time (forms discovery must precede
+  // it), so an in-place partial re-render cannot consistently re-scope forms.
+  location.reload();
+}
 
 let cfg = {
   title: 'Po11y',
@@ -26,8 +72,9 @@ let cfg = {
   tabs: [],
   sections: {
     containers: 'Running containers',
-    mrs: 'Open merge requests',
     notifications: 'Notifications',
+    // executions is Mode B-only (n8n executions API) — add
+    // "executions": "Workflow executions" to config.json sections to enable it.
   },
   metrics: null,
   refreshSec: 30,
@@ -91,10 +138,23 @@ function buildChrome() {
     sec.className = 'view';
     sec.hidden = true;
     // src set on first open — don't load every iframe up front
-    sec.innerHTML = `<iframe class="tabframe" data-src="${safeUrl(withHost(t.src))}"
+    sec.innerHTML = `<iframe class="tabframe" data-src="${safeUrl(withHost(scopedSrc(t.src)))}"
       title="${esc(t.label)}"></iframe>`;
     $('main').appendChild(sec);
   });
+  // Scope switcher: only when there's a real choice (>1 scope). Sits with the
+  // tabs, mirroring the header idiom; the pick sticks via localStorage and a
+  // reload re-derives every scoped feed.
+  if (scopeKeys().length > 1) {
+    const sel = document.createElement('select');
+    sel.className = 'scope-switch';
+    sel.setAttribute('aria-label', 'scope');
+    sel.innerHTML = scopeKeys().map((k) =>
+      `<option value="${esc(k)}"${k === activeScope ? ' selected' : ''}>${esc(cfg.scopes[k])}</option>`).join('');
+    sel.addEventListener('change', () => setScope(sel.value));
+    nav.insertBefore(sel, nav.querySelector('.spacer'));
+  }
+
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach((b) => {
@@ -130,9 +190,9 @@ function buildChrome() {
     localStorage.setItem(`po11y-sec-${h.dataset.sec}`, body.hidden ? 'closed' : 'open');
   }));
 
-  // Filter box in the containers/MRs headings — narrows the cached render
-  // immediately; the poll re-render keeps the filter applied.
-  [['sec-containers', renderContainers], ['sec-mrs', renderMrs]].forEach(([id, rerender]) => {
+  // Filter boxes in the containers/executions headings — narrow the cached
+  // render immediately; the poll re-render keeps the filter applied.
+  [['sec-containers', renderContainers], ['sec-executions', renderExecutions]].forEach(([id, rerender]) => {
     const h = ov.querySelector(`.sec-h[data-sec="${id}"]`);
     if (!h) return;
     const inp = document.createElement('input');
@@ -232,11 +292,11 @@ async function renderStat(stat, i) {
 // successful poll keeps the data on screen and raises the "unreachable"
 // badge instead of wiping the sections ("stale" stays age-based).
 let lastStatus = null;
-const filters = { 'sec-containers': '', 'sec-mrs': '' };
+const filters = { 'sec-containers': '', 'sec-executions': '' };
 
 async function refreshStatus() {
   try {
-    lastStatus = await fetchJson('/status.json');
+    lastStatus = await fetchJson(feedUrl('status'));
     $('offline').hidden = true;
   } catch {
     if (!lastStatus) {
@@ -244,8 +304,8 @@ async function refreshStatus() {
       $('updated').textContent = cfg.statusHint;
       const c = $('sec-containers');
       if (c) c.innerHTML = '<p class="empty">no data yet</p>';
-      const m = $('sec-mrs');
-      if (m) m.innerHTML = '<p class="empty">no data yet</p>';
+      const ex = $('sec-executions');
+      if (ex) ex.innerHTML = '<p class="empty">no data yet</p>';
       return;
     }
     $('offline').hidden = false;
@@ -254,7 +314,7 @@ async function refreshStatus() {
   $('stale').hidden = ageMin <= (cfg.staleAfterMin ?? 5);
   $('updated').textContent = `updated ${ago(lastStatus.generated_at)}`;
   renderContainers();
-  renderMrs();
+  renderExecutions();
 }
 
 function renderContainers() {
@@ -269,21 +329,26 @@ function renderContainers() {
     : `<p class="empty">${f ? 'no match' : 'none running'}</p>`;
 }
 
-function renderMrs() {
-  const el = $('sec-mrs');
+// ---- executions (Mode B only) -----------------------------------------------------
+// { executions: { recent, errors, byWorkflow: [{ name, id, count, errors, lastAt }] } }
+// — see collector/collect.mjs. Filter box narrows byWorkflow by name, same
+// mechanism as renderContainers.
+function renderExecutions() {
+  const el = $('sec-executions');
   if (!el || !lastStatus) return;
-  const f = filters['sec-mrs'];
-  const rows = (lastStatus.mrs || []).filter((m) =>
-    !f || `${m.project} !${m.iid} ${m.title} ${(m.labels || []).join(' ')}`.toLowerCase().includes(f));
-  el.innerHTML = rows.length
-    ? `<table><tr><th>project</th><th>MR</th><th>title</th><th>labels</th><th>updated</th></tr>` +
-      rows.map((m) =>
-        `<tr><td>${esc(m.project)}</td>
-         <td><a href="${safeUrl(m.web_url)}">!${esc(m.iid)}</a>${m.draft ? ' <span class="label">draft</span>' : ''}</td>
-         <td class="wide">${esc(m.title)}</td>
-         <td>${(m.labels || []).map((l) => `<span class="label">${esc(l)}</span>`).join('')}</td>
-         <td>${esc(ago(m.updated_at))}</td></tr>`).join('') + '</table>'
-    : `<p class="empty">${f ? 'no match' : 'no open MRs'}</p>`;
+  const ex = lastStatus.executions || {};
+  const f = filters['sec-executions'];
+  const rows = (ex.byWorkflow || []).filter((w) =>
+    !f || String(w.name ?? '').toLowerCase().includes(f));
+  if (!rows.length) { el.innerHTML = `<p class="empty">${f ? 'no match' : 'no executions yet'}</p>`; return; }
+  const summary = `<p class="updated">${ex.recent ?? 0} recent · ${ex.errors ?? 0} errors</p>`;
+  el.innerHTML = summary + rows.map((w) => {
+    const dot = w.errors ? 'fail' : 'ok';
+    const errPart = w.errors ? `<b class="err">${w.errors} errors</b>` : `${w.errors ?? 0} errors`;
+    return `<div class="notif"><span class="dot ${dot}"></span>
+      <div><b>${esc(w.name)}</b> <span class="updated">${w.lastAt ? esc(ago(w.lastAt)) : 'never'}</span>
+      <p>${w.count ?? 0} runs · ${errPart}</p></div></div>`;
+  }).join('');
 }
 
 // ---- notification feed ------------------------------------------------------------
@@ -297,7 +362,7 @@ let lastFeed = null;
 
 async function refreshNotifications() {
   try {
-    lastFeed = await fetchJson('/notifications.json');
+    lastFeed = await fetchJson(feedUrl('notifications'));
   } catch { /* keep the last-good feed (see refreshStatus) */ }
   renderNotifications();
 }
@@ -334,10 +399,11 @@ function renderNotifications() {
 // ---- boot -------------------------------------------------------------------------
 (async function boot() {
   try { cfg = { ...cfg, ...(await fetchJson('/config.json')) }; } catch { /* defaults */ }
-  // Auto-discovered form triggers (/forms.json, published by the maps
+  initScope();
+  // Auto-discovered form triggers (forms.json, published by the maps
   // workflow) become Actions cards; config-declared cards win on collisions.
   try {
-    const feed = await fetchJson('/forms.json');
+    const feed = await fetchJson(feedUrl('forms'));
     const actions = (cfg.cards = cfg.cards || {}).Actions = cfg.cards.Actions || [];
     const have = new Set(actions.map((c) => (c.href || '').split('/form/')[1]).filter(Boolean));
     for (const f of feed.forms || []) {

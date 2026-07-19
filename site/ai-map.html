@@ -135,9 +135,15 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 
 (async () => {
   const meta = document.getElementById("meta");
+  // Scope (config "scopes"): the dashboard passes ?scope=<s> when a non-default
+  // scope is active; fetch that namespace's ai-map. No/invalid/default scope
+  // keeps today's flat path. Charset guard mirrors nginx's [a-z0-9-] whitelist.
+  const scope = new URLSearchParams(location.search).get("scope");
+  const aiMapUrl = (scope && scope !== "default" && /^[a-z0-9-]+$/.test(scope))
+    ? `/status/${scope}/ai-map.json` : "/ai-map.json";
   let d;
   try {
-    const r = await fetch("/ai-map.json", { cache: "no-store" });
+    const r = await fetch(aiMapUrl, { cache: "no-store" });
     if (!r.ok) { // not generated yet — show the setup placeholder
       meta.hidden = true;
       document.getElementById("setup").hidden = false;

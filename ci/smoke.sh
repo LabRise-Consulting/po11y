@@ -105,6 +105,24 @@ check_status_json() {
   [ "$cnt" -gt 0 ] || return 1
 }
 
+# 4b. GET /status/default/status.json → 200 and the SAME .generated_at as the
+# flat /status.json. Proves the namespaced-feed nginx wiring: the `default`
+# scope must serve the flat canonical file (via the internal rewrite in
+# nginx.conf), not a /po11y-status/default/ subdir (which does not exist). Reads
+# flat first, then the scoped URL; a publish landing between the two reads would
+# make the timestamps differ, but wait_for retries so that self-heals. Byte-
+# equality would be brittle (nginx may add headers) — generated_at identity is
+# the load-bearing bit.
+check_status_default_alias() {
+  gen_flat=$(curl -s -m 10 "$BASE_URL/status.json" | jq -r '.generated_at' 2>/dev/null)
+  code=$(curl_code GET /status/default/status.json)
+  gen_scoped=$(jq -r '.generated_at' "$TMP" 2>/dev/null)
+  LAST="GET /status/default/status.json -> $code; flat gen=$gen_flat scoped gen=$gen_scoped"
+  [ "$code" = 200 ] || return 1
+  case "$gen_scoped" in ''|null) return 1 ;; esac
+  [ "$gen_flat" = "$gen_scoped" ] || return 1
+}
+
 # 5. POST /form/maps-build-now → 2xx (forces a fresh map + ai-map + forms).
 check_maps_build() {
   code=$(curl_code POST /form/maps-build-now -F 'x=')
@@ -171,6 +189,7 @@ wait_for 'root serves po11y dashboard'          check_root
 wait_for 'config.json is valid JSON'            check_config
 wait_for 'status-refresh form accepts POST'     check_status_refresh
 wait_for 'status.json fresh with containers'    check_status_json
+wait_for 'status/default alias == flat status'  check_status_default_alias
 wait_for 'maps-build-now form accepts POST'     check_maps_build
 wait_for 'map.json mermaid is a graph TD'       check_map_json
 wait_for 'ai-map.json has nodes'                check_ai_map_json

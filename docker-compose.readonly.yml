@@ -1,88 +1,58 @@
+# Po11y Mode B — read-only collector stack against an EXISTING n8n.
+#
+# Unlike Mode A (docker-compose.yml) this brings up NO n8n, NO postgres and NO
+# docker-socket-proxy, and there is NO bootstrap.sh: the collector polls a
+# remote n8n's public API read-only and publishes the four dashboard feeds
+# (map/forms/ai-map/status) into the shared po11y_status volume, which the
+# dashboard serves. There is no owner account to create and no secrets to
+# generate on disk — everything comes from a handful of env vars:
+#
+#   N8N_API_URL          https URL of the remote n8n  (required)
+#   N8N_API_KEY          a public-API key on that n8n (required; GET-only use)
+#   N8N_METRICS_TARGET   host:port of the remote n8n /metrics (required; the
+#                        remote must run with N8N_METRICS=true — absent metrics
+#                        degrade gracefully to an empty Grafana tab)
+#   POLL_INTERVAL        seconds between polls (default 600)
+#   BIND_ADDR / DASHBOARD_PORT / DASHBOARD_BASIC_AUTH / GRAFANA_ADMIN_PASSWORD
+#                        reused verbatim from Mode A (see .env.example)
+#   ENABLE_FORM_PROXY / FORM_PROXY_UPSTREAM   see the dashboard service + nginx
+#
+# Bring-up (no bootstrap):
+#   docker compose -f docker-compose.readonly.yml up -d
+#
+# See the "Mode B" section of .env.example for the full variable list.
+
 services:
-  n8n:
-    build:
-      context: .
-      args:
-        N8N_IMAGE: ${N8N_IMAGE:-docker.io/n8nio/n8n:2.29.8}
-    container_name: po11y-n8n
+  # Read-only poller. Runs as non-root `node` under a read_only rootfs; the only
+  # writable path is the po11y_status volume (feeds are written tmp+rename inside
+  # it). The n8n API key lives ONLY in this process env — never logged, never
+  # written into a feed, never served. Health on :8081/healthz (counters only).
+  collector:
+    build: ./collector
+    container_name: po11y-collector
     restart: unless-stopped
-    ports:
-      - "${BIND_ADDR:-127.0.0.1}:5678:5678"
     environment:
-      - GENERIC_TIMEZONE=${TZ:-Europe/Berlin}
-      - TZ=${TZ:-Europe/Berlin}
-      - N8N_DIAGNOSTICS_ENABLED=false
-      # Plain HTTP — acceptable on localhost / a private network only.
-      - N8N_SECURE_COOKIE=false
-      - WEBHOOK_URL=http://${BIND_ADDR:-127.0.0.1}:5678/
-      # Code nodes write /po11y-status/*.json via the fs builtin (the only
-      # builtin allowed). $env is blocked in nodes so a workflow cannot read
-      # the DB / Grafana passwords out of the process environment; the ai-map
-      # workflow reads its optional AI config from /run/po11y/ai-map.json
-      # (rendered by bootstrap from .env, mounted read-only, not web-served).
-      - NODE_FUNCTION_ALLOW_BUILTIN=fs
-      - N8N_BLOCK_ENV_ACCESS_IN_NODE=true
-      # n8n >=2.0 disables Execute Command by default. NODES_EXCLUDE=[]
-      # re-enables it instance-wide, for every workflow anyone creates here —
-      # not just the one that needs it (the workflow map's `n8n
-      # export:workflow` step). The host Docker socket is no longer mounted
-      # here, so whatever runs via Execute Command is confined to the n8n
-      # container.
-      - NODES_EXCLUDE=[]
-      # --- datastore ---
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE:-n8n}
-      - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER:-n8n}
-      - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD:?run ./bootstrap.sh (or set in .env)}
-      - EXECUTIONS_DATA_MAX_AGE=${EXECUTIONS_DATA_MAX_AGE:-4380}
-      # --- metrics (scraped by prometheus) ---
-      - N8N_METRICS=true
-      - N8N_METRICS_INCLUDE_WORKFLOW_ID_LABEL=true
-      # Feed the bundled Webhook/Form execution dashboards (from the official
-      # n8n-io/n8n-observability set). WORKFLOW_INFO adds the n8n_workflow_info
-      # gauge both dashboards join against.
-      - N8N_METRICS_INCLUDE_WEBHOOK_METRICS=true
-      - N8N_METRICS_INCLUDE_FORM_METRICS=true
-      - N8N_METRICS_INCLUDE_WORKFLOW_INFO=true
+      - N8N_API_URL=${N8N_API_URL:?set N8N_API_URL to the remote n8n base URL}
+      - N8N_API_KEY=${N8N_API_KEY:?set N8N_API_KEY to a public-API key on that n8n}
+      - POLL_INTERVAL=${POLL_INTERVAL:-600}
+      - STATUS_DIR=/po11y-status
+      # Optional AI architecture-map prose (OpenAI-compatible endpoint). Empty =
+      # free heuristic map. Never logged; only makeLlm sees the key.
+      - AI_MAP_BASE_URL=${AI_MAP_BASE_URL:-}
+      - AI_MAP_API_KEY=${AI_MAP_API_KEY:-}
+      - AI_MAP_MODEL=${AI_MAP_MODEL:-}
+    read_only: true
+    user: node
     volumes:
-      - n8n_data:/home/node/.n8n
-      - ./workflows:/workflows:ro
-      - ./packs:/packs:ro
-      # Optional AI-map config, not on the web-served status volume. bootstrap
-      # renders it from .env; empty file = heuristic map (no LLM).
-      - ./secrets/ai-map.json:/run/po11y/ai-map.json:ro
       - po11y_status:/po11y-status
-    depends_on:
-      - postgres
-      - docker-proxy
-
-  # Read-only Docker API proxy. n8n reads the containers list for the dashboard
-  # through this instead of mounting the host socket directly: only the
-  # container-list endpoint is exposed (CONTAINERS=1), every mutating and
-  # sensitive endpoint is denied, and the real socket is never reachable from
-  # n8n. A compromised n8n therefore cannot control the host's Docker daemon.
-  docker-proxy:
-    image: tecnativa/docker-socket-proxy:0.2
-    container_name: po11y-docker-proxy
-    restart: unless-stopped
-    environment:
-      - CONTAINERS=1   # GET /containers/json only
-      - POST=0         # deny all writes (default, set explicit)
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: po11y-postgres
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=${DB_POSTGRESDB_DATABASE:-n8n}
-      - POSTGRES_USER=${DB_POSTGRESDB_USER:-n8n}
-      - POSTGRES_PASSWORD=${DB_POSTGRESDB_PASSWORD:?run ./bootstrap.sh (or set in .env)}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # node-only probe (the alpine node image has no wget/curl). 503 after three
+      # consecutive failed polls -> unhealthy -> orchestrator restart.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   prometheus:
     image: prom/prometheus:v2.55.1
@@ -90,15 +60,26 @@ services:
     restart: unless-stopped
     ports:
       - "${BIND_ADDR:-127.0.0.1}:9090:9090"
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-180d}
+    environment:
+      - N8N_METRICS_TARGET=${N8N_METRICS_TARGET:?set N8N_METRICS_TARGET=host:port of the remote n8n /metrics}
+    # prom/prometheus is a busybox image: it ships /bin/sh + sed but NOT gettext's
+    # envsubst, so — mirroring the grafana service's sed entrypoint rather than the
+    # dashboard's envsubst one — we sed the remote target into a rendered copy of
+    # the config on the writable tsdb volume, then exec prometheus against it. The
+    # retention flag is interpolated by compose (same as Mode A's `command`).
+    entrypoint:
+      - /bin/sh
+      - -euc
+      - |
+        sed "s|__N8N_METRICS_TARGET__|$$N8N_METRICS_TARGET|g" \
+          /etc/prometheus/prometheus.readonly.yml > /prometheus/prometheus.rendered.yml
+        exec /bin/prometheus \
+          --config.file=/prometheus/prometheus.rendered.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-180d}
     volumes:
-      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus.readonly.yml:/etc/prometheus/prometheus.readonly.yml:ro
       - prometheus_data:/prometheus
-    depends_on:
-      - n8n
 
   grafana:
     image: grafana/grafana-oss:11.3.1
@@ -108,13 +89,21 @@ services:
       - "${BIND_ADDR:-127.0.0.1}:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?run ./bootstrap.sh (or set in .env)}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
+      # There is no postgres in Mode B: the n8n-postgres datasource provisioned
+      # from observability/grafana/provisioning is inert here (and any dashboard
+      # panel backed by it stays empty) — the prometheus datasource is what feeds
+      # the Mode B tabs. These are passed only so provisioning interpolation has
+      # values; they wire up to nothing.
       - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE:-n8n}
       - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER:-n8n}
-      - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD:?run ./bootstrap.sh (or set in .env)}
+      - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD:-}
       # Grafana interpolates ${VAR} in provisioning YAML but NOT in dashboard
       # JSON — the entrypoint seds the n8n deep-link host into a rendered copy.
+      # The n8n deep links target BIND_ADDR:5678; with a remote n8n that host is
+      # elsewhere, so those links can 404. Set BIND_ADDR to the remote host name
+      # if you want them to resolve — the panels/metrics work regardless.
       - BIND_ADDR=${BIND_ADDR:-127.0.0.1}
       - GF_PATHS_PROVISIONING=/tmp/grafana-provisioning
       - GF_SERVER_ROOT_URL=http://${BIND_ADDR:-127.0.0.1}:${DASHBOARD_PORT:-8080}/grafana/
@@ -135,9 +124,10 @@ services:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning-src:ro
       - grafana_data:/var/lib/grafana
     depends_on:
-      - postgres
       - prometheus
 
+  # Same nginx image and config as Mode A. The only web-served writer of
+  # po11y_status is the collector; the dashboard mounts it read-only.
   dashboard:
     image: nginx:1.27-alpine
     container_name: po11y-dashboard
@@ -145,15 +135,16 @@ services:
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${DASHBOARD_PORT:-8080}:80"
     environment:
-      # Read-scoped n8n API key for the /n8n-table/ proxy (optional — see
-      # docs/configuration.md "n8n DataTable read proxy"). Empty is fine when no list tab
-      # is configured; nginx still starts, the proxy just forwards no key.
+      # Read-only n8n DataTable proxy key (optional; see docs/configuration.md).
       - N8N_READ_API_KEY=${N8N_READ_API_KEY:-}
       # Optional "user:password" gate for the whole dashboard (see .env.example).
       - DASHBOARD_BASIC_AUTH=${DASHBOARD_BASIC_AUTH:-}
-      # Form-trigger submit proxy. ON by default in Mode A (the Actions tab).
-      # See nginx.conf's /form/ note for the gate + security rationale.
-      - ENABLE_FORM_PROXY=${ENABLE_FORM_PROXY:-true}
+      # Form-trigger submit proxy. OFF by default in Mode B: on a shared team box
+      # the dashboard's single Basic-Auth password would otherwise let anyone
+      # fire n8n form-triggers, bypassing n8n's own auth (see nginx.conf's /form/
+      # note). If you deliberately enable it, point FORM_PROXY_UPSTREAM at the
+      # remote n8n — there is no `n8n` DNS name in Mode B.
+      - ENABLE_FORM_PROXY=${ENABLE_FORM_PROXY:-false}
       - FORM_PROXY_UPSTREAM=${FORM_PROXY_UPSTREAM:-http://n8n:5678}
       # Comma-separated OIDC group names allowed to fire forms. ENFORCED ONLY
       # under FORWARD_AUTH (verified $auth_groups); with forward-auth on and this
@@ -303,8 +294,6 @@ services:
       - grafana
 
 volumes:
-  n8n_data:
-  postgres_data:
+  po11y_status:
   prometheus_data:
   grafana_data:
-  po11y_status:

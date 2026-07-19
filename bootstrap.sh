@@ -21,6 +21,14 @@ command -v docker  >/dev/null || { echo "bootstrap: docker required"; exit 1; }
 
 EXAMPLES=yes
 PACKS=""
+
+# Retired core workflows, by id. Each entry is a dated liability: n8n owns this
+# schema, so this raw delete is coupled to it. Drop entries once no supported
+# upgrade path still carries them.
+#   po11yaimap000000  retired 2026-07 (ai-map + workflow-map merged into maps.json)
+# REMOVE AFTER 2026-12
+RETIRED_IDS="po11yaimap000000"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-examples) EXAMPLES=no ;;
@@ -63,10 +71,22 @@ mkdir -p packs site secrets
 python3 -c 'import json,sys; json.dump({"base_url":sys.argv[1],"api_key":sys.argv[2],"model":sys.argv[3]}, open("secrets/ai-map.json","w"))' \
   "$(get_env AI_MAP_BASE_URL)" "$(get_env AI_MAP_API_KEY)" "$(get_env AI_MAP_MODEL)"
 
+BIND="$(get_env BIND_ADDR)"; BIND="${BIND:-127.0.0.1}"
+# Exposure interlock: a non-loopback bind with no auth gate means the anonymous
+# Grafana Viewer and every feed are readable by anything that can route to this
+# box. Refuse loudly (a warning would scroll past) and BEFORE 'compose up'
+# publishes any port. PO11Y_ALLOW_OPEN_BIND=1 (environment, not .env) overrides.
+if [ "$BIND" != "127.0.0.1" ] && [ "$BIND" != "localhost" ] \
+   && [ -z "$(get_env DASHBOARD_BASIC_AUTH)" ] \
+   && [ "${PO11Y_ALLOW_OPEN_BIND:-}" != "1" ]; then
+  echo "bootstrap: REFUSING — BIND_ADDR=$BIND is not loopback and"
+  echo "  DASHBOARD_BASIC_AUTH is empty. Set it, or set PO11Y_ALLOW_OPEN_BIND=1."
+  exit 78
+fi
+
 # ---- 2. stack up ----------------------------------------------------------------
 docker compose --env-file "$ENV_FILE" up -d --build
 
-BIND="$(get_env BIND_ADDR)"; BIND="${BIND:-127.0.0.1}"
 # Host this script uses to reach n8n (readiness polls + /rest/ owner setup).
 # Defaults to $BIND, but 0.0.0.0 is a bind address, not a connectable one, so
 # map it to 127.0.0.1. PO11Y_CONNECT_HOST (environment only — a CI/runtime
@@ -132,10 +152,12 @@ done
 echo "bootstrap: imported + published $n workflows"
 
 # Retired core workflows (merged into others) — drop leftovers from earlier
-# installs. Currently: ai-map + workflow-map converged into maps.json.
-docker compose --env-file "$ENV_FILE" exec -T postgres psql -U "${DB_POSTGRESDB_USER:-n8n}" \
-  -d "${DB_POSTGRESDB_DATABASE:-n8n}" \
-  -c "delete from workflow_entity where id='po11yaimap000000';" >/dev/null 2>&1 || true
+# installs. See RETIRED_IDS at the top for the dated inventory.
+for rid in $RETIRED_IDS; do
+  docker compose --env-file "$ENV_FILE" exec -T postgres psql -U "${DB_POSTGRESDB_USER:-n8n}" \
+    -d "${DB_POSTGRESDB_DATABASE:-n8n}" \
+    -c "delete from workflow_entity where id='$rid';" >/dev/null 2>&1 || true
+done
 
 # Unconditional: a running instance is not guaranteed to pick up CLI-imported
 # active workflows; the restart is cheap.
@@ -165,6 +187,11 @@ if [ "$NEEDS_SETUP" = "true" ]; then
     -d "$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"firstName":"Po11y","lastName":"Owner","password":sys.argv[2]}))' "$EMAIL" "$PASS")")"
   if [ "$CODE" = "200" ]; then
     echo "bootstrap: n8n owner created ($EMAIL) — password in $ENV_FILE"
+  elif [ "$CODE" = "400" ]; then
+    # 400 = owner already exists. On an idempotent re-run /rest/settings can
+    # still report showSetupOnFirstLoad=true for a window; the POST is the
+    # authority. Not a failure — say so instead of the manual-setup warning.
+    echo "bootstrap: n8n owner already configured — nothing to do"
   else
     # Internal REST API, no semver guarantee — degrade, don't fail.
     echo "bootstrap: headless owner setup failed (HTTP $CODE) — open $BASE and finish setup manually"

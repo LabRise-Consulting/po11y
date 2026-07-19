@@ -1,0 +1,266 @@
+[
+  {
+    "id": "po11ystatuspub00",
+    "name": "Po11y - Status publish",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 2
+              }
+            ]
+          }
+        },
+        "id": "a0000000-0000-0000-0000-000000000001",
+        "name": "Every 2 min",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "path": "status-refresh",
+          "formTitle": "Refresh status now",
+          "formDescription": "Re-poll containers and republish status.json immediately.",
+          "formFields": {
+            "values": []
+          },
+          "responseMode": "onReceived",
+          "options": {}
+        },
+        "id": "a0000000-0000-0000-0000-000000000004",
+        "name": "Refresh now (form)",
+        "type": "n8n-nodes-base.formTrigger",
+        "typeVersion": 2.2,
+        "position": [
+          0,
+          160
+        ],
+        "webhookId": "status-refresh"
+      },
+      {
+        "parameters": {
+          "url": "http://docker-proxy:2375/containers/json",
+          "options": {}
+        },
+        "id": "a0000000-0000-0000-0000-000000000002",
+        "name": "List containers",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          220,
+          0
+        ],
+        "onError": "continueRegularOutput"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Publish live state for the dashboard. fs is an allowed builtin\n// (NODE_FUNCTION_ALLOW_BUILTIN=fs); tmp + rename so nginx never serves a\n// torn file. Containers come from the read-only docker-socket-proxy\n// (/containers/json), not the host socket. If the proxy is unreachable the\n// previous node errored through (onError) and we publish without the\n// containers section — the dashboard simply hides it.\nconst fs = require('fs');\nconst rows = $input.all().map((i) => i.json).filter((c) => c && Array.isArray(c.Names));\nconst status = { generated_at: new Date().toISOString() };\nif (rows.length) {\n  status.containers = rows\n    .map((c) => ({ name: (c.Names[0] || '').replace(/^\\//, ''), image: c.Image, status: c.Status }))\n    .sort((a, b) => a.name.localeCompare(b.name));\n}\nfs.writeFileSync('/po11y-status/status.json.tmp', JSON.stringify(status));\nfs.renameSync('/po11y-status/status.json.tmp', '/po11y-status/status.json');\nreturn [{ json: { published: true, containers: (status.containers || []).length } }];"
+        },
+        "id": "a0000000-0000-0000-0000-000000000003",
+        "name": "Publish status.json",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          440,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Every 2 min": {
+        "main": [
+          [
+            {
+              "node": "List containers",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Refresh now (form)": {
+        "main": [
+          [
+            {
+              "node": "List containers",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "List containers": {
+        "main": [
+          [
+            {
+              "node": "Publish status.json",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "active": true,
+    "isArchived": false
+  },
+  {
+    "id": "po11yworkflowmap",
+    "name": "Po11y - Maps",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 10
+              }
+            ]
+          }
+        },
+        "id": "a1000000-0000-0000-0000-000000000001",
+        "name": "Every 10 min",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [
+          0,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "path": "maps-build-now",
+          "formTitle": "Build maps now",
+          "formDescription": "Re-export all workflows and rebuild the Map, Actions and Architecture (AI) feeds immediately.",
+          "formFields": {
+            "values": []
+          },
+          "responseMode": "onReceived",
+          "options": {}
+        },
+        "id": "a1000000-0000-0000-0000-000000000005",
+        "name": "Build now (form)",
+        "type": "n8n-nodes-base.formTrigger",
+        "typeVersion": 2.2,
+        "position": [
+          0,
+          160
+        ],
+        "webhookId": "maps-build-now"
+      },
+      {
+        "parameters": {
+          "command": "rm -f /tmp/wf-export.json && n8n export:workflow --all --output=/tmp/wf-export.json >/dev/null 2>&1 && cat /tmp/wf-export.json"
+        },
+        "id": "a1000000-0000-0000-0000-000000000002",
+        "name": "Export all workflows",
+        "type": "n8n-nodes-base.executeCommand",
+        "typeVersion": 1,
+        "position": [
+          220,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Build a mermaid graph of every workflow on this instance and how they\n// link: trigger entry points (schedule/form/webhook), Execute Workflow\n// references, plus best-effort webhook/form-call edges (an HTTP Request\n// whose URL contains another workflow's webhook or form path).\n// Writes /po11y-status/map.json for site/map.html.\nconst fs = require('fs');\nconst wfs = JSON.parse($json.stdout).filter((w) => !w.isArchived);\nconst esc = (s) => String(s || '').replace(/[\"`]/g, \"'\");\nconst nid = (id) => 'wf_' + String(id).replace(/[^A-Za-z0-9]/g, '_');\nconst lines = ['graph TD'];\nconst edges = new Set();\n// hook paths per workflow: webhook + formTrigger nodes\nconst hooks = [];\nfor (const wf of wfs) {\n  for (const n of wf.nodes || []) {\n    const p = (n.parameters || {}).path;\n    if (!p) continue;\n    if (n.type === 'n8n-nodes-base.webhook') hooks.push({ path: `/webhook/${p}`, wf: wf.id });\n    if (n.type === 'n8n-nodes-base.formTrigger') hooks.push({ path: `/form/${p}`, wf: wf.id });\n  }\n}\nlet t = 0;\nfor (const wf of wfs) {\n  const label = esc(wf.name) + (wf.active ? '' : ' (inactive)');\n  lines.push(`  ${nid(wf.id)}[\"${label}\"]`);\n  if (wf.active) lines.push(`  class ${nid(wf.id)} active`);\n  for (const n of wf.nodes || []) {\n    const prm = n.parameters || {};\n    // trigger entry points as small round nodes\n    let trig = '';\n    if (n.type === 'n8n-nodes-base.scheduleTrigger') {\n      const iv = ((prm.rule || {}).interval || [])[0] || {};\n      const num = iv.minutesInterval || iv.hoursInterval || iv.secondsInterval || iv.daysInterval;\n      const unit = { minutes: 'min', hours: 'h', seconds: 's', days: 'd' }[iv.field] || iv.field || '';\n      trig = num ? `every ${num} ${unit}` : 'schedule';\n    } else if (n.type === 'n8n-nodes-base.formTrigger') {\n      trig = `form /${prm.path || '?'}`;\n    } else if (n.type === 'n8n-nodes-base.webhook') {\n      trig = `webhook /${prm.path || '?'}`;\n    }\n    if (trig) {\n      const tid = `t${t++}`;\n      lines.push(`  ${tid}((\"${esc(trig)}\"))`);\n      lines.push(`  class ${tid} trigger`);\n      edges.add(`  ${tid} --> ${nid(wf.id)}`);\n    }\n    // Execute Workflow: workflowId is a string (old) or {value} (resource locator)\n    if (n.type === 'n8n-nodes-base.executeWorkflow') {\n      const ref = typeof prm.workflowId === 'object' ? (prm.workflowId || {}).value : prm.workflowId;\n      if (ref) edges.add(`  ${nid(wf.id)} -->|sub-workflow| ${nid(ref)}`);\n    }\n    // HTTP Request calling another workflow's webhook/form\n    if (n.type === 'n8n-nodes-base.httpRequest' && typeof prm.url === 'string') {\n      for (const h of hooks) {\n        if (h.wf !== wf.id && prm.url.includes(h.path)) edges.add(`  ${nid(wf.id)} -.->|http| ${nid(h.wf)}`);\n      }\n    }\n  }\n}\nlines.push(...edges);\nlines.push('  classDef active stroke-width:3px');\nlines.push('  classDef trigger stroke-dasharray:3 3,font-size:11px');\nconst out = { generated_at: new Date().toISOString(), mermaid: lines.join('\\n'), workflows: wfs.length };\nfs.writeFileSync('/po11y-status/map.json.tmp', JSON.stringify(out));\nfs.renameSync('/po11y-status/map.json.tmp', '/po11y-status/map.json');\nreturn [{ json: { published: true, workflows: wfs.length, edges: edges.size } }];"
+        },
+        "id": "a1000000-0000-0000-0000-000000000003",
+        "name": "Build + publish map.json",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          440,
+          -160
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Publish the live form-trigger inventory for the dashboard's Actions\n// group: every active workflow's formTrigger nodes as { name, sub, path }.\n// The dashboard (app.js) merges /forms.json into its Actions cards, so a\n// new form trigger becomes a button without touching config.json.\nconst fs = require('fs');\nconst wfs = JSON.parse($json.stdout).filter((w) => !w.isArchived);\nconst forms = [];\nfor (const wf of wfs) {\n  if (!wf.active) continue;\n  for (const n of wf.nodes || []) {\n    if (n.type !== 'n8n-nodes-base.formTrigger') continue;\n    const p = n.parameters || {};\n    const path = p.path || n.webhookId;\n    if (!path) continue;\n    forms.push({ name: p.formTitle || n.name, sub: p.formDescription || wf.name, path, fields: ((p.formFields || {}).values || []).length });\n  }\n}\nconst out = { generated_at: new Date().toISOString(), forms };\nfs.writeFileSync('/po11y-status/forms.json.tmp', JSON.stringify(out));\nfs.renameSync('/po11y-status/forms.json.tmp', '/po11y-status/forms.json');\nreturn [{ json: { published: forms.length } }];"
+        },
+        "id": "a1000000-0000-0000-0000-000000000006",
+        "name": "Publish forms.json",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          440,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Deterministic architecture map. Structure (columns, nodes, edges) is\n// computed from the live export — the same references the mermaid map uses —\n// so the layout is identical run-to-run. An optional LLM (AI_MAP_*) only\n// writes prose: per-node one-liners, the lede, insight cards. Without a key\n// the map publishes with heuristic text (ai-map-cli.sh can annotate via a\n// local CLI instead). Annotation is differential: per-node content\n// signatures (sigs) let unchanged nodes keep their previous prose, so the\n// LLM only ever sees the workflows that actually changed.\nconst fs = require('fs');\nconst wfs = JSON.parse($json.stdout).filter((w) => !w.isArchived);\nconst cut = (s, n) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + '…' : s);\n\n// ---- skeleton ----------------------------------------------------------------\nconst TRIG = {\n  'n8n-nodes-base.scheduleTrigger': 'schedule',\n  'n8n-nodes-base.formTrigger': 'form',\n  'n8n-nodes-base.webhook': 'webhook',\n};\nconst wfCol = new Map(); // 1 = entry workflow, 2 = called sub-workflow\nfor (const wf of wfs) {\n  const hasOwnTrigger = (wf.nodes || []).some((n) => TRIG[n.type]);\n  const isCalled = (wf.nodes || []).some((n) => n.type === 'n8n-nodes-base.executeWorkflowTrigger');\n  wfCol.set(wf.id, !hasOwnTrigger && isCalled ? 2 : 1);\n}\nconst nodes = [], edgeSet = new Set(), files = new Set(), externals = new Set();\nconst edge = (a, b, k) => edgeSet.add(JSON.stringify([a, b, k]));\nconst firstComment = (wf) => {\n  for (const n of wf.nodes || []) {\n    const c = String((n.parameters || {}).jsCode || '').split('\\n').find((l) => l.startsWith('//'));\n    if (c) return cut(c.replace(/^\\/\\/\\s*/, ''), 90);\n  }\n  return `${(wf.nodes || []).length} nodes`;\n};\nfor (const wf of wfs) {\n  const col = wfCol.get(wf.id);\n  nodes.push({ id: 'wf:' + wf.id, col, kind: col === 2 ? 'worker' : 'entry',\n    tag: col === 2 ? 'sub-workflow' : 'workflow', name: wf.name, sub: firstComment(wf) });\n  for (const n of wf.nodes || []) {\n    const p = n.parameters || {};\n    const kind = TRIG[n.type];\n    if (kind) {\n      let tag;\n      if (kind === 'schedule') {\n        const iv = ((p.rule || {}).interval || [])[0] || {};\n        const num = iv.minutesInterval || iv.hoursInterval || iv.secondsInterval || iv.daysInterval;\n        const unit = { minutes: 'min', hours: 'h', seconds: 's', days: 'd' }[iv.field] || '';\n        tag = num ? `every ${num} ${unit}` : 'schedule';\n      } else tag = `/${kind}/${p.path || n.webhookId || '?'}`;\n      const id = `t:${wf.id}:${n.name}`;\n      nodes.push({ id, col: 0, kind, tag, name: n.name, sub: `starts ${wf.name}` });\n      edge(id, 'wf:' + wf.id, kind);\n    }\n    if (n.type === 'n8n-nodes-base.executeWorkflow') {\n      const ref = typeof p.workflowId === 'object' ? (p.workflowId || {}).value : p.workflowId;\n      if (ref && wfCol.has(ref)) edge('wf:' + wf.id, 'wf:' + ref, 'worker');\n    }\n    const code = String(p.jsCode || '');\n    for (const m of code.matchAll(/\\/po11y-status\\/([A-Za-z0-9_-]+\\.json)/g)) {\n      files.add(m[1]);\n      edge('wf:' + wf.id, 'f:' + m[1], 'file');\n    }\n    // regex host extraction — URL/globals can be absent in the Code sandbox\n    const hay = code + ' ' + (typeof p.url === 'string' ? p.url : '');\n    for (const m of hay.matchAll(/https?:\\/\\/([A-Za-z0-9.-]+\\.[A-Za-z]{2,})/g)) {\n      const host = m[1];\n      if (/localhost|127\\.0\\.0\\.1/.test(host)) continue;\n      externals.add(host);\n      edge('wf:' + wf.id, 'x:' + host, 'external');\n    }\n  }\n}\nfor (const f of files) nodes.push({ id: 'f:' + f, col: 3, kind: 'file', tag: 'feed', name: '/' + f, sub: 'dashboard feed' });\nfor (const h of externals) nodes.push({ id: 'x:' + h, col: 3, kind: 'external', tag: 'external', name: h, sub: 'external service' });\nnodes.sort((a, b) => a.col - b.col || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));\nconst edges = [...edgeSet].sort().map((e) => JSON.parse(e));\n\nconst KIND_LABEL = { schedule: 'Schedule trigger', form: 'Form trigger', webhook: 'Webhook trigger',\n  entry: 'Workflow', worker: 'Sub-workflow', file: 'Published feed', external: 'External service' };\nconst map = {\n  eyebrow: 'po11y · architecture',\n  title: 'How the workflows link',\n  lede: 'Triggers on the left start the workflows; edges follow real references (sub-workflow calls, published feeds, external services).',\n  columns: ['Triggers', 'Workflows', 'Sub-workflows', 'Outputs'],\n  kinds: { schedule: 'sky', form: 'amber', webhook: 'violet', entry: 'cyan', worker: 'emerald', file: 'sink', external: 'neutral' },\n  nodes, edges,\n  legend: Object.keys(KIND_LABEL).filter((k) => nodes.some((n) => n.kind === k)).map((k) => [KIND_LABEL[k], k]),\n  notes: [],\n};\n\n// ---- change detection ----------------------------------------------------------\n// One digest entry per workflow (also the LLM's context). A node's signature\n// hashes the digest of the workflow it belongs to, so prose is re-generated\n// for exactly the nodes whose underlying workflow changed.\nconst digestOf = (wf) => ({\n  id: wf.id, name: wf.name, active: !!wf.active,\n  nodes: (wf.nodes || []).map((nd) => {\n    const p = nd.parameters || {};\n    const o = { name: nd.name, type: nd.type.replace('n8n-nodes-base.', '') };\n    if (p.rule) o.rule = p.rule;\n    if (p.path) o.path = p.path;\n    if (p.url) o.url = cut(p.url, 120);\n    if (p.command) o.command = cut(p.command, 160);\n    if (p.workflowId) o.calls = typeof p.workflowId === 'object' ? p.workflowId.value : p.workflowId;\n    if (p.jsCode) o.code_comment = cut(String(p.jsCode).split('\\n').filter((l) => l.startsWith('//')).join(' '), 300);\n    return o;\n  }),\n});\nconst digest = wfs.map(digestOf);\nconst digestJson = new Map(digest.map((d) => [d.id, JSON.stringify(d)]));\nconst hash = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return h.toString(36); };\nconst wfIdOf = (id) => id.startsWith('wf:') ? id.slice(3) : id.startsWith('t:') ? id.split(':')[1] : null;\nconst sigs = {};\nfor (const n of nodes) {\n  const w = wfIdOf(n.id);\n  sigs[n.id] = hash((w ? digestJson.get(w) || '' : '') + '|' + n.tag + '|' + n.name);\n}\nmap.sigs = sigs;\n\n// ---- publish policy ------------------------------------------------------------\nlet prev = null;\ntry { prev = JSON.parse(fs.readFileSync('/po11y-status/ai-map.json', 'utf8')); } catch {}\nconst sameStructure = !!prev && Array.isArray(prev.nodes) && prev.nodes.length === nodes.length\n  && nodes.every((n) => prev.nodes.some((o) => o.id === n.id));\nconst sameContent = sameStructure && !!prev.sigs && nodes.every((n) => prev.sigs[n.id] === sigs[n.id]);\nconst prevAnnotated = !!prev && !!prev.model && prev.model !== 'heuristic';\nlet forced = false;\ntry { forced = $('Build now (form)').all().length > 0; } catch {}\nconst prevAge = prev ? Date.now() - new Date(prev.generated_at).getTime() : Infinity;\nconst fresh = prevAge < 20 * 3600 * 1000;\n// AI config from a non-served file (bootstrap renders it from .env).\n// Environment access is blocked in Code nodes, so workflows cannot\n// read the DB / Grafana passwords out of the process environment.\nlet AICFG = {};\ntry { AICFG = JSON.parse(fs.readFileSync('/run/po11y/ai-map.json', 'utf8')); } catch {}\nconst KEY = AICFG.api_key || '';\nconst MODEL = AICFG.model || '';\nconst BASE = (AICFG.base_url || '').replace(/\\/$/, '');\nconst aiConfigured = KEY && MODEL && BASE;\nif (sameStructure && fresh && !forced) return [{ json: { skipped: 'fresh' } }];\nif (!aiConfigured && sameStructure && prevAnnotated && !forced) {\n  return [{ json: { skipped: 'structure unchanged; keeping annotated map' } }];\n}\nif (sameContent && !forced && (prevAnnotated || !aiConfigured)) {\n  // Content-identical map — refresh the timestamp, spend no LLM tokens.\n  prev.generated_at = new Date().toISOString();\n  fs.writeFileSync('/po11y-status/ai-map.json.tmp', JSON.stringify(prev));\n  fs.renameSync('/po11y-status/ai-map.json.tmp', '/po11y-status/ai-map.json');\n  return [{ json: { republished: 'content unchanged — no LLM call' } }];\n}\n\n// ---- optional LLM annotation (prose only; structure stays fixed) ----------------\nif (aiConfigured) {\n  // Differential: nodes whose signature is unchanged keep their previous\n  // prose; only changed/new nodes (and their workflows' digest) go to the\n  // LLM. A forced rebuild (the form) re-annotates everything.\n  const prevSubs = new Map(((prev || {}).nodes || []).map((o) => [o.id, o.sub]));\n  let target = nodes;\n  if (!forced && prevAnnotated && prev.sigs) {\n    target = nodes.filter((n) => prev.sigs[n.id] !== sigs[n.id] || !prevSubs.get(n.id));\n    for (const n of nodes) if (!target.includes(n) && prevSubs.get(n.id)) n.sub = prevSubs.get(n.id);\n  }\n  const partial = target.length < nodes.length;\n  if (partial) {\n    // Mostly the same stack — the previous lede/notes still describe it.\n    if (typeof prev.lede === 'string' && prev.lede) map.lede = prev.lede;\n    if (Array.isArray(prev.notes)) map.notes = prev.notes;\n  }\n  if (partial && !target.length) {\n    // Node set shrank but every remaining node is unchanged — nothing to ask.\n    map.model = prev.model;\n  } else {\n    const targetWfIds = new Set(target.map((n) => wfIdOf(n.id)).filter(Boolean));\n    const sendDigest = partial ? digest.filter((d) => targetWfIds.has(d.id)) : digest;\n    const skeleton = JSON.stringify(nodes.map(({ id, kind, tag, name }) => ({ id, kind, tag, name })));\n    const prompt = partial\n      ? `You annotate a fixed architecture map of an n8n automation stack. Only the listed node ids changed — you ONLY write text for those.\\n\\nReturn STRICT JSON (no markdown): {\"subs\": {\"<node id>\": \"concrete one-line description, max 90 chars\"}}\\n\\nRules: cover exactly these node ids: ${JSON.stringify(target.map((n) => n.id))}; 'subs' must say what the thing concretely does (use the digest's code comments).\\n\\nAll map nodes (context):\\n${skeleton}\\n\\nDigest of the changed workflows:\\n${JSON.stringify(sendDigest)}`\n      : `You annotate a fixed architecture map of an n8n automation stack. The structure is already decided — you ONLY write text.\\n\\nReturn STRICT JSON (no markdown): {\"lede\": \"1-2 sentences describing the left-to-right flow\", \"subs\": {\"<node id>\": \"concrete one-line description, max 90 chars\"}, \"notes\": [{\"title\": \"short\", \"text\": \"2-3 sentences of real operational insight\"}]}\\n\\nRules: cover every node id; 'subs' must say what the thing concretely does (use the digest's code comments); notes max 3, skip generic filler.\\n\\nMap nodes:\\n${skeleton}\\n\\nWorkflow digest:\\n${JSON.stringify(sendDigest)}`;\n    const res = await this.helpers.httpRequest({\n      method: 'POST',\n      url: `${BASE}/chat/completions`,\n      headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },\n      body: { model: MODEL, messages: [{ role: 'user', content: prompt }], response_format: { type: 'json_object' }, max_tokens: 3000 },\n      json: true,\n    });\n    let text = ((res.choices || [])[0] || {}).message?.content || '';\n    text = text.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/, '');\n    try {\n      const ann = JSON.parse(text);\n      for (const n of target) {\n        const s = (ann.subs || {})[n.id];\n        if (typeof s === 'string' && s.trim()) n.sub = cut(s.trim(), 120);\n      }\n      if (!partial) {\n        if (typeof ann.lede === 'string' && ann.lede.trim()) map.lede = cut(ann.lede.trim(), 240);\n        map.notes = (Array.isArray(ann.notes) ? ann.notes : []).slice(0, 3)\n          .filter((x) => x && x.title && x.text)\n          .map((x) => ({ title: cut(String(x.title), 60), text: cut(String(x.text), 400) }));\n      }\n      map.model = MODEL;\n    } catch (e) {\n      console.log('ai-map: annotation unusable, keeping previous/heuristic text — ' + e.message);\n      map.model = partial ? (prev.model || 'heuristic') : 'heuristic';\n    }\n  }\n} else {\n  map.model = 'heuristic';\n}\nmap.generated_at = new Date().toISOString();\nfs.writeFileSync('/po11y-status/ai-map.json.tmp', JSON.stringify(map));\nfs.renameSync('/po11y-status/ai-map.json.tmp', '/po11y-status/ai-map.json');\nreturn [{ json: { published: true, model: map.model, nodes: nodes.length, edges: edges.length } }];"
+        },
+        "id": "a1000000-0000-0000-0000-000000000007",
+        "name": "Build + publish ai-map.json",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          440,
+          160
+        ]
+      }
+    ],
+    "connections": {
+      "Every 10 min": {
+        "main": [
+          [
+            {
+              "node": "Export all workflows",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build now (form)": {
+        "main": [
+          [
+            {
+              "node": "Export all workflows",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Export all workflows": {
+        "main": [
+          [
+            {
+              "node": "Build + publish map.json",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Publish forms.json",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Build + publish ai-map.json",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "active": true,
+    "isArchived": false
+  }
+]

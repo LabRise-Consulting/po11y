@@ -1,0 +1,17 @@
+# Mode B prometheus config (docker-compose.readonly.yml). Scrapes the REMOTE
+# n8n's /metrics instead of the compose-local `n8n:5678`. The target is a
+# placeholder the prometheus entrypoint renders from N8N_METRICS_TARGET
+# (host:port) at container start via sed — compose cannot parse a URL into a
+# host:port, and the prometheus (busybox) image has no envsubst.
+#
+# The remote n8n must run with N8N_METRICS=true (plus the *_INCLUDE_* flags Mode
+# A sets) for these scrapes to return data; without it the Grafana tab is simply
+# empty — the same graceful degradation as a missing AI-map key.
+global:
+  scrape_interval: 30s
+
+scrape_configs:
+  - job_name: n8n
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["__N8N_METRICS_TARGET__"]
