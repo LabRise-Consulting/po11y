@@ -35,7 +35,7 @@
     },
     "promBase": "/prom",
     "stats": [
-      { "label": "n8n", "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}" }
+      { "label": "n8n", "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}", "href": "http://{host}:5678/" }
     ]
   },
   "refreshSec": 30,

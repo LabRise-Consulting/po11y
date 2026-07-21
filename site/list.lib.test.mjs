@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeRows, sortItems, groupByDay } from './list.lib.js';
+import { normalizeRows, sortItems, groupByDay, parseDetail } from './list.lib.js';
 
 const mapping = {
   title: 'title', url: 'url', score: 'score', day: 'firstSeen',
@@ -56,4 +56,30 @@ test('groupByDay labels Today/Yesterday and orders newest first', () => {
   const groups = groupByDay(items, today);
   assert.deepEqual(groups.map((g) => g.label), ['Today', 'Yesterday', '2026-07-10']);
   assert.equal(groups[0].items.length, 1);
+});
+
+test('parseDetail: JSON string, array, and junk', () => {
+  const json = '[{"aspect":"Python","kind":"fit","assessment":"core"},{"aspect":"on-call","kind":"gap","assessment":"real — disliked"}]';
+  const out = parseDetail(json);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].kind, 'fit');
+  assert.equal(out[1].kind, 'gap');
+  assert.equal(out[1].assessment, 'real — disliked');
+  // already-parsed array passes through; unknown kind defaults to fit
+  assert.equal(parseDetail([{ aspect: 'x', kind: 'weird', assessment: 'y' }])[0].kind, 'fit');
+  // junk / empty ⇒ null so the card stays non-expandable
+  assert.equal(parseDetail('not json'), null);
+  assert.equal(parseDetail(''), null);
+  assert.equal(parseDetail(null), null);
+  assert.equal(parseDetail('[]'), null);
+});
+
+test('normalizeRows: detail column parsed when mapped', () => {
+  const m = { title: 'title', detail: 'detail' };
+  const rows = { data: [{ title: 'Job', detail: '[{"aspect":"a","kind":"gap","assessment":"debatable"}]' }] };
+  const items = normalizeRows(rows, m);
+  assert.equal(items[0].detail.length, 1);
+  assert.equal(items[0].detail[0].kind, 'gap');
+  // no detail mapping ⇒ null
+  assert.equal(normalizeRows(rows, { title: 'title' })[0].detail, null);
 });

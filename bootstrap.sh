@@ -45,6 +45,9 @@ set_env() { # set_env KEY VALUE
   if grep -q "^$1=" "$ENV_FILE"; then
     sed -i.bak "s|^$1=.*|$1=$2|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
   else
+    # A hand-edited .env may lack a trailing newline; appending onto that
+    # last line would silently corrupt both variables.
+    [ ! -s "$ENV_FILE" ] || [ -z "$(tail -c1 "$ENV_FILE")" ] || echo >> "$ENV_FILE"
     printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"
   fi
 }
@@ -55,6 +58,21 @@ get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/[[:space:]
 [ -n "$(get_env DB_POSTGRESDB_PASSWORD)" ] || set_env DB_POSTGRESDB_PASSWORD "$(openssl rand -hex 24)"
 [ -n "$(get_env GRAFANA_ADMIN_PASSWORD)" ] || set_env GRAFANA_ADMIN_PASSWORD "$(openssl rand -hex 16)"
 [ -n "$(get_env N8N_OWNER_PASSWORD)" ]     || set_env N8N_OWNER_PASSWORD "A1$(openssl rand -hex 16)"
+
+# Bundled OmniRoute gateway overlay — included unless OMNIROUTE_ENABLED=false.
+# Its secrets (session signing, at-rest key encryption, first-boot dashboard
+# password) are generated like the ones above.
+OMNIROUTE="$(get_env OMNIROUTE_ENABLED)"; OMNIROUTE="${OMNIROUTE:-true}"
+COMPOSE_FILES="-f docker-compose.yml"
+if [ "$OMNIROUTE" != "false" ]; then
+  COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.omniroute.yml"
+  [ -n "$(get_env OMNIROUTE_JWT_SECRET)" ]     || set_env OMNIROUTE_JWT_SECRET "$(openssl rand -hex 32)"
+  [ -n "$(get_env OMNIROUTE_API_KEY_SECRET)" ] || set_env OMNIROUTE_API_KEY_SECRET "$(openssl rand -hex 32)"
+  [ -n "$(get_env OMNIROUTE_ADMIN_PASSWORD)" ] || set_env OMNIROUTE_ADMIN_PASSWORD "$(openssl rand -hex 16)"
+fi
+# Every compose call goes through this so the overlay list stays consistent.
+# shellcheck disable=SC2086  # COMPOSE_FILES word-splits into -f arguments
+compose() { docker compose --env-file "$ENV_FILE" $COMPOSE_FILES "$@"; }
 
 # The read-only docker-socket-proxy (not n8n) mounts the host socket; without
 # it the dashboard's containers section is simply empty.
@@ -68,8 +86,21 @@ mkdir -p packs site secrets
 # access is blocked inside n8n Code nodes, so config cannot come from the
 # container environment). Empty values just mean the heuristic (no-LLM) map.
 # Rendered before 'compose up' so the bind mount is a file, not a directory.
+AI_BASE="$(get_env AI_MAP_BASE_URL)"; AI_KEY="$(get_env AI_MAP_API_KEY)"
+AI_MODEL="$(get_env AI_MAP_MODEL)"
+if [ "$OMNIROUTE" != "false" ] && [ -z "$AI_BASE" ]; then
+  # Auto-wire to the bundled gateway. The key is a placeholder: OmniRoute's
+  # /v1 needs none by default (REQUIRE_API_KEY=false), but the ai-map
+  # workflow reads an empty key as "LLM off". The default model is
+  # OmniRoute's free-tier auto-route, so a clean bootstrap gets LLM prose
+  # with zero provider keys. Explicit AI_MAP_* always wins; set
+  # OMNIROUTE_ENABLED=false (or any AI_MAP_BASE_URL) to opt out entirely.
+  AI_BASE="http://omniroute:20128/v1"
+  [ -n "$AI_KEY" ]   || AI_KEY="omniroute-local"
+  [ -n "$AI_MODEL" ] || AI_MODEL="auto/best-free"
+fi
 python3 -c 'import json,sys; json.dump({"base_url":sys.argv[1],"api_key":sys.argv[2],"model":sys.argv[3]}, open("secrets/ai-map.json","w"))' \
-  "$(get_env AI_MAP_BASE_URL)" "$(get_env AI_MAP_API_KEY)" "$(get_env AI_MAP_MODEL)"
+  "$AI_BASE" "$AI_KEY" "$AI_MODEL"
 
 BIND="$(get_env BIND_ADDR)"; BIND="${BIND:-127.0.0.1}"
 # Exposure interlock: a non-loopback bind with no auth gate means the anonymous
@@ -85,7 +116,7 @@ if [ "$BIND" != "127.0.0.1" ] && [ "$BIND" != "localhost" ] \
 fi
 
 # ---- 2. stack up ----------------------------------------------------------------
-docker compose --env-file "$ENV_FILE" up -d --build
+compose up -d --build
 
 # Host this script uses to reach n8n (readiness polls + /rest/ owner setup).
 # Defaults to $BIND, but 0.0.0.0 is a bind address, not a connectable one, so
@@ -135,7 +166,7 @@ done
 
 IDS=""
 for d in $IMPORT_DIRS; do
-  docker compose --env-file "$ENV_FILE" exec -T n8n n8n import:workflow --separate --input="$d"
+  compose exec -T n8n n8n import:workflow --separate --input="$d"
   # host path of the container dir (both live in this repo checkout)
   hostdir=".$d"
   IDS="$IDS $(python3 -c '
@@ -146,7 +177,7 @@ done
 n=0
 for id in $IDS; do
   [ -n "$id" ] || continue
-  docker compose --env-file "$ENV_FILE" exec -T n8n n8n publish:workflow --id="$id" >/dev/null
+  compose exec -T n8n n8n publish:workflow --id="$id" >/dev/null
   n=$((n+1))
 done
 echo "bootstrap: imported + published $n workflows"
@@ -154,14 +185,14 @@ echo "bootstrap: imported + published $n workflows"
 # Retired core workflows (merged into others) — drop leftovers from earlier
 # installs. See RETIRED_IDS at the top for the dated inventory.
 for rid in $RETIRED_IDS; do
-  docker compose --env-file "$ENV_FILE" exec -T postgres psql -U "${DB_POSTGRESDB_USER:-n8n}" \
+  compose exec -T postgres psql -U "${DB_POSTGRESDB_USER:-n8n}" \
     -d "${DB_POSTGRESDB_DATABASE:-n8n}" \
     -c "delete from workflow_entity where id='$rid';" >/dev/null 2>&1 || true
 done
 
 # Unconditional: a running instance is not guaranteed to pick up CLI-imported
 # active workflows; the restart is cheap.
-docker compose --env-file "$ENV_FILE" restart n8n >/dev/null
+compose restart n8n >/dev/null
 printf 'bootstrap: waiting for n8n restart '
 i=0
 while [ $i -lt 60 ]; do

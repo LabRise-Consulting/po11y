@@ -16,6 +16,26 @@ const dayOf = (v) => {
   return m ? m[1] : 'unknown';
 };
 
+// An optional expandable detail: a row's `detail` column may hold an array (or
+// a JSON string of one) of { aspect, kind: 'fit'|'gap', assessment } objects.
+// Anything unparseable or non-array yields null (card stays non-expandable).
+export function parseDetail(v) {
+  if (v == null || v === '') return null;
+  let arr = v;
+  if (typeof v === 'string') {
+    try { arr = JSON.parse(v); } catch { return null; }
+  }
+  if (!Array.isArray(arr) || !arr.length) return null;
+  return arr
+    .filter((r) => r && typeof r === 'object')
+    .map((r) => ({
+      aspect: String(r.aspect ?? ''),
+      kind: r.kind === 'gap' ? 'gap' : 'fit',
+      assessment: String(r.assessment ?? ''),
+    }))
+    .filter((r) => r.aspect || r.assessment);
+}
+
 export function normalizeRows(payload, mapping) {
   const m = mapping || {};
   return rowsOf(payload).map((r) => {
@@ -28,6 +48,7 @@ export function normalizeRows(payload, mapping) {
       url: (m.url ? r[m.url] : null) ?? null,
       score: scoreRaw === undefined || scoreRaw === null || scoreRaw === '' ? null : Number(scoreRaw),
       meta,
+      detail: m.detail ? parseDetail(r[m.detail]) : null,
       day: dayOf(m.day ? r[m.day] : null),
       raw: r,
     };

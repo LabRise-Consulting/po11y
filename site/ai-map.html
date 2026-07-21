@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Architecture map</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
   :root{
     --bg:#f4f6f9; --panel:#ffffff; --ink:#141a22; --muted:#5b6774;
@@ -64,6 +67,18 @@
     transition:opacity .12s ease,stroke-width .12s ease}
   .stage.dim path.edge{opacity:.12}
   .stage.dim path.edge.hot{opacity:1;stroke-width:2.4}
+  .node.clickable{cursor:pointer}
+  .overlay{position:fixed;inset:0;background:rgba(10,15,22,.55);display:flex;
+    align-items:center;justify-content:center;padding:20px;z-index:20}
+  .overlay[hidden]{display:none}
+  .dialog{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    box-shadow:var(--shadow);max-width:520px;width:100%;padding:18px 22px;position:relative}
+  .dialog h2{margin:0 0 8px;font-size:17px;letter-spacing:-.01em;padding-right:28px}
+  .dialog p{margin:0 0 14px;font-size:13.5px;color:var(--muted);white-space:pre-line}
+  .dialog a{color:var(--cyan);font-size:13px;text-decoration:none}
+  .dialog a:hover{text-decoration:underline}
+  .dialog .close{position:absolute;top:8px;right:10px;border:0;background:none;
+    color:var(--muted);font:inherit;font-size:15px;cursor:pointer;padding:4px 6px}
 
   .notes{margin-top:26px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
@@ -117,6 +132,14 @@
   <div class="board" hidden><div class="stage" id="stage"></div></div>
   <div class="notes" id="notes" hidden></div>
   <footer id="footer" hidden></footer>
+  <div class="overlay" id="overlay" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+      <button class="close" id="dlg-close" aria-label="close">✕</button>
+      <h2 id="dlg-title"></h2>
+      <p id="dlg-body"></p>
+      <a id="dlg-link" target="_blank" rel="noopener" hidden>Open in n8n ↗</a>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -125,13 +148,51 @@
 //   { generated_at, model, eyebrow, title, lede,
 //     columns: ["Triggers", ...],                     // 2-6 ordered column titles
 //     kinds: { "<kind>": "cyan|amber|emerald|sky|violet|neutral|sink" },
-//     nodes: [{ id, col, kind, tag, name, sub }],     // col indexes columns
+//     nodes: [{ id, col, kind, tag, name, sub, summary? }], // col indexes columns;
+//                                  // summary: optional 2-3 sentence AI text on wf: nodes
 //     edges: [[fromId, toId, kind?]],
 //     legend: [[label, kind]], notes: [{ title, text }] }
 // All strings are model-generated — everything goes through esc().
 const PALETTE = ["neutral","cyan","amber","emerald","sky","violet","sink"];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+// Dialog: title/body set via textContent (inert, line breaks preserved by
+// white-space:pre-line); the n8n link is built from the validated base + an
+// encodeURIComponent'd workflow id — no model text ever lands in a URL.
+const overlay = document.getElementById("overlay");
+let lastFocus = null;
+function openDialog(title, body, href) {
+  document.getElementById("dlg-title").textContent = title;
+  document.getElementById("dlg-body").textContent = body;
+  const a = document.getElementById("dlg-link");
+  if (href) { a.href = href; a.hidden = false; } else { a.hidden = true; }
+  lastFocus = document.activeElement;
+  overlay.hidden = false;
+  document.getElementById("dlg-close").focus();
+}
+function closeDialog() {
+  overlay.hidden = true;
+  if (lastFocus && lastFocus.focus) lastFocus.focus();
+  lastFocus = null;
+}
+overlay.addEventListener("click", (e) => {
+  if (e.target === overlay || e.target.id === "dlg-close") closeDialog();
+});
+addEventListener("keydown", (e) => { if (e.key === "Escape" && !overlay.hidden) closeDialog(); });
+
+// n8n deep-link base — same resolution rule as app.js: cfg.n8nUrl (default
+// http://{host}:5678), "{host}" → cfg.baseUrl || this page's hostname, no
+// trailing slash. Config unreachable → plain default; non-http(s) → no link.
+async function resolveN8nBase() {
+  try {
+    const c = await (await fetch("/config.json", { cache: "no-store" })).json();
+    const raw = (typeof c.n8nUrl === "string" && c.n8nUrl) ? c.n8nUrl : "http://{host}:5678";
+    const host = (typeof c.baseUrl === "string" && c.baseUrl) ? c.baseUrl : location.hostname;
+    const u = raw.replaceAll("{host}", host).replace(/\/$/, "");
+    return /^https?:\/\//i.test(u) ? u : null;
+  } catch { return "http://" + location.hostname + ":5678"; }
+}
 
 (async () => {
   const meta = document.getElementById("meta");
@@ -154,6 +215,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   } catch (e) { meta.textContent = e.message; return; }
   meta.hidden = true;
   document.getElementById("setup").remove();
+  const n8nBase = await resolveN8nBase();
   for (const el of document.querySelectorAll("header[hidden],.board[hidden],.notes[hidden],footer[hidden]")) el.hidden = false;
 
   const cs = getComputedStyle(document.documentElement);
@@ -236,6 +298,17 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
     el.addEventListener("mouseenter", focus);
     el.addEventListener("mouseleave", blur);
     el.tabIndex = 0; el.addEventListener("focus", focus); el.addEventListener("blur", blur);
+    // Workflows/sub-workflows open a detail dialog; trigger/file/external
+    // nodes stay inert.
+    if (String(n.id).startsWith("wf:")) {
+      el.classList.add("clickable");
+      const open = () => openDialog(n.name, n.summary || n.sub || "",
+        n8nBase ? `${n8nBase}/workflow/${encodeURIComponent(String(n.id).slice(3))}` : null);
+      el.addEventListener("click", open);
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+      });
+    }
   });
 
   document.getElementById("legend").innerHTML = (d.legend || []).slice(0, 8).map(([t, k]) =>

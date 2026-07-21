@@ -77,6 +77,9 @@ let cfg = {
     // "executions": "Workflow executions" to config.json sections to enable it.
   },
   metrics: null,
+  // Base URL for n8n workflow deep links; consumed by the site pages
+  // (map.html / ai-map.html), which fetch /config.json themselves.
+  n8nUrl: 'http://{host}:5678',
   refreshSec: 30,
   staleAfterMin: 5,
   statusHint: 'status.json missing — is the publisher running?',
@@ -266,8 +269,9 @@ function renderMetrics() {
     html += `<a class="card" href="${safeUrl(`${base}/d/${g.dashboard}`)}"><h3>Grafana</h3>
       <p>${g.embed ? 'Open the full dashboard' : 'Embeds are off. Open dashboard'}</p></a>`;
   }
-  html += (m.stats || []).map((_, i) =>
-    `<div class="card" id="stat-${i}"><h3></h3><p>checking…</p></div>`).join('');
+  html += (m.stats || []).map((s, i) => s.href
+    ? `<a class="card" id="stat-${i}" href="${safeUrl(withHost(s.href))}"><h3></h3><p>checking…</p></a>`
+    : `<div class="card" id="stat-${i}"><h3></h3><p>checking…</p></div>`).join('');
   $('metrics').innerHTML = html;
   (m.stats || []).forEach(renderStat);
 }

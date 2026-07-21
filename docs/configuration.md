@@ -153,7 +153,8 @@ Data Table's URL in the n8n UI):
       "url": "url",
       "score": "score",
       "day": "firstSeen",
-      "meta": ["customer", "region", "units", "status", "note"]
+      "meta": ["customer", "region", "units", "status", "note"],
+      "detail": "detail"
     }
   }
 }
@@ -176,4 +177,10 @@ sortable cards. Add a `tabs[]` entry with a `list` block:
 - `mapping` — source-column → card-field map: `title`, `url`, `score`, `day`
   (ISO string, bucketed by date), and `meta` (list of extra columns shown as a
   detail line).
+- `detail` (optional) — a source column holding a JSON array (or already-parsed
+  array) of `{ aspect, kind: "fit"|"gap", assessment }` rows. When present and
+  non-empty the card becomes expandable: the title still links out, and a
+  `▸ fit / gap analysis` toggle reveals the rows as a table. A gap whose
+  `assessment` begins with `real` / `debatable` is styled accordingly. Omit it
+  (or leave the column empty per row) and the card behaves exactly as before.
 - `defaultSort` — `"day"` (newest, grouped) or `"score"` (best-fit first).

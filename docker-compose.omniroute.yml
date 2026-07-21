@@ -1,0 +1,34 @@
+# Bundled OmniRoute LLM gateway (https://github.com/diegosouzapw/OmniRoute):
+# one OpenAI-compatible endpoint with provider routing/fallback, so the AI map
+# prose works without a per-provider key in po11y. Overlay — bootstrap includes
+# it unless OMNIROUTE_ENABLED=false in .env. Mode B adds it by hand:
+#   docker compose -f docker-compose.readonly.yml -f docker-compose.omniroute.yml up -d
+# Providers (keys / OAuth) are configured once in the dashboard at
+# http://127.0.0.1:20128 (password: OMNIROUTE_ADMIN_PASSWORD in .env).
+services:
+  omniroute:
+    image: ${OMNIROUTE_IMAGE:-docker.io/diegosouzapw/omniroute:3.8.48}
+    container_name: po11y-omniroute
+    restart: unless-stopped
+    # OmniRoute flushes request logs/DB on shutdown; upstream recommends 40s.
+    stop_grace_period: 40s
+    ports:
+      # Dashboard AND the keyless /v1 proxy (REQUIRE_API_KEY defaults false):
+      # loopback-only on purpose, NOT ${BIND_ADDR} — publishing a keyless LLM
+      # proxy on a shared network lets anyone there spend the connected
+      # providers' quota. The ai-map workflow reaches the gateway
+      # container-to-container as http://omniroute:20128/v1 regardless.
+      - "${OMNIROUTE_BIND_ADDR:-127.0.0.1}:20128:20128"
+    environment:
+      - PORT=20128
+      - DATA_DIR=/app/data
+      # Session signing + at-rest encryption of stored provider keys.
+      - JWT_SECRET=${OMNIROUTE_JWT_SECRET:?run ./bootstrap.sh (or set in .env)}
+      - API_KEY_SECRET=${OMNIROUTE_API_KEY_SECRET:?run ./bootstrap.sh (or set in .env)}
+      # First-boot dashboard password; changeable later in the dashboard.
+      - INITIAL_PASSWORD=${OMNIROUTE_ADMIN_PASSWORD:?run ./bootstrap.sh (or set in .env)}
+    volumes:
+      - omniroute_data:/app/data
+
+volumes:
+  omniroute_data:

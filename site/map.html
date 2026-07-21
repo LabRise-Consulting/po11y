@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Workflow map</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
   /* Token subset of html/style.css — keep in sync by hand (tiny). */
   :root { --bg: #fafafa; --fg: #1a1a1a; --muted: #71717a; }
@@ -15,13 +18,66 @@
   .meta { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
   #map { overflow-x: auto; }
   #map svg { max-width: none; }
+  #map g.node.clickable { cursor: pointer; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex;
+             align-items: center; justify-content: center; padding: 20px; z-index: 20; }
+  .overlay[hidden] { display: none; }
+  .dialog { background: var(--bg); color: var(--fg); border: 1px solid var(--muted);
+            border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.3);
+            max-width: 520px; width: 100%; padding: 18px 22px; position: relative; }
+  .dialog h2 { margin: 0 0 8px; font-size: 17px; padding-right: 28px; }
+  .dialog p { margin: 0 0 14px; font-size: 13.5px; color: var(--muted); white-space: pre-line; }
+  .dialog a { font-size: 13px; }
+  .dialog .close { position: absolute; top: 8px; right: 10px; border: 0; background: none;
+                   color: var(--muted); font: inherit; font-size: 15px; cursor: pointer; padding: 4px 6px; }
 </style>
 </head>
 <body>
 <p class="meta" id="meta">loading map…</p>
 <div id="map"></div>
+<div class="overlay" id="overlay" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+    <button class="close" id="dlg-close" aria-label="close">✕</button>
+    <h2 id="dlg-title"></h2>
+    <p id="dlg-body"></p>
+    <a id="dlg-link" target="_blank" rel="noopener" hidden>Open in n8n ↗</a>
+  </div>
+</div>
 <script src="/vendor/mermaid.min.js"></script>
 <script>
+// Dialog + n8n deep-link base — hand-synced duplicates of site/ai-map.html's
+// helpers (site/* accepts tiny duplication over a shared module). Title/body
+// go in via textContent, the link via a validated base + encoded id.
+const overlay = document.getElementById('overlay');
+let lastFocus = null;
+function openDialog(title, body, href) {
+  document.getElementById('dlg-title').textContent = title;
+  document.getElementById('dlg-body').textContent = body;
+  const a = document.getElementById('dlg-link');
+  if (href) { a.href = href; a.hidden = false; } else { a.hidden = true; }
+  lastFocus = document.activeElement;
+  overlay.hidden = false;
+  document.getElementById('dlg-close').focus();
+}
+function closeDialog() {
+  overlay.hidden = true;
+  if (lastFocus && lastFocus.focus) lastFocus.focus();
+  lastFocus = null;
+}
+overlay.addEventListener('click', (e) => {
+  if (e.target === overlay || e.target.id === 'dlg-close') closeDialog();
+});
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !overlay.hidden) closeDialog(); });
+async function resolveN8nBase() {
+  try {
+    const c = await (await fetch('/config.json', { cache: 'no-store' })).json();
+    const raw = (typeof c.n8nUrl === 'string' && c.n8nUrl) ? c.n8nUrl : 'http://{host}:5678';
+    const host = (typeof c.baseUrl === 'string' && c.baseUrl) ? c.baseUrl : location.hostname;
+    const u = raw.replaceAll('{host}', host).replace(/\/$/, '');
+    return /^https?:\/\//i.test(u) ? u : null;
+  } catch { return 'http://' + location.hostname + ':5678'; }
+}
+
 (async () => {
   const meta = document.getElementById('meta');
   const dark = matchMedia('(prefers-color-scheme: dark)').matches;
@@ -30,8 +86,9 @@
   // scope is active; fetch that namespace's map. No/invalid/default scope keeps
   // today's flat path exactly. Charset guard mirrors nginx's [a-z0-9-] whitelist.
   const scope = new URLSearchParams(location.search).get('scope');
-  const mapUrl = (scope && scope !== 'default' && /^[a-z0-9-]+$/.test(scope))
-    ? `/status/${scope}/map.json` : '/map.json';
+  const scoped = scope && scope !== 'default' && /^[a-z0-9-]+$/.test(scope);
+  const mapUrl = scoped ? `/status/${scope}/map.json` : '/map.json';
+  const aiMapUrl = scoped ? `/status/${scope}/ai-map.json` : '/ai-map.json';
   try {
     const r = await fetch(mapUrl, { cache: 'no-store' });
     if (!r.ok) throw new Error('map.json missing — is the workflow-map workflow active?');
@@ -39,6 +96,35 @@
     const { svg } = await mermaid.render('wfmap', d.mermaid);
     document.getElementById('map').innerHTML = svg;
     meta.textContent = `${d.workflows} workflows · generated ${new Date(d.generated_at).toLocaleString()}`;
+
+    // Clickable workflow nodes: map.json.entries links each mermaid node id
+    // (nid) back to the raw n8n id + description. Older publishers without
+    // entries → the map renders exactly as before, nothing clickable.
+    const entries = new Map((d.entries || []).map((e) => [e.nid, e]));
+    if (!entries.size) return;
+    const n8nBase = await resolveN8nBase();
+    // Optional richer text: ai-map.json wf: nodes may carry an AI summary.
+    let summaries = new Map();
+    try {
+      const ar = await fetch(aiMapUrl, { cache: 'no-store' });
+      if (ar.ok) {
+        const a = await ar.json();
+        summaries = new Map((a.nodes || [])
+          .filter((n) => typeof n.id === 'string' && n.id.startsWith('wf:') && n.summary)
+          .map((n) => [n.id.slice(3), n.summary]));
+      }
+    } catch { /* feed optional */ }
+    // Mermaid (pinned 11.4.1) emits id="flowchart-<nid>-<n>"; nid never
+    // contains "-" (sanitizer maps to _), so this split is unambiguous.
+    // Trigger nodes (t0, t1, …) have no entry and stay inert.
+    document.querySelectorAll('#map g.node').forEach((g) => {
+      const m = /^flowchart-(.+?)-\d+$/.exec(g.id || '');
+      const e = m && entries.get(m[1]);
+      if (!e) return;
+      g.classList.add('clickable');
+      g.addEventListener('click', () => openDialog(e.name, summaries.get(String(e.id)) || e.sub || '',
+        n8nBase ? `${n8nBase}/workflow/${encodeURIComponent(String(e.id))}` : null));
+    });
   } catch (e) {
     meta.textContent = e.message;
   }
