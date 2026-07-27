@@ -22,10 +22,9 @@
 [hidden]{display:none!important} /* beat .cards{display:grid} etc. */
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
   line-height:1.5;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1180px;margin:0 auto;padding:40px 24px 64px}
-.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;
-  text-transform:uppercase;color:var(--cyan);margin:0 0 10px}
-h1{font-size:clamp(26px,4vw,38px);line-height:1.1;margin:0 0 8px;
+.wrap{max-width:1180px;margin:0 auto;padding:22px 24px 64px}
+.head-row{display:flex;align-items:baseline;gap:18px;flex-wrap:wrap}
+h1{font-size:clamp(22px,3vw,30px);line-height:1.1;margin:0;
   letter-spacing:-.02em;font-weight:680}
 h2{font-size:13px;font-family:var(--mono);letter-spacing:.08em;
   text-transform:uppercase;color:var(--muted);margin:28px 0 10px}
@@ -48,11 +47,12 @@ h2{font-size:13px;font-family:var(--mono);letter-spacing:.08em;
   color:var(--sky);background:none;border:1px solid var(--line);border-radius:7px;
   padding:5px 12px;cursor:pointer;margin-top:2px}
 .more:hover{border-color:var(--sky)}
-.lede{color:var(--muted);max-width:64ch;margin:0;font-size:15px}
+.lede{color:var(--muted);max-width:64ch;margin:0;font-size:12px;
+  margin-left:auto;text-align:right;font-family:var(--mono);line-height:1.45}
 code{font-family:var(--mono);font-size:.92em;background:var(--grid);
   padding:1px 5px;border-radius:4px;color:var(--ink)}
 
-.tabs{display:flex;align-items:center;gap:8px;margin-top:22px;
+.tabs{display:flex;align-items:center;gap:8px;margin-top:12px;
   border-bottom:1px solid var(--line);padding-bottom:0}
 .tab{appearance:none;background:none;border:none;border-bottom:2px solid transparent;
   color:var(--muted);font:inherit;font-size:14px;font-weight:600;
@@ -106,8 +106,12 @@ button.card.action:disabled{opacity:.55;cursor:wait}
 
 .tabframe{width:100%;height:78vh;border:1px solid var(--line);border-radius:11px;
   background:var(--panel);box-shadow:var(--shadow)}
-.gpanel{width:100%;aspect-ratio:2/1;border:1px solid var(--line);border-radius:11px;
+.gpanel{width:100%;aspect-ratio:var(--gaspect,2/1);border:1px solid var(--line);border-radius:11px;
   background:var(--panel)}
+/* non-wide panels: half the row on mid screens; on wide screens the panel's
+   --gspan (config "span", default 2) picks how many tracks it takes */
+@media(min-width:640px) and (max-width:999px){.gpanel:not(.gwide){grid-column:span 2;aspect-ratio:2/1}}
+@media(min-width:1000px){.gpanel:not(.gwide){grid-column:span var(--gspan,2)}}
 .gwide{grid-column:1/-1;aspect-ratio:3.4/1}
 footer{margin-top:36px;font-family:var(--mono);font-size:11px;color:var(--muted)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}

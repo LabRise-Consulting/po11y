@@ -3,4 +3,11 @@ config.json
 packs/*
 !packs/.gitkeep
 secrets/
+
+# Agent/tooling scratch. These were tracked once and are stripped from
+# history: local planning output and browser-automation dumps are noise for
+# anyone reading the repo, and they pick up absolute paths from whoever ran
+# them.
 .playwright-mcp/
+.superpowers/
+docs/superpowers/

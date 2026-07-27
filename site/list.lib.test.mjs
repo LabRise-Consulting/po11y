@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeRows, sortItems, groupByDay, parseDetail } from './list.lib.js';
+import { normalizeRows, sortItems, groupByDay, parseDetail, RANGES, rangeCutoff, filterByRange,
+  windowComplete, dedupeById } from './list.lib.js';
 
 const mapping = {
   title: 'title', url: 'url', score: 'score', day: 'firstSeen',
@@ -82,4 +83,83 @@ test('normalizeRows: detail column parsed when mapped', () => {
   assert.equal(items[0].detail[0].kind, 'gap');
   // no detail mapping ⇒ null
   assert.equal(normalizeRows(rows, { title: 'title' })[0].detail, null);
+});
+
+test('normalizeRows: badge maps a provenance column onto its own field', () => {
+  const m = { ...mapping, badge: 'source' };
+  const items = normalizeRows([{ title: 'X', source: 'adzuna' }], m);
+  assert.equal(items[0].badge, 'adzuna');
+});
+
+test('normalizeRows: badge is null when unmapped or empty, never "null"', () => {
+  assert.equal(normalizeRows([{ title: 'X', source: 'adzuna' }], mapping)[0].badge, null);
+  assert.equal(normalizeRows([{ title: 'X', source: '' }], { ...mapping, badge: 'source' })[0].badge, null);
+  assert.equal(normalizeRows([{ title: 'X' }], { ...mapping, badge: 'source' })[0].badge, null);
+});
+
+test('RANGES exposes the four window keys in display order', () => {
+  assert.deepEqual(RANGES.map((r) => r.key), ['all', 'today', '7d', '30d']);
+});
+
+test('rangeCutoff: rolling windows inclusive of today, null for all', () => {
+  const today = '2026-07-26';
+  assert.equal(rangeCutoff('all', today), null);
+  assert.equal(rangeCutoff('today', today), '2026-07-26');
+  assert.equal(rangeCutoff('7d', today), '2026-07-20');    // today + 6 previous days
+  assert.equal(rangeCutoff('30d', today), '2026-06-27');   // crosses the month boundary
+});
+
+test('rangeCutoff: unknown key falls open to all', () => {
+  assert.equal(rangeCutoff('quarter', '2026-07-26'), null);
+  assert.equal(rangeCutoff(undefined, '2026-07-26'), null);
+});
+
+test('filterByRange: cutoff day is included, the day before is not', () => {
+  const today = '2026-07-26';
+  const items = [
+    { day: '2026-07-26', title: 'today' },
+    { day: '2026-07-20', title: 'on the cutoff' },
+    { day: '2026-07-19', title: 'one day too old' },
+  ];
+  assert.deepEqual(filterByRange(items, '7d', today).map((i) => i.title), ['today', 'on the cutoff']);
+  assert.deepEqual(filterByRange(items, 'today', today).map((i) => i.title), ['today']);
+  assert.equal(filterByRange(items, 'all', today).length, 3);
+});
+
+test('filterByRange: unknown-day rows survive only under all', () => {
+  const items = [{ day: '2026-07-26' }, { day: 'unknown' }];
+  assert.deepEqual(filterByRange(items, 'today', '2026-07-26').map((i) => i.day), ['2026-07-26']);
+  assert.equal(filterByRange(items, 'all', '2026-07-26').length, 2);
+});
+
+test('filterByRange: leaves the input array untouched', () => {
+  const items = [{ day: '2026-07-26' }, { day: '2026-01-01' }];
+  filterByRange(items, 'today', '2026-07-26');
+  assert.equal(items.length, 2);
+});
+
+test('windowComplete: true once a row older than the cutoff has been seen', () => {
+  const today = '2026-07-26';
+  // Nothing older than the cutoff yet ⇒ the window may extend past this page.
+  assert.equal(windowComplete([{ day: '2026-07-26' }, { day: '2026-07-20' }], '7d', today), false);
+  // A row before the cutoff proves the newest-first feed has passed the edge.
+  assert.equal(windowComplete([{ day: '2026-07-26' }, { day: '2026-07-19' }], '7d', today), true);
+});
+
+test('windowComplete: an unbounded range is never complete', () => {
+  assert.equal(windowComplete([{ day: '2019-01-01' }], 'all', '2026-07-26'), false);
+});
+
+test('windowComplete: unknown-day rows never signal completion', () => {
+  assert.equal(windowComplete([{ day: 'unknown' }], 'today', '2026-07-26'), false);
+});
+
+test('dedupeById: keeps the first occurrence and preserves order', () => {
+  const out = dedupeById([{ id: 1, t: 'a' }, { id: 2, t: 'b' }, { id: 1, t: 'a again' }]);
+  assert.deepEqual(out.map((i) => i.t), ['a', 'b']);
+});
+
+test('dedupeById: rows without an id are all kept', () => {
+  const out = dedupeById([{ id: null, t: 'a' }, { id: null, t: 'b' }, { id: 3, t: 'c' }]);
+  assert.deepEqual(out.map((i) => i.t), ['a', 'b', 'c']);
 });

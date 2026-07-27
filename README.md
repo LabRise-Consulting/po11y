@@ -8,10 +8,10 @@ Once your n8n workflows are live, Po11y answers the critical question:
 The dashboard is boring technology: one nginx container, three static files,
 no build step. Grafana provides detailed metrics. Instance-specific config
 lives in `config.json`, and all live data arrives as small JSON files on a
-shared volume — written by n8n workflows in Mode A, by the collector in
+shared volume, written by n8n workflows in Mode A and by the collector in
 Mode B.
 
-| | Mode A — bundled | Mode B — collector |
+| | Mode A (bundled) | Mode B (collector) |
 |---|---|---|
 | n8n | installed & managed by Po11y | yours, untouched |
 | setup | `./bootstrap.sh` | set 4 env vars, `docker compose -f docker-compose.readonly.yml up -d` |
@@ -22,17 +22,20 @@ Mode B.
 | for | one person, homelab | teams, existing deployments |
 
 **Which mode?** Mode A is the fastest way to get the whole stack running on
-your own box — no existing n8n required. Mode B adds Po11y read-only beside an
+your own box; no existing n8n required. Mode B adds Po11y read-only beside an
 n8n you (or your team) already run. Identity is the deciding factor for teams:
-n8n Community Edition has no sharing, projects, or RBAC — on free n8n, "team
+n8n Community Edition has no sharing, projects, or RBAC: on free n8n, "team
 Po11y" means everyone shares the one Owner login. Mode B exists so Po11y can
-sit beside a paid or managed n8n and let n8n own identity instead.
+sit beside a paid or managed n8n and leave identity (logins, projects,
+RBAC) to that n8n instead.
 
 ## What you get
 
-<video src="https://gitlab.com/labrise/po11y/-/raw/main/docs/intro.mp4" controls width="100%">
-  <a href="docs/intro.mp4">Watch the 16 second intro video</a>.
-</video>
+▶ **[Watch the 63-second intro video](https://gitlab.com/labrise/po11y/uploads/9ccb990dbeec81b247148aae5d4738ff/intro.mp4)**
+— hosted as a project upload rather than committed, so cloning the stack
+doesn't drag 27 MB of video along with it. It covers both modes: the bundled
+stack, the dashboard, map and Grafana tabs, then the read-only collector
+running against a separate n8n.
 
 The **Overview** tab: action buttons (each active form trigger in n8n becomes
 a button automatically), monitoring links, running containers, a notification
@@ -42,7 +45,7 @@ feed and Grafana panels.
 
 The **Architecture** tab: an interactive map of your workflows, rebuilt from
 the live n8n instance every 10 minutes. The structure is computed
-deterministically from the workflow export; an LLM (optional — see
+deterministically from the workflow export; an LLM (optional, see
 [docs/ai-map.md](docs/ai-map.md)) only writes the one-line descriptions, with
 heuristic text when none is configured.
 
@@ -58,7 +61,7 @@ Plus a simpler auto-generated **Map** tab, a staleness badge when the status
 feed stops updating, dark/light theme, and extra tabs for any pages you want
 to serve.
 
-## Quickstart — Mode A (bundled)
+## Quickstart: Mode A (bundled)
 
 ```sh
 git clone https://gitlab.com/labrise/po11y && cd po11y
@@ -70,12 +73,12 @@ Then open:
 
 - Dashboard: `http://127.0.0.1:8080`
 - n8n editor: `http://127.0.0.1:5678` (a single owner account is created for
-  you — the only account, see "Which mode?" above — with credentials written
+  you, the only account, see "Which mode?" above; credentials are written
   into `.env`)
 
 Everything binds to `127.0.0.1` by default. To reach it from other devices,
 set `BIND_ADDR` in `.env` to a private VPN or LAN IP (and set
-`DASHBOARD_BASIC_AUTH` — see [docs/security.md](docs/security.md)).
+`DASHBOARD_BASIC_AUTH`, see [docs/security.md](docs/security.md)).
 
 Bootstrap imports and activates a few normal n8n workflows; open them in the
 editor to see how they work:
@@ -102,7 +105,7 @@ n8n's command line import does not assign ownership on an instance that
 already has an owner, and such workflows run but stay invisible in the
 editor's list. If that happens, re-import them through the editor UI.
 
-## Quickstart — Mode B (read-only collector)
+## Quickstart: Mode B (read-only collector)
 
 Point Po11y at an n8n you already run without touching it. `collector/` polls
 the remote n8n's public API and publishes the same four feeds that the Mode A
@@ -110,9 +113,11 @@ workflows write; the dashboard doesn't know or care which mode produced them.
 
 **Prerequisites**
 
-- An n8n API key. On Community Edition keys are unconditionally full-access —
-  CE cannot scope keys — so create it under a dedicated, low-privilege
-  operator account. On Enterprise, scope it to `workflow:read`.
+- An n8n API key scoped to `workflow:list`, `workflow:read`, `execution:list`
+  and `execution:read` — the only four calls the collector makes. Recent n8n
+  supports scoped keys on Community Edition too (verified on 2.29.8); if yours
+  offers no scope picker, the key is full-access, so create it under a
+  dedicated, low-privilege operator account instead.
 - Optionally, set `N8N_METRICS=true` on the remote n8n so Prometheus has
   something to scrape. Without it the Grafana tab is simply empty.
 
@@ -134,42 +139,61 @@ for the full list with defaults):
 
 ```sh
 git clone https://gitlab.com/labrise/po11y && cd po11y
-cp .env.example .env   # fill in N8N_API_URL, N8N_API_KEY, N8N_METRICS_TARGET, GRAFANA_ADMIN_PASSWORD
+cp .env.example .env             # fill in N8N_API_URL, N8N_API_KEY, N8N_METRICS_TARGET, GRAFANA_ADMIN_PASSWORD
+cp config.readonly.example.json config.json   # Mode B config; without it docker creates a directory
 docker compose -f docker-compose.readonly.yml up -d
 ```
 
-No `bootstrap.sh`, no owner account, no secrets on disk — everything the
+Both files are required before the first `up`: there is no `bootstrap.sh` in
+this mode to create them for you.
+
+No `bootstrap.sh`, no owner account, no secrets on disk: everything the
 collector needs comes from those env vars.
 
 You get the same Map, Architecture and Actions feeds as Mode A, rebuilt every
 `POLL_INTERVAL`, plus Grafana. `status.json` carries an execution summary
-instead of a container list (there's no Docker socket); enable it with
-`"executions": "Workflow executions"` under `config.json`'s `sections`, and
-set `baseUrl` so `{host}` deep links point at the remote n8n. What you don't
-get: form buttons don't fire by default (`ENABLE_FORM_PROXY=false` — see
+instead of a container list (there's no Docker socket); the Mode B example
+config enables that `executions` section for you. Set `baseUrl` to the remote
+n8n's host (a bare hostname, not a URL) so the `{host}` deep links resolve.
+
+Mode B's Grafana is Prometheus-only, so the example config embeds the
+**System health** dashboard. The execution-analytics dashboard is backed by
+n8n's postgres database, which Mode B never connects to — its panels stay
+empty here, which is why `config.example.json` (Mode A) is the wrong starting
+point in this mode. What you don't
+get: form buttons don't fire by default (`ENABLE_FORM_PROXY=false`, see
 [docs/security.md](docs/security.md)), there is never a container list, and
 the `/n8n-table/` list-tab proxy isn't wired up for a remote n8n yet.
 
 ## Going further
 
-- [docs/security.md](docs/security.md) — the security posture of both modes,
+- [docs/security.md](docs/security.md): the security posture of both modes,
   the exposure interlock, and why read authorization is out of scope.
-- [docs/forward-auth.md](docs/forward-auth.md) — optional OIDC overlay
+- [docs/forward-auth.md](docs/forward-auth.md): optional OIDC overlay
   (Keycloak/Authentik/Google/GitLab) replacing Basic Auth with real identity,
   and per-group authorization for form firing.
-- [docs/configuration.md](docs/configuration.md) — `config.json` reference,
+- [docs/configuration.md](docs/configuration.md): `config.json` reference,
   every feed contract, multi-team scopes, the DataTable read proxy, and
   custom tab pages.
-- [docs/ai-map.md](docs/ai-map.md) — enabling LLM prose on the architecture
+- [docs/ai-map.md](docs/ai-map.md): enabling LLM prose on the architecture
   map, and why it costs near zero.
-- [docs/integration.md](docs/integration.md) — mounting the dashboard into an
+- [docs/integration.md](docs/integration.md): mounting the dashboard into an
   existing compose stack and feeding it from your own n8n.
-- [docs/deployment.md](docs/deployment.md) — Podman, Kubernetes,
+- [docs/deployment.md](docs/deployment.md): Podman, Kubernetes,
   OpenTelemetry tracing, and how Po11y compares to alternatives.
+
+## Contributing
+
+Issues and merge requests welcome — [CONTRIBUTING.md](CONTRIBUTING.md) has the
+local check suite (all of it runs without bringing the stack up) and the one
+non-obvious rule about `lib/` being the source of truth for the workflow Code
+nodes. Found a security problem? [SECURITY.md](SECURITY.md), not a public
+issue.
 
 ## About
 
 Po11y is built and maintained by
 **[Labrise Consulting](https://labrise-consulting.com)**.
 
-Released under the [MIT License](LICENSE).
+Released under the [MIT License](LICENSE). Third-party assets vendored under
+[`html/vendor/`](html/vendor/README.md) keep their own licences.

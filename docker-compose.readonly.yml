@@ -28,7 +28,11 @@ services:
   # it). The n8n API key lives ONLY in this process env — never logged, never
   # written into a feed, never served. Health on :8081/healthz (counters only).
   collector:
-    build: ./collector
+    # Repo root is the build context, not collector/: the Dockerfile COPYs both
+    # lib/ and collector/ because collect.mjs imports the shared ../lib builders.
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
     container_name: po11y-collector
     restart: unless-stopped
     environment:

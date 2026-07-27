@@ -10,18 +10,16 @@
 # All image tags are pinned. test/lint/manifests are skipped on scheduled
 # pipelines (the nightly schedule only cares about the smoke build against a
 # fresh upstream n8n image); smoke runs on every pipeline.
+#
+# Runner policy: every validate-stage job is untagged and daemonless, so it
+# runs anywhere — GitLab shared runners, a fork's own runners, or the
+# self-hosted one. Only `smoke` needs a privileged dind host, so it alone
+# carries a tag and is restricted to the canonical project; forks and
+# contributors still get the six validate jobs on stock infrastructure.
 
 stages:
   - validate
   - smoke
-
-default:
-  # Pin every job to the self-hosted labrise runner (mac-main, tags
-  # po11y/po11y-dind): shared runners have no compute quota here and the
-  # other group runners have flaked on service networking. Jobs with their
-  # own tags: (smoke -> po11y-dind) override this and land on the same runner.
-  tags:
-    - po11y
 
 workflow:
   rules:
@@ -157,6 +155,14 @@ smoke:
   # that don't provide one. po11y-dind = a self-hosted privileged runner.
   tags:
     - po11y-dind
+  rules:
+    # That runner only exists on the canonical project. Elsewhere (a fork, a
+    # contributor's namespace) the job would hang forever waiting for a tag
+    # nobody provides, so skip it rather than stall the pipeline — the six
+    # validate jobs above still run and are the gate that matters for review.
+    - if: '$CI_PROJECT_PATH != "labrise/po11y"'
+      when: never
+    - when: on_success
   services:
     - docker:27-dind
   variables:

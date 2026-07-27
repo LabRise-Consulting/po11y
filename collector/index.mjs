@@ -103,7 +103,10 @@ async function poll() {
   if (ai.degraded) console.error(`collector: ai-map degraded (LLM unavailable) — ${ai.degraded}`);
 
   // status.json is always published (empty object if executions API is off).
-  const { status, warning } = await fetchStatus(fetch, N8N_API_URL, N8N_API_KEY, { now });
+  // The executions API omits workflowName; reuse the list we already fetched so
+  // the dashboard shows real names instead of n8n ids.
+  const names = new Map(workflows.map((w) => [String(w.id), w.name]).filter(([, n]) => n));
+  const { status, warning } = await fetchStatus(fetch, N8N_API_URL, N8N_API_KEY, { now, names });
   if (warning) console.error(warning);
   atomicWriteFile(feedPath('status.json'), JSON.stringify({ generated_at: stamp, ...status }));
 }

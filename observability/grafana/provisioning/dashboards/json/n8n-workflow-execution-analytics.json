@@ -1485,7 +1485,7 @@
               {
                 "id": "color",
                 "value": {
-                  "mode": "continuous-RdYlGr",
+                  "mode": "continuous-GrYlRd",
                   "seriesBy": "last"
                 }
               },
@@ -1519,7 +1519,7 @@
               {
                 "id": "color",
                 "value": {
-                  "mode": "continuous-RdYlGr",
+                  "mode": "continuous-GrYlRd",
                   "seriesBy": "last"
                 }
               },

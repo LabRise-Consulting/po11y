@@ -42,11 +42,17 @@ export function normalizeRows(payload, mapping) {
     const meta = {};
     for (const k of m.meta || []) meta[k] = r[k] ?? null;
     const scoreRaw = m.score ? r[m.score] : null;
+    // An optional provenance pill rendered beside the title, for feeds that
+    // merge several upstreams (e.g. which job board an ad came from). Kept
+    // separate from `meta` so it reads as a label, not as another key: value
+    // pair lost in the run-on meta line.
+    const badgeRaw = m.badge ? r[m.badge] : null;
     return {
       id: r.id ?? r[m.title] ?? null,
       title: (m.title ? r[m.title] : null) ?? '(untitled)',
       url: (m.url ? r[m.url] : null) ?? null,
       score: scoreRaw === undefined || scoreRaw === null || scoreRaw === '' ? null : Number(scoreRaw),
+      badge: badgeRaw === undefined || badgeRaw === null || badgeRaw === '' ? null : String(badgeRaw),
       meta,
       detail: m.detail ? parseDetail(r[m.detail]) : null,
       day: dayOf(m.day ? r[m.day] : null),
@@ -74,6 +80,62 @@ function isoMinus(dayIso, n) {
   const d = new Date(dayIso + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() - n);
   return d.toISOString().slice(0, 10);
+}
+
+// Rolling day windows the list tab can narrow to before sorting. `days` counts
+// how many days *before* today the window reaches back — every window includes
+// today, so 7d is today plus the six preceding days. Rolling rather than
+// calendar periods: a calendar "this week" shows a single day every Monday,
+// which is when a feed is least useful. Exported so list.html builds its
+// buttons from it and the key set lives in one place.
+export const RANGES = [
+  { key: 'all', label: 'All', days: null },
+  { key: 'today', label: 'Today', days: 0 },
+  { key: '7d', label: '7 days', days: 6 },
+  { key: '30d', label: '30 days', days: 29 },
+];
+
+// Oldest date-only string still inside `key`'s window, or null for no bound.
+// An unrecognised key fails open to no bound: a config typo shows too much
+// rather than an empty tab. `today` is a parameter, never Date.now(), so the
+// windows are testable without freezing the clock.
+export function rangeCutoff(key, today) {
+  const r = RANGES.find((x) => x.key === key);
+  if (!r || r.days === null || !today) return null;
+  return isoMinus(today, r.days);
+}
+
+export function filterByRange(items, key, today) {
+  const cutoff = rangeCutoff(key, today);
+  if (!cutoff) return items.slice();
+  // 'unknown' must be rejected explicitly, not left to the comparison: it
+  // string-sorts *above* every ISO date ('u' > '2'), so `day >= cutoff` alone
+  // would keep exactly the rows that have no usable date.
+  return items.filter((it) => it.day !== 'unknown' && it.day >= cutoff);
+}
+
+// Has a bounded window been fully covered by the rows fetched so far? The feed
+// is newest-first, so the first row older than the cutoff proves the page walk
+// has passed the window's edge and further pages hold nothing in range. An
+// unbounded range ('all') is never complete — only the feed running out ends it.
+export function windowComplete(items, key, today) {
+  const cutoff = rangeCutoff(key, today);
+  if (!cutoff) return false;
+  return items.some((it) => it.day !== 'unknown' && it.day < cutoff);
+}
+
+// Rows sharing a sort value have no stable order between requests, so an
+// offset-paged walk can serve the same row on two pages. Dedupe on id, keeping
+// the first sighting. Rows with no id are left alone — there is nothing to
+// compare them on, and dropping them would lose data.
+export function dedupeById(items) {
+  const seen = new Set();
+  return items.filter((it) => {
+    if (it.id === null || it.id === undefined) return true;
+    if (seen.has(it.id)) return false;
+    seen.add(it.id);
+    return true;
+  });
 }
 
 export function groupByDay(items, today) {

@@ -13,6 +13,12 @@ WORKDIR /app
 COPY lib ./lib
 COPY collector ./collector
 
+# Pre-create the status mount point owned by the runtime user: docker copies
+# ownership from the image path when it initializes a fresh named volume —
+# without this the volume comes up root-owned and every feed write EACCESes.
+# Same reason as the root Dockerfile's /po11y-status stanza (Mode A).
+RUN mkdir -p /po11y-status && chown node:node /po11y-status
+
 USER node
 # STATUS_DIR (default /po11y-status) is a bind/volume mount provided at runtime.
 EXPOSE 8081

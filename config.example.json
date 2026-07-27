@@ -1,6 +1,5 @@
 {
   "title": "Po11y",
-  "eyebrow": "po11y · status",
   "lede": "Live view of this stack: containers and notifications refresh every 30 s from status.json (published by the n8n workflows); the Map tab is generated from the n8n instance itself.",
   "footer": [
     { "text": "po11y", "href": "https://gitlab.com/labrise/po11y" }
@@ -10,7 +9,8 @@
       { "name": "New workflow", "sub": "open the n8n editor", "href": "http://{host}:5678/workflow/new" }
     ],
     "Monitoring": [
-      { "name": "n8n", "sub": "workflow editor", "href": "http://{host}:5678/" },
+      { "name": "n8n", "sub": "workflow editor", "href": "http://{host}:5678/",
+        "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}" },
       { "name": "Execution analytics", "sub": "grafana", "href": "/grafana/d/adfcxfk" },
       { "name": "System health", "sub": "n8n process metrics", "href": "/grafana/d/adv6qmb" },
       { "name": "Prometheus", "sub": "raw metrics", "href": "http://{host}:9090/" }
@@ -30,13 +30,21 @@
       "embed": true,
       "base": "/grafana",
       "dashboard": "adfcxfk",
-      "panels": [ { "id": 19 }, { "id": 26, "wide": true } ],
+      "panels": [
+        { "id": 19, "title": "Success rate", "span": 1, "h": 340 },
+        { "id": 26, "title": "Executions over time by status", "span": 3, "h": 340 },
+        { "id": 16, "title": "Total workflows", "span": 1, "h": 160 },
+        { "id": 17, "title": "Active workflows", "span": 1, "h": 160 },
+        { "id": 18, "title": "Total executions", "span": 1, "h": 160 },
+        { "id": 20, "title": "Failed executions", "span": 1, "h": 160 },
+        { "id": 21, "title": "Currently running", "span": 1, "h": 160 },
+        { "id": 24, "title": "P95, Max, Avg & Median duration (24h)", "span": 3, "h": 160 },
+        { "id": 30, "title": "Most executed workflows", "span": 2, "h": 340 },
+        { "id": 28, "title": "Workflows with most failures", "span": 2, "h": 340 }
+      ],
       "range": "now-7d"
     },
-    "promBase": "/prom",
-    "stats": [
-      { "label": "n8n", "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}", "href": "http://{host}:5678/" }
-    ]
+    "promBase": "/prom"
   },
   "refreshSec": 30,
   "staleAfterMin": 5,

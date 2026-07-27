@@ -131,26 +131,53 @@ test('fetchStatus builds the executions summary shape, sorted by count desc', as
     { workflowId: '1', workflowName: 'Alpha', status: 'success', startedAt: '2026-07-19T03:00:00Z' },
     { workflowId: '2', workflowName: 'Beta', status: 'success', startedAt: '2026-07-19T01:30:00Z' },
   ];
-  const errors = [{ workflowId: '1', status: 'error' }, { workflowId: '9', status: 'error' }];
-  const fetchFn = async (url) =>
-    jsonRes({ data: new URL(url).searchParams.get('status') === 'error' ? errors : recent });
+  const fetchFn = async () => jsonRes({ data: recent });
 
   const { status, warning } = await fetchStatus(fetchFn, N8N, 'k', { now: Date.now() });
   assert.equal(warning, null);
   const ex = status.executions;
   assert.equal(ex.recent, 4);
-  assert.equal(ex.errors, 2);
+  // errors counts failures WITHIN the recent window so the pair is a real rate.
+  assert.equal(ex.errors, 1);
   assert.equal(ex.byWorkflow.length, 2);
   assert.deepEqual(ex.byWorkflow[0], { name: 'Alpha', id: '1', count: 3, errors: 1, lastAt: '2026-07-19T03:00:00Z' });
   assert.deepEqual(ex.byWorkflow[1], { name: 'Beta', id: '2', count: 1, errors: 0, lastAt: '2026-07-19T01:30:00Z' });
 });
 
 test('fetchStatus name falls back to workflowId when the execution omits a name', async () => {
-  const fetchFn = async (url) =>
-    jsonRes({ data: new URL(url).searchParams.get('status') === 'error'
-      ? [] : [{ workflowId: '42', status: 'success', startedAt: '2026-07-19T00:00:00Z' }] });
+  const fetchFn = async () =>
+    jsonRes({ data: [{ workflowId: '42', status: 'success', startedAt: '2026-07-19T00:00:00Z' }] });
   const { status } = await fetchStatus(fetchFn, N8N, 'k', {});
   assert.equal(status.executions.byWorkflow[0].name, '42');
+});
+
+test('fetchStatus issues exactly ONE executions GET (recent window is the only source)', async () => {
+  const paths = [];
+  const fetchFn = async (url) => { paths.push(new URL(url).pathname + new URL(url).search); return jsonRes({ data: [] }); };
+  await fetchStatus(fetchFn, N8N, 'k', {});
+  assert.deepEqual(paths, ['/api/v1/executions?limit=100']);
+});
+
+test('fetchStatus resolves names from the caller-supplied id->name map', async () => {
+  // The executions API omits workflowName, but the daemon has already fetched
+  // every workflow — without this the dashboard shows opaque n8n ids.
+  const fetchFn = async () =>
+    jsonRes({ data: [
+      { workflowId: '42', status: 'success', startedAt: '2026-07-19T00:00:00Z' },
+      { workflowId: '99', status: 'success', startedAt: '2026-07-19T00:00:00Z' },
+    ] });
+  const names = new Map([['42', 'Nightly digest']]);
+  const { status } = await fetchStatus(fetchFn, N8N, 'k', { names });
+  const byId = Object.fromEntries(status.executions.byWorkflow.map((w) => [w.id, w.name]));
+  assert.equal(byId['42'], 'Nightly digest', 'name resolved from the map');
+  assert.equal(byId['99'], '99', 'unknown id still falls back to the id');
+});
+
+test('fetchStatus prefers an execution-supplied name over the map', async () => {
+  const fetchFn = async () =>
+    jsonRes({ data: [{ workflowId: '42', workflowName: 'From execution', status: 'success' }] });
+  const { status } = await fetchStatus(fetchFn, N8N, 'k', { names: new Map([['42', 'From map']]) });
+  assert.equal(status.executions.byWorkflow[0].name, 'From execution');
 });
 
 test('fetchStatus returns {} + a warning when the executions API is unavailable', async () => {

@@ -1,11 +1,16 @@
 // Po11y — a tiny no-build status dashboard. Everything instance-specific
 // comes from /config.json (see config.example.json / README):
-//   branding      title, eyebrow, lede, footer
-//   cards         named groups of link cards on the Overview tab
+//   branding      title, lede, footer
+//   cards         named groups of link cards on the Overview tab; a card with
+//                 an "up" (+ optional "mem") prometheus query doubles as a
+//                 live status card (up/DOWN · rss)
 //   tabs          extra tabs, each an iframe onto an instance-served page
 //   sections      which /status.json sections to render, and their headings
 //   metrics       grafana embeds (or a deep-link card) + prometheus stat cards
-// Live data: /status.json + /notifications.json, polled every refreshSec.
+// Live data: /status.json + /notifications.json, polled every refreshSec;
+// grafana embeds refresh themselves natively (refresh URL param) and the
+// prometheus stat cards re-poll, every metricsRefreshSec (default 60 s,
+// 0 disables) — no reloads, so layout and scroll never move.
 // "{host}" in any href/src is replaced with the browser's current hostname,
 // so one config works from every device that can reach the box. Set
 // config.json's "baseUrl" (a bare host, not a URL prefix) to substitute a
@@ -65,7 +70,6 @@ function setScope(next) {
 
 let cfg = {
   title: 'Po11y',
-  eyebrow: 'po11y · status',
   lede: '',
   footer: [],
   cards: {},
@@ -81,6 +85,7 @@ let cfg = {
   // (map.html / ai-map.html), which fetch /config.json themselves.
   n8nUrl: 'http://{host}:5678',
   refreshSec: 30,
+  metricsRefreshSec: 60,
   staleAfterMin: 5,
   statusHint: 'status.json missing — is the publisher running?',
 };
@@ -117,7 +122,6 @@ const toast = (msg, ok) => {
 function buildChrome() {
   document.title = cfg.title;
   $('title').textContent = cfg.title;
-  $('eyebrow').textContent = cfg.eyebrow;
   $('lede').textContent = cfg.lede;
   $('footer').innerHTML = (cfg.footer || []).map((f) =>
     f.href ? `<a href="${safeUrl(withHost(f.href))}">${esc(f.text)}</a>` : esc(f.text))
@@ -179,7 +183,7 @@ function buildChrome() {
   const ov = $('view-overview');
   const block = (heading, id, cls = '') => {
     const closed = heading && localStorage.getItem(`po11y-sec-${id}`) === 'closed';
-    return `${heading ? `<h2 class="sec-h${closed ? ' closed' : ''}" data-sec="${id}">${esc(heading)}</h2>` : ''}
+    return `${heading ? `<h2 class="sec-h${closed ? ' closed' : ''}" data-sec="${id}" title="${esc(heading)} — click to collapse or expand">${esc(heading)}</h2>` : ''}
       <div id="${id}"${cls ? ` class="${cls}"` : ''}${closed ? ' hidden' : ''}></div>`;
   };
   ov.innerHTML =
@@ -225,13 +229,16 @@ function buildChrome() {
   }
 
   // Field-less form triggers ({action}) run in place via the same-origin
-  // /form/ nginx proxy; everything else is a plain link card.
-  const card = (l) => l.action
-    ? `<button class="card action" data-form="${esc(l.action)}" data-name="${esc(l.name)}">
+  // /form/ nginx proxy; everything else is a plain link card. Every card
+  // gets a hover tooltip: config "tip" wins, else "name — sub".
+  const tip = (l) => esc(l.tip || (l.sub ? `${l.name} — ${l.sub}` : l.name));
+  const card = (l, id) => l.action
+    ? `<button class="card action" data-form="${esc(l.action)}" data-name="${esc(l.name)}" title="${tip(l)}">
         <h3>${esc(l.name)}</h3><p>${esc(l.sub || '')}</p></button>`
-    : `<a class="card" href="${safeUrl(withHost(l.href))}"><h3>${esc(l.name)}</h3><p>${esc(l.sub || '')}</p></a>`;
+    : `<a class="card"${id ? ` id="${id}"` : ''} href="${safeUrl(withHost(l.href))}" title="${tip(l)}">
+        <h3>${esc(l.name)}</h3><p>${esc(l.sub || '')}${l.up ? ' — checking…' : ''}</p></a>`;
   Object.values(cfg.cards || {}).forEach((links, i) => {
-    $(`cards-${i}`).innerHTML = links.map(card).join('');
+    $(`cards-${i}`).innerHTML = links.map((l, j) => card(l, l.up ? `card-${i}-${j}` : '')).join('');
   });
   ov.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-form]');
@@ -250,6 +257,7 @@ function buildChrome() {
   $('sec-containers')?.classList.add('cards');
 
   renderMetrics();
+  refreshStatCards();
 }
 
 // ---- metrics: grafana embeds or deep-link card, plus prometheus stat cards -----
@@ -261,33 +269,59 @@ function renderMetrics() {
   let html = '';
   if (g.embed && g.dashboard) {
     const theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    html += (g.panels || []).map((p) =>
-      `<iframe class="gpanel${p.wide ? ' gwide' : ''}" loading="lazy" src="${safeUrl(
-        `${base}/d-solo/${g.dashboard}?orgId=1&from=${g.range || 'now-7d'}&to=now&theme=${theme}&panelId=${p.id}`)}"></iframe>`).join('');
-  }
-  if (g.dashboard) {
-    html += `<a class="card" href="${safeUrl(`${base}/d/${g.dashboard}`)}"><h3>Grafana</h3>
-      <p>${g.embed ? 'Open the full dashboard' : 'Embeds are off. Open dashboard'}</p></a>`;
+    // Native panel auto-refresh: grafana re-queries inside the iframe, no
+    // reload/flash. 0 disables.
+    const mSec = cfg.metricsRefreshSec ?? 60;
+    const refresh = mSec > 0 ? `&refresh=${mSec}s` : '';
+    // Panel sizing: "wide" spans the full row; "span" (1-4) takes that many
+    // grid tracks on wide screens (default 2 = half the row). Height follows
+    // the span (N/1 aspect → uniform rows) unless "h" pins it in px — use
+    // that when a panel's chart needs more room than the ratio gives.
+    html += (g.panels || []).map((p) => {
+      const span = [1, 2, 3, 4].includes(p.span) ? p.span : 0;
+      const h = Number.isFinite(p.h) ? Math.min(800, Math.max(120, p.h)) : 0;
+      const style = [span ? `--gspan:${span};--gaspect:${span}/1` : '', h ? `height:${h}px` : '']
+        .filter(Boolean).join(';');
+      return `<iframe class="gpanel${p.wide ? ' gwide' : ''}" loading="lazy"${
+        style ? ` style="${style}"` : ''} title="${esc(p.title || `Grafana panel ${p.id}`)}" src="${safeUrl(
+        `${base}/d-solo/${g.dashboard}?orgId=1&from=${g.range || 'now-7d'}&to=now&theme=${theme}${refresh}&panelId=${p.id}`)}"></iframe>`;
+    }).join('');
+  } else if (g.dashboard) {
+    // Embeds off — the deep-link card is the only Grafana entry point. With
+    // embeds on it would duplicate the Monitoring dashboard links, so skip it.
+    html += `<a class="card" href="${safeUrl(`${base}/d/${g.dashboard}`)}" title="Open the full Grafana dashboard"><h3>Grafana</h3>
+      <p>Embeds are off. Open dashboard</p></a>`;
   }
   html += (m.stats || []).map((s, i) => s.href
-    ? `<a class="card" id="stat-${i}" href="${safeUrl(withHost(s.href))}"><h3></h3><p>checking…</p></a>`
-    : `<div class="card" id="stat-${i}"><h3></h3><p>checking…</p></div>`).join('');
+    ? `<a class="card" id="stat-${i}" href="${safeUrl(withHost(s.href))}" title="${esc(s.label)} — live status from Prometheus"><h3>${esc(s.label)}</h3><p>checking…</p></a>`
+    : `<div class="card" id="stat-${i}" title="${esc(s.label)} — live status from Prometheus"><h3>${esc(s.label)}</h3><p>checking…</p></div>`).join('');
   $('metrics').innerHTML = html;
-  (m.stats || []).forEach(renderStat);
 }
 
-async function renderStat(stat, i) {
-  const el = $(`stat-${i}`);
+// Re-poll every live stat: card-group entries carrying an "up" query (merged
+// link + status cards, e.g. the n8n editor card) and metrics.stats cards.
+function refreshStatCards() {
+  Object.values(cfg.cards || {}).forEach((links, i) => {
+    links.forEach((l, j) => { if (l.up) fillStat($(`card-${i}-${j}`), l); });
+  });
+  ((cfg.metrics && cfg.metrics.stats) || []).forEach((s, i) => fillStat($(`stat-${i}`), s));
+}
+
+// Fill the <p> of an existing card with live up/DOWN (+ rss) from the two
+// read-only Prometheus query endpoints. Used by metrics.stats cards and by
+// card-group entries that carry an "up" query (merged link + status cards).
+async function fillStat(el, stat) {
   if (!el) return;
-  const promBase = (cfg.metrics.promBase || '/prom');
+  const promBase = (cfg.metrics && cfg.metrics.promBase) || '/prom';
+  const p = el.querySelector('p');
   try {
     const q = (expr) => fetchJson(`${promBase}/api/v1/query?query=${encodeURIComponent(expr)}`);
     const [up, mem] = await Promise.all([q(stat.up), stat.mem ? q(stat.mem) : null]);
     const isUp = up.data.result[0]?.value[1] === '1';
     const mb = mem?.data.result[0] ? Math.round(mem.data.result[0].value[1] / 1048576) : null;
-    el.innerHTML = `<h3>${esc(stat.label)}</h3><p><b>${isUp ? 'up' : 'DOWN'}</b>${mb ? ` · ${mb} MB rss` : ''}</p>`;
+    p.innerHTML = `<b>${isUp ? 'up' : 'DOWN'}</b>${mb ? ` · ${mb} MB rss` : ''}${stat.sub ? ` · ${esc(stat.sub)}` : ''}`;
   } catch {
-    el.innerHTML = `<h3>${esc(stat.label)}</h3><p>prometheus unreachable</p>`;
+    p.innerHTML = `${stat.sub ? `${esc(stat.sub)} · ` : ''}prometheus unreachable`;
   }
 }
 
@@ -329,7 +363,7 @@ function renderContainers() {
     !f || `${c.name} ${c.status} ${c.image}`.toLowerCase().includes(f));
   el.innerHTML = rows.length
     ? rows.map((c) =>
-        `<div class="card"><h3>${esc(c.name)}</h3><p><b>${esc(c.status)}</b><br>${esc(c.image)}</p></div>`).join('')
+        `<div class="card" title="${esc(c.name)} — ${esc(c.status)} — ${esc(c.image)}"><h3>${esc(c.name)}</h3><p><b>${esc(c.status)}</b><br>${esc(c.image)}</p></div>`).join('')
     : `<p class="empty">${f ? 'no match' : 'none running'}</p>`;
 }
 
@@ -402,7 +436,19 @@ function renderNotifications() {
 
 // ---- boot -------------------------------------------------------------------------
 (async function boot() {
-  try { cfg = { ...cfg, ...(await fetchJson('/config.json')) }; } catch { /* defaults */ }
+  try {
+    cfg = { ...cfg, ...(await fetchJson('/config.json')) };
+  } catch {
+    // Falling back to defaults silently renders a plausible-looking but empty
+    // dashboard — the worst outcome for a tool whose job is telling you what
+    // is broken. Both compose files bind-mount ./config.json, so when it was
+    // never created docker makes a *directory* of that name and nginx serves
+    // nothing; that is the standard Mode B first-run mistake (Mode A's
+    // bootstrap.sh copies the example for you, Mode B has no bootstrap). Say
+    // so in the lede, which is empty by default and always visible.
+    console.warn('po11y: /config.json unreadable — using built-in defaults');
+    cfg.lede = 'config.json not readable — run: cp config.example.json config.json';
+  }
   initScope();
   // Auto-discovered form triggers (forms.json, published by the maps
   // workflow) become Actions cards; config-declared cards win on collisions.
@@ -424,4 +470,6 @@ function renderNotifications() {
   refreshStatus();
   refreshNotifications();
   setInterval(() => { refreshStatus(); refreshNotifications(); }, (cfg.refreshSec ?? 30) * 1000);
+  const mSec = cfg.metricsRefreshSec ?? 60;
+  if (mSec > 0) setInterval(refreshStatCards, mSec * 1000);
 })();

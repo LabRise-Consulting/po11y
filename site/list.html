@@ -12,8 +12,11 @@
     :root { color-scheme: light dark; }
     body { margin: 0; font: 15px/1.5 system-ui, sans-serif; padding: 12px; }
     .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+    .bar + .bar { margin-top: -6px; }
     .bar button { padding: 4px 10px; cursor: pointer; }
     .bar button.active { font-weight: 700; }
+    /* Range buttons are generated, so the group needs its own flex gap. */
+    #ranges { display: flex; gap: 8px; }
     h2.day { margin: 18px 0 8px; font-size: 14px; opacity: .7; }
     .card { display: block; padding: 10px 12px; margin: 6px 0; border: 1px solid #8883;
             border-radius: 8px; text-decoration: none; color: inherit; }
@@ -21,6 +24,9 @@
     .card .meta { font-size: 13px; opacity: .75; }
     .card .jtitle { color: inherit; text-decoration: none; }
     .card .jtitle:hover { text-decoration: underline; }
+    .badge { display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase;
+             letter-spacing: .04em; padding: 1px 7px; margin-right: 6px; border-radius: 999px;
+             border: 1px solid #8886; opacity: .85; vertical-align: middle; }
     .score { float: right; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid #8886; }
     .empty { opacity: .6; }
     .more { margin: 14px 0; padding: 6px 14px; cursor: pointer; }
@@ -40,6 +46,10 @@
 </head>
 <body>
   <div class="bar">
+    <span>Range:</span>
+    <span id="ranges"></span>
+  </div>
+  <div class="bar">
     <span>Sort:</span>
     <button id="sort-day">Newest</button>
     <button id="sort-score">Best fit</button>
@@ -49,16 +59,26 @@
   <button class="more" id="more" hidden>load more</button>
 
   <script type="module">
-    import { normalizeRows, sortItems, groupByDay } from './list.lib.js';
+    import { normalizeRows, sortItems, groupByDay, filterByRange, windowComplete, dedupeById, RANGES }
+      from './list.lib.js';
 
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
       (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
     const safeUrl = (u) => /^(https?:\/\/|\/)/i.test(String(u ?? '')) ? esc(u) : '#';
 
     const $ = (id) => document.getElementById(id);
-    let settings = { endpoint: '', mapping: {}, defaultSort: 'day', title: 'List' };
+    let settings = { endpoint: '', mapping: {}, defaultSort: 'day', defaultRange: 'all',
+                     pageSize: 250, title: 'List' };
     let sortBy = 'day';
-    let limit = 100;
+    let range = 'all';
+    // How many pages the walk below may pull. A bounded range usually stops
+    // itself well before this (see windowComplete); `load more` raises it when
+    // the budget, not the data, was the binding constraint.
+    let maxPages = 1;
+
+    // n8n's DataTable API rejects limit > 250, so widening the page is not an
+    // option — covering a window means walking pages by cursor.
+    const basePages = (r) => (r === 'all' ? 1 : 8);
 
     // Which tab am I? Match the config tabs[] entry whose src ends with list.html.
     async function loadSettings() {
@@ -68,14 +88,36 @@
         if (me && me.list) settings = { ...settings, ...me.list };
       } catch { /* defaults */ }
       sortBy = settings.defaultSort || 'day';
+      range = settings.defaultRange || 'all';
+      maxPages = basePages(range);
       document.title = settings.title || 'List';
     }
 
-    function url() {
-      // Endpoint may already carry query params; append sort + limit.
+    function url(cursor) {
+      // Endpoint may already carry query params; append the page size and, from
+      // the second page on, the cursor the previous response handed back.
       const u = new URL(settings.endpoint, location.origin);
-      u.searchParams.set('limit', String(limit));
+      u.searchParams.set('limit', String(settings.pageSize || 250));
+      if (cursor) u.searchParams.set('cursor', cursor);
       return u.pathname + u.search;
+    }
+
+    // Walk pages until the feed runs out, the selected window is provably
+    // covered, or the page budget is spent. Returns the rows plus whether the
+    // budget was what stopped it — the only case where `load more` can help.
+    // A static JSON feed carries no nextCursor, so it settles after one pass.
+    async function loadRows() {
+      const today = todayIso();
+      let rows = [];
+      let cursor = null;
+      for (let page = 0; page < maxPages; page++) {
+        const payload = await (await fetch(url(cursor), { cache: 'no-store' })).json();
+        rows = dedupeById(rows.concat(normalizeRows(payload, settings.mapping)));
+        cursor = payload && payload.nextCursor;
+        if (!cursor) return { rows, truncated: false };
+        if (windowComplete(rows, range, today)) return { rows, truncated: false };
+      }
+      return { rows, truncated: true };
     }
 
     function todayIso() {
@@ -102,6 +144,10 @@
       const parts = Object.entries(it.meta).filter(([, v]) => v !== null && v !== '')
         .map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(' · ');
       const score = it.score === null ? '' : `<span class="score">${esc(it.score)}</span>`;
+      // Provenance pill. Rendered before the title rather than folded into the
+      // meta line so it survives a long meta run-on and stays scannable when
+      // the list mixes several upstreams.
+      const badge = it.badge ? `<span class="badge" data-badge="${esc(it.badge)}">${esc(it.badge)}</span>` : '';
       // With a detail feed the card expands: the title links out, the body
       // toggles a fit/gap table. A whole-card <a> can't wrap a <details>, so
       // detail cards are a <div>. No detail ⇒ unchanged whole-card link.
@@ -112,22 +158,33 @@
         const fits = it.detail.filter((r) => r.kind === 'fit').length;
         const gaps = it.detail.length - fits;
         const sum = `${fits} fit${fits !== 1 ? 's' : ''}, ${gaps} gap${gaps !== 1 ? 's' : ''}`;
-        return `<div class="card expandable">${score}<h3>${title}</h3><div class="meta">${parts}</div>`
+        return `<div class="card expandable">${score}<h3>${badge}${title}</h3><div class="meta">${parts}</div>`
           + `<details class="detail"><summary>fit / gap analysis · ${sum}</summary>${detailTable(it.detail)}</details></div>`;
       }
-      const inner = `${score}<h3>${esc(it.title)}</h3><div class="meta">${parts}</div>`;
+      const inner = `${score}<h3>${badge}${esc(it.title)}</h3><div class="meta">${parts}</div>`;
       return it.url
         ? `<a class="card" href="${safeUrl(it.url)}" target="_blank" rel="noopener">${inner}</a>`
         : `<div class="card">${inner}</div>`;
     }
 
+    // Sorting is a client-side reshuffle of rows already in hand, so it must not
+    // re-walk the feed. Only a new window or a raised budget invalidates.
+    let cache = { key: null, walk: null };
+    async function walkRows() {
+      const key = `${range}|${maxPages}`;
+      if (cache.key !== key) cache = { key, walk: await loadRows() };
+      return cache.walk;
+    }
+
     async function render() {
-      let payload;
-      try { payload = await (await fetch(url(), { cache: 'no-store' })).json(); }
+      let walk;
+      try { walk = await walkRows(); }
       catch { $('list').innerHTML = '<p class="empty">feed unavailable</p>'; return; }
-      const items = sortItems(normalizeRows(payload, settings.mapping), sortBy);
+      const items = sortItems(filterByRange(walk.rows, range, todayIso()), sortBy);
       $('count').textContent = `${items.length} shown`;
-      $('more').hidden = items.length < limit;   // full page ⇒ maybe more
+      // Only offered when the page budget — not the data — ended the walk.
+      // Once a window is provably covered there is nothing left to load.
+      $('more').hidden = !walk.truncated;
       if (!items.length) { $('list').innerHTML = '<p class="empty">nothing yet</p>'; return; }
       if (sortBy === 'score') {
         $('list').innerHTML = items.map(cardHtml).join('');
@@ -138,19 +195,41 @@
       }
     }
 
-    function setSort(by) {
-      sortBy = by;
-      $('sort-day').classList.toggle('active', by === 'day');
-      $('sort-score').classList.toggle('active', by === 'score');
+    function paintSort() {
+      $('sort-day').classList.toggle('active', sortBy === 'day');
+      $('sort-score').classList.toggle('active', sortBy === 'score');
+    }
+
+    function paintRange() {
+      for (const b of $('ranges').querySelectorAll('button')) {
+        b.classList.toggle('active', b.dataset.range === range);
+      }
+    }
+
+    function setSort(by) { sortBy = by; paintSort(); render(); }
+
+    function setRange(key) {
+      range = key;
+      maxPages = basePages(key);   // new window ⇒ fresh walk, any `load more` resets
+      paintRange();
       render();
     }
 
+    // Range buttons come from RANGES so the key set lives only in the lib.
+    $('ranges').innerHTML = RANGES
+      .map((r) => `<button data-range="${esc(r.key)}">${esc(r.label)}</button>`).join('');
+    $('ranges').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-range]');
+      if (b) setRange(b.dataset.range);
+    });
     $('sort-day').addEventListener('click', () => setSort('day'));
     $('sort-score').addEventListener('click', () => setSort('score'));
-    $('more').addEventListener('click', () => { limit += 100; render(); });
+    $('more').addEventListener('click', () => { maxPages += 1; render(); });
 
     await loadSettings();
-    setSort(sortBy);
+    paintSort();
+    paintRange();
+    render();
   </script>
 </body>
 </html>

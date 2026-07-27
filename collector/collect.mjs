@@ -99,9 +99,8 @@ export async function fetchAllWorkflows(fetchFn, baseUrl, apiKey) {
 
 /**
  * Mode B's status.json content, sourced from the n8n API rather than a Docker
- * socket (Mode B never touches Docker). Two GETs against the executions API —
- * the recent window and the error-only variant — fold into an at-a-glance
- * execution health summary.
+ * socket (Mode B never touches Docker). One GET against the executions API —
+ * the recent window — folds into an at-a-glance execution health summary.
  *
  * Dashboard section key: `executions` (config `sections.executions`). The
  * dashboard renders status.json sections generically from config; app.js has a
@@ -110,10 +109,13 @@ export async function fetchAllWorkflows(fetchFn, baseUrl, apiKey) {
  *
  * Shape:
  *   { executions: { recent, errors, byWorkflow: [{ name, id, count, errors, lastAt }] } }
- * where recent = size of the recent window, errors = size of the error-only
- * window (which can reach past the recent 100), and byWorkflow is the recent
- * window aggregated per workflow (top ~10 by count desc, so the per-workflow
- * counts sum to `recent`).
+ * where recent = size of the recent window and errors = the failures WITHIN
+ * that same window, so the dashboard's "N recent · M errors" is a real rate.
+ * (An earlier version sourced `errors` from a separate error-only query that
+ * reached past the recent 100; both counts capped at the API limit of 100 and
+ * rendered side by side, which read as a 100% failure rate.) byWorkflow is the
+ * recent window aggregated per workflow (top ~10 by count desc, so the
+ * per-workflow counts sum to `recent`).
  *
  * The executions API can be disabled on an instance; on ANY failure this
  * returns { status: {}, warning: <string> } so the daemon still publishes a
@@ -122,22 +124,23 @@ export async function fetchAllWorkflows(fetchFn, baseUrl, apiKey) {
  * @param {typeof fetch} fetchFn
  * @param {string} baseUrl
  * @param {string} apiKey
- * @param {{ now?: number }} [opts]
+ * @param {{ now?: number, names?: Map<string,string> }} [opts] - `names` is an
+ *   id->name map from the already-fetched workflow list; the executions API
+ *   omits workflowName, so without it the dashboard renders opaque n8n ids.
  * @returns {Promise<{ status: object, warning: (string|null) }>}
  */
-export async function fetchStatus(fetchFn, baseUrl, apiKey, { now = Date.now() } = {}) {
+export async function fetchStatus(fetchFn, baseUrl, apiKey, { now = Date.now(), names = null } = {}) {
   void now; // reserved for future time-window math; keeps the signature stable
   try {
     const recentRes = await apiGet(fetchFn, baseUrl, apiKey, '/api/v1/executions?limit=100');
-    const errorRes = await apiGet(fetchFn, baseUrl, apiKey, '/api/v1/executions?limit=100&status=error');
     const recent = Array.isArray(recentRes.data) ? recentRes.data : [];
-    const errors = Array.isArray(errorRes.data) ? errorRes.data : [];
 
     const byId = new Map();
     for (const e of recent) {
       const id = String(e.workflowId ?? '');
-      // executions without includeData omit the name; fall back gracefully.
-      const name = e.workflowName || (e.workflowData || {}).name || id;
+      // executions without includeData omit the name: prefer whatever the
+      // execution carries, then the caller's workflow-list map, then the id.
+      const name = e.workflowName || (e.workflowData || {}).name || names?.get(id) || id;
       const at = e.startedAt || e.stoppedAt || e.createdAt || null;
       let g = byId.get(id);
       if (!g) { g = { name, id, count: 0, errors: 0, lastAt: null }; byId.set(id, g); }
@@ -150,8 +153,9 @@ export async function fetchStatus(fetchFn, baseUrl, apiKey, { now = Date.now() }
       .sort((a, b) => b.count - a.count || String(a.name).localeCompare(String(b.name)))
       .slice(0, 10);
 
+    const errors = recent.reduce((n, e) => n + (e.status === 'error' ? 1 : 0), 0);
     return {
-      status: { executions: { recent: recent.length, errors: errors.length, byWorkflow } },
+      status: { executions: { recent: recent.length, errors, byWorkflow } },
       warning: null,
     };
   } catch (e) {

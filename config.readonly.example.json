@@ -1,0 +1,48 @@
+{
+  "title": "Po11y",
+  "lede": "Read-only view of an existing n8n: feeds are published by the collector, which only ever GETs from the n8n public API. Set baseUrl to the remote n8n's host so the {host} links below resolve.",
+  "baseUrl": "",
+  "footer": [
+    { "text": "po11y", "href": "https://gitlab.com/labrise/po11y" }
+  ],
+  "cards": {
+    "Actions": [
+      { "name": "New workflow", "sub": "open the n8n editor", "href": "http://{host}:5678/workflow/new" }
+    ],
+    "Monitoring": [
+      { "name": "n8n", "sub": "workflow editor", "href": "http://{host}:5678/",
+        "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}" },
+      { "name": "System health", "sub": "n8n process metrics", "href": "/grafana/d/adv6qmb" },
+      { "name": "Prometheus", "sub": "raw metrics", "href": "http://{host}:9090/" }
+    ]
+  },
+  "tabs": [
+    { "id": "map", "label": "Map", "src": "/site/map.html" },
+    { "id": "arch", "label": "Architecture", "src": "/site/ai-map.html" }
+  ],
+  "sections": {
+    "executions": "Workflow executions"
+  },
+  "metrics": {
+    "heading": "Metrics",
+    "grafana": {
+      "embed": true,
+      "base": "/grafana",
+      "dashboard": "adv6qmb",
+      "panels": [
+        { "id": 3, "title": "Instance uptime", "span": 1, "h": 160 },
+        { "id": 5, "title": "Active workflows", "span": 1, "h": 160 },
+        { "id": 1, "title": "n8n version", "span": 1, "h": 160 },
+        { "id": 46, "title": "Heap %", "span": 1, "h": 160 },
+        { "id": 42, "title": "CPU usage", "span": 2, "h": 300 },
+        { "id": 44, "title": "Memory (RSS)", "span": 2, "h": 300 },
+        { "id": 43, "title": "Event loop latency", "span": 4, "h": 260 }
+      ],
+      "range": "now-24h"
+    },
+    "promBase": "/prom"
+  },
+  "refreshSec": 30,
+  "staleAfterMin": 20,
+  "statusHint": "status.json missing — the first collector poll runs at startup, then every POLL_INTERVAL (default 600 s)"
+}
