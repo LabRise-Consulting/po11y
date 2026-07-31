@@ -21,7 +21,8 @@
     { "id": "arch", "label": "Architecture", "src": "/site/ai-map.html" }
   ],
   "sections": {
-    "executions": "Workflow executions"
+    "executions": "Workflow executions",
+    "notifications": "Alerts"
   },
   "metrics": {
     "heading": "Metrics",

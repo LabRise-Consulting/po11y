@@ -122,6 +122,11 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=${DASHBOARD_GRAFANA_EMBED:-true}
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       - GF_SECURITY_ALLOW_EMBEDDING=${DASHBOARD_GRAFANA_EMBED:-true}
+      # Where Mode A alerts are delivered. Unset is fine and is the default: the
+      # rules still evaluate and fire, they just have no contact point (see the
+      # entrypoint below and observability/grafana/alerting/rules.yml).
+      # This is a credential — see docs/alerting.md.
+      - GRAFANA_ALERT_WEBHOOK_URL=${GRAFANA_ALERT_WEBHOOK_URL:-}
     entrypoint:
       - sh
       - -euc
@@ -130,9 +135,23 @@ services:
         cp -r /etc/grafana/provisioning-src /tmp/grafana-provisioning
         sed -i "s|__WEB_BIND_ADDR__|$$BIND_ADDR|g" /tmp/grafana-provisioning/dashboards/json/*.json
         sed -i "s|/etc/grafana/provisioning/|/tmp/grafana-provisioning/|g" /tmp/grafana-provisioning/dashboards/dashboards.yml
+        # Alerting rules are Mode A only, so they are mounted from a directory
+        # OUTSIDE provisioning-src — docker-compose.readonly.yml shares
+        # provisioning-src, and four of the five rules read a postgres that does
+        # not exist in Mode B.
+        cp -r /etc/grafana/alerting-src /tmp/grafana-provisioning/alerting
+        # Grafana refuses to start on a webhook contact point with an empty url,
+        # and a policy naming an absent contact point is equally fatal. With no
+        # GRAFANA_ALERT_WEBHOOK_URL the rules stay active and visible; only
+        # delivery is dropped. Both files go or neither does.
+        if [ -z "$$GRAFANA_ALERT_WEBHOOK_URL" ]; then
+          rm -f /tmp/grafana-provisioning/alerting/contact-points.yml \
+                /tmp/grafana-provisioning/alerting/policies.yml
+        fi
         exec /run.sh
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning-src:ro
+      - ./observability/grafana/alerting:/etc/grafana/alerting-src:ro
       - grafana_data:/var/lib/grafana
     depends_on:
       - postgres

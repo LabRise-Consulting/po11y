@@ -15,3 +15,15 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["__N8N_METRICS_TARGET__"]
+
+  # The collector's own view of n8n. Distinct from the `n8n` job above and not a
+  # duplicate of it: that one needs N8N_METRICS=true on the remote and reports
+  # only that a port answers, whereas this one is produced by the same API calls
+  # and API key the dashboard depends on. An expired key leaves the `n8n` job
+  # green and this one reporting po11y_n8n_up 0 — which is the failure that
+  # actually breaks po11y. Port 8081 is unpublished; this is compose-network
+  # only.
+  - job_name: po11y-collector
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["collector:8081"]

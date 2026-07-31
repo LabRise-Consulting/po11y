@@ -14,11 +14,28 @@
     :root { --bg: #111113; --fg: #e4e4e7; --muted: #a1a1aa; }
   }
   body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
-         font: 14px/1.5 system-ui, sans-serif; }
-  .meta { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
-  #map { overflow-x: auto; }
-  #map svg { max-width: none; }
+         font: 14px/1.5 system-ui, sans-serif;
+         display: flex; flex-direction: column; height: 100vh;
+         box-sizing: border-box; overflow: hidden; }
+  .meta { color: var(--muted); font-size: 12px; margin-bottom: 8px; flex: none; }
+  /* The viewport clips; #map is the single transformed layer inside it. Panning
+     moves #map rather than scrolling #viewport, so the transform is the only
+     source of truth for where the diagram sits. */
+  #viewport { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden;
+              cursor: grab; touch-action: none; }
+  #viewport.panning { cursor: grabbing; }
+  #map { position: absolute; top: 0; left: 0; transform-origin: 0 0;
+         will-change: transform; }
+  #map svg { max-width: none; display: block; }
   #map g.node.clickable { cursor: pointer; }
+  /* Controls sit above the viewport and must never inherit its pan handlers. */
+  .zoom { position: absolute; right: 10px; bottom: 10px; z-index: 10;
+          display: flex; gap: 4px; }
+  .zoom button { width: 30px; height: 30px; border-radius: 7px; cursor: pointer;
+                 border: 1px solid var(--muted); background: var(--bg); color: var(--fg);
+                 font: 14px/1 system-ui, sans-serif; padding: 0; }
+  .zoom button:hover { border-color: var(--fg); }
+  .zoom button:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex;
              align-items: center; justify-content: center; padding: 20px; z-index: 20; }
   .overlay[hidden] { display: none; }
@@ -34,7 +51,14 @@
 </head>
 <body>
 <p class="meta" id="meta">loading map…</p>
-<div id="map"></div>
+<div id="viewport">
+  <div id="map"></div>
+  <div class="zoom" id="zoom" hidden>
+    <button id="z-out" aria-label="zoom out" title="Zoom out (−)">−</button>
+    <button id="z-in" aria-label="zoom in" title="Zoom in (+)">+</button>
+    <button id="z-fit" aria-label="fit map to view" title="Fit to view (0)">⤢</button>
+  </div>
+</div>
 <div class="overlay" id="overlay" hidden>
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
     <button class="close" id="dlg-close" aria-label="close">✕</button>
@@ -44,7 +68,89 @@
   </div>
 </div>
 <script src="/vendor/mermaid.min.js"></script>
-<script>
+<script type="module">
+import { clampScale, zoomAt, fitView, isClick } from './map.lib.js';
+
+// ---- pan/zoom ---------------------------------------------------------------
+// One transform on #map is the only state: translate(x, y) scale(k) with
+// transform-origin 0 0. All the maths lives in map.lib.js (unit-tested); this
+// block is just wiring — measure, listen, apply.
+const viewport = document.getElementById('viewport');
+const canvas = document.getElementById('map');
+let view = { x: 0, y: 0, k: 1 };
+let content = { width: 0, height: 0 };
+// Once the reader has framed the map themselves, a resize must not yank it back
+// to the default fit.
+let touched = false;
+
+const boxOf = () => {
+  const r = viewport.getBoundingClientRect();
+  return { width: r.width, height: r.height };
+};
+function setView(v) {
+  view = { x: v.x, y: v.y, k: clampScale(v.k) };
+  canvas.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
+}
+function fit() { setView(fitView(content, boxOf())); }
+function zoomBy(factor, anchor) {
+  const b = boxOf();
+  touched = true;
+  setView(zoomAt(view, anchor || { x: b.width / 2, y: b.height / 2 }, factor));
+}
+
+// Wheel zooms about the pointer. Exponential in deltaY so a trackpad flick and
+// a mouse notch both feel proportional rather than linear-then-jumpy.
+viewport.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const r = viewport.getBoundingClientRect();
+  zoomBy(Math.exp(-e.deltaY * 0.0015), { x: e.clientX - r.left, y: e.clientY - r.top });
+}, { passive: false });
+
+// Drag to pan. Pointer capture keeps the gesture alive when the cursor leaves
+// the iframe mid-drag, which is easy to do on a large map.
+let panning = null;
+let travel = { dx: 0, dy: 0 };
+viewport.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  panning = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y };
+  travel = { dx: 0, dy: 0 };
+  try { viewport.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+  viewport.classList.add('panning');
+});
+viewport.addEventListener('pointermove', (e) => {
+  if (!panning || e.pointerId !== panning.id) return;
+  travel = { dx: e.clientX - panning.sx, dy: e.clientY - panning.sy };
+  touched = true;
+  setView({ x: panning.ox + travel.dx, y: panning.oy + travel.dy, k: view.k });
+});
+function endPan(e) {
+  if (!panning || e.pointerId !== panning.id) return;
+  try { viewport.releasePointerCapture(panning.id); } catch { /* already gone */ }
+  panning = null;
+  viewport.classList.remove('panning');
+}
+viewport.addEventListener('pointerup', endPan);
+viewport.addEventListener('pointercancel', endPan);
+
+// The controls live inside #viewport, so swallow the press or every button
+// click would also begin a pan.
+document.getElementById('zoom').addEventListener('pointerdown', (e) => e.stopPropagation());
+document.getElementById('z-in').addEventListener('click', () => zoomBy(1.25));
+document.getElementById('z-out').addEventListener('click', () => zoomBy(1 / 1.25));
+document.getElementById('z-fit').addEventListener('click', () => { touched = false; fit(); });
+viewport.addEventListener('dblclick', (e) => {
+  const r = viewport.getBoundingClientRect();
+  zoomBy(1.5, { x: e.clientX - r.left, y: e.clientY - r.top });
+});
+addEventListener('keydown', (e) => {
+  if (!overlay.hidden) return;                       // dialog owns the keyboard
+  if (e.key === '+' || e.key === '=') zoomBy(1.25);
+  else if (e.key === '-') zoomBy(1 / 1.25);
+  else if (e.key === '0') { touched = false; fit(); }
+});
+// Refit on resize only while the reader has not framed it themselves.
+addEventListener('resize', () => { if (!touched) fit(); });
+
 // Dialog + n8n deep-link base — hand-synced duplicates of site/ai-map.html's
 // helpers (site/* accepts tiny duplication over a shared module). Title/body
 // go in via textContent, the link via a validated base + encoded id.
@@ -94,8 +200,26 @@ async function resolveN8nBase() {
     if (!r.ok) throw new Error('map.json missing — is the workflow-map workflow active?');
     const d = await r.json();
     const { svg } = await mermaid.render('wfmap', d.mermaid);
-    document.getElementById('map').innerHTML = svg;
+    canvas.innerHTML = svg;
     meta.textContent = `${d.workflows} workflows · generated ${new Date(d.generated_at).toLocaleString()}`;
+
+    // Measure the diagram, then frame it. Mermaid sets an inline max-width that
+    // would otherwise cap the SVG at its natural size and fight the transform,
+    // so pin the element to its true viewBox dimensions and let scale() do the
+    // resizing. viewBox is authoritative; clientWidth is the fallback for an
+    // SVG that somehow arrives without one.
+    const svgEl = canvas.querySelector('svg');
+    if (svgEl) {
+      const vb = svgEl.viewBox?.baseVal;
+      content = (vb && vb.width)
+        ? { width: vb.width, height: vb.height }
+        : { width: svgEl.clientWidth, height: svgEl.clientHeight };
+      svgEl.style.maxWidth = 'none';
+      svgEl.setAttribute('width', content.width);
+      svgEl.setAttribute('height', content.height);
+      document.getElementById('zoom').hidden = false;
+      fit();
+    }
 
     // Clickable workflow nodes: map.json.entries links each mermaid node id
     // (nid) back to the raw n8n id + description. Older publishers without
@@ -122,8 +246,13 @@ async function resolveN8nBase() {
       const e = m && entries.get(m[1]);
       if (!e) return;
       g.classList.add('clickable');
-      g.addEventListener('click', () => openDialog(e.name, summaries.get(String(e.id)) || e.sub || '',
-        n8nBase ? `${n8nBase}/workflow/${encodeURIComponent(String(e.id))}` : null));
+      g.addEventListener('click', () => {
+        // A pan that happened to start on this node still ends with a click
+        // event here — only open the dialog if the pointer barely moved.
+        if (!isClick(travel.dx, travel.dy)) return;
+        openDialog(e.name, summaries.get(String(e.id)) || e.sub || '',
+          n8nBase ? `${n8nBase}/workflow/${encodeURIComponent(String(e.id))}` : null);
+      });
     });
   } catch (e) {
     meta.textContent = e.message;

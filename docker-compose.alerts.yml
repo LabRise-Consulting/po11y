@@ -1,0 +1,71 @@
+# Po11y alerting overlay — Prometheus rules + Alertmanager, on top of Mode B.
+#
+# Opt-in, exactly like docker-compose.auth.yml: the default Mode B stack stays
+# one read-only collector plus the dashboard, and nobody who does not want a
+# second alerting daemon has to run one.
+#
+#   docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml up -d
+#
+# Required:
+#   ALERTMANAGER_WEBHOOK_URL   where Alertmanager POSTs. Any webhook receiver —
+#                              an n8n webhook node is the natural choice here.
+#                              This is a credential; see docs/security.md.
+#
+# This is an alternative to the collector's own ALERT_WEBHOOK_URL push, not a
+# companion to it. Running both means every alert arrives twice.
+services:
+  prometheus:
+    # `entrypoint` is REPLACED by an overlay, never merged, so the base command
+    # is repeated here verbatim with the rule/alerting fragment appended to the
+    # rendered config. Keep this in sync with docker-compose.readonly.yml.
+    entrypoint:
+      - /bin/sh
+      - -euc
+      - |
+        sed "s|__N8N_METRICS_TARGET__|$$N8N_METRICS_TARGET|g" \
+          /etc/prometheus/prometheus.readonly.yml > /prometheus/prometheus.rendered.yml
+        cat /etc/prometheus/prometheus.alerting.yml >> /prometheus/prometheus.rendered.yml
+        exec /bin/prometheus \
+          --config.file=/prometheus/prometheus.rendered.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-180d}
+    # Volume lists merge by target path, so only the additions are listed.
+    volumes:
+      - ./observability/prometheus.alerting.yml:/etc/prometheus/prometheus.alerting.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: po11y-alertmanager
+    restart: unless-stopped
+    ports:
+      # Loopback by default, same posture as prometheus and grafana: the
+      # Alertmanager UI can silence alerts and read every alert label, and it
+      # has no authentication of its own.
+      - "${BIND_ADDR:-127.0.0.1}:9093:9093"
+    environment:
+      - ALERTMANAGER_WEBHOOK_URL=${ALERTMANAGER_WEBHOOK_URL:?set ALERTMANAGER_WEBHOOK_URL to the endpoint Alertmanager should POST to}
+    # The URL is written to a file the config reads via url_file, rather than
+    # sed'd into the config: & in a query string is special on the right-hand
+    # side of sed's s||| and would corrupt the URL silently.
+    entrypoint:
+      - /bin/sh
+      - -euc
+      - |
+        printf '%s' "$$ALERTMANAGER_WEBHOOK_URL" > /alertmanager/webhook_url
+        chmod 600 /alertmanager/webhook_url
+        exec /bin/alertmanager \
+          --config.file=/etc/alertmanager/alertmanager.yml \
+          --storage.path=/alertmanager
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  alertmanager_data:

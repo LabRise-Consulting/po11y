@@ -57,7 +57,8 @@ health, and the official webhook/form dashboards from
 
 ![Grafana execution analytics](docs/img/grafana.png)
 
-Plus a simpler auto-generated **Map** tab, a staleness badge when the status
+Plus a simpler auto-generated **Map** tab — pan by dragging, zoom with the
+wheel, the buttons or `+`/`-`, and `0` to refit — a staleness badge when the status
 feed stops updating, dark/light theme, and extra tabs for any pages you want
 to serve.
 
@@ -79,6 +80,14 @@ Then open:
 Everything binds to `127.0.0.1` by default. To reach it from other devices,
 set `BIND_ADDR` in `.env` to a private VPN or LAN IP (and set
 `DASHBOARD_BASIC_AUTH`, see [docs/security.md](docs/security.md)).
+
+**Alerting is on from the first boot.** Five Grafana rules — failing, stale,
+stuck, queue backlog and n8n unreachable — evaluate against n8n's own database
+and show up under *Alerting* in Grafana with no configuration. Set
+`GRAFANA_ALERT_WEBHOOK_URL` when you want them to leave the box. Mode A is the
+only mode that can see stuck executions and queue depth at all; see
+[docs/alerting.md](docs/alerting.md) for why, and for the three other
+mechanisms.
 
 Bootstrap imports and activates a few normal n8n workflows; open them in the
 editor to see how they work:
@@ -119,7 +128,10 @@ workflows write; the dashboard doesn't know or care which mode produced them.
   offers no scope picker, the key is full-access, so create it under a
   dedicated, low-privilege operator account instead.
 - Optionally, set `N8N_METRICS=true` on the remote n8n so Prometheus has
-  something to scrape. Without it the Grafana tab is simply empty.
+  something to scrape. Without it the Grafana tab is simply empty, and no alert
+  rule depends on it. n8n serves `/metrics` unauthenticated on its main port, so
+  read [docs/security.md](docs/security.md#turning-on-n8n_metrics-upstream-is-a-real-exposure)
+  before asking the remote's operator to enable it.
 
 **Env vars** (`.env`; see the "Mode B" block in [`.env.example`](.env.example)
 for the full list with defaults):
@@ -156,6 +168,28 @@ instead of a container list (there's no Docker socket); the Mode B example
 config enables that `executions` section for you. Set `baseUrl` to the remote
 n8n's host (a bare hostname, not a URL) so the `{host}` deep links resolve.
 
+**Optional watchdog.** Set `ALERTS_ENABLED=true` and the collector evaluates
+three rules on each poll, writing anything worth saying into the notifications
+feed the dashboard already renders: `failing` (a workflow erroring above both a
+count and a rate floor), `stale` (no *successful* run within its budget —
+including an active workflow with no executions at all) and `stuck` (an
+execution sitting in `running` past its budget). It costs no extra n8n calls: it
+reads the same execution window `status.json` is built from. Staleness is
+measured from the last success rather than the last run, so a workflow failing
+every five minutes still ages into an alert. Set `ALERT_WEBHOOK_URL` to also
+push those alerts to Slack, Discord, Telegram or any webhook (an n8n one, if
+you want it to end up as email).
+
+Those three rules are computed *from* n8n, so a poll that can't reach n8n at all
+raises a fourth alert of its own (`unreachable`) rather than going quiet on the
+outage you most wanted to hear about — deduped the same way, so a long outage is
+one message and a recovery. Neither survives the box itself dying, which is what
+`ALERT_HEARTBEAT_URL` is for: the collector pings it after every successful poll
+and something off-box (Healthchecks.io, Uptime Kuma, Better Stack) alerts when
+the pings stop. See
+[docs/configuration.md](docs/configuration.md) for the budgets and
+`.env.example` for every variable.
+
 Mode B's Grafana is Prometheus-only, so the example config embeds the
 **System health** dashboard. The execution-analytics dashboard is backed by
 n8n's postgres database, which Mode B never connects to — its panels stay
@@ -167,6 +201,9 @@ the `/n8n-table/` list-tab proxy isn't wired up for a remote n8n yet.
 
 ## Going further
 
+- [docs/alerting.md](docs/alerting.md): the four alerting mechanisms side by
+  side, which mode each belongs to, and why they are alternatives rather than
+  layers.
 - [docs/security.md](docs/security.md): the security posture of both modes,
   the exposure interlock, and why read authorization is out of scope.
 - [docs/forward-auth.md](docs/forward-auth.md): optional OIDC overlay

@@ -1,0 +1,24 @@
+# Routing for Mode A alerts.
+#
+# Provisioned as a pair with contact-points.yml: the entrypoint deletes both
+# when GRAFANA_ALERT_WEBHOOK_URL is unset, because a policy naming a contact point that
+# does not exist is a provisioning error.
+#
+# Timings are copied from observability/alertmanager.yml so Mode A and Mode B
+# behave identically, and group_by/repeat_interval match the reasoning there and
+# in collector/notify.mjs: one outage should be one message, and a dozen
+# separate pings is how a channel gets muted. repeat_interval 6h is the same
+# default as the collector's ALERT_RENOTIFY_MIN (360 minutes).
+#
+# NOTE: this REPLACES Grafana's default policy tree, which is what stops alerts
+# falling through to the built-in, unconfigured grafana-default-email contact
+# point.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: po11y-webhook
+    group_by: ['alertname']
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 6h

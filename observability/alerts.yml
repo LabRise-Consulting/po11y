@@ -1,0 +1,77 @@
+# Prometheus alerting rules for po11y (Mode B). Loaded only when the alerting
+# overlay is in play — see docker-compose.alerts.yml.
+#
+# The thresholds here are the same defaults the in-collector watchdog documents
+# in .env.example, restated as PromQL. Running both is supported but means
+# double notification: pick one path, or leave ALERTS_ENABLED=false and let
+# Alertmanager own routing.
+groups:
+  - name: po11y
+    interval: 60s
+    rules:
+      # Nothing else in this file can fire if the collector itself is gone --
+      # every other rule reads a series the collector produces. This is the one
+      # rule that does not depend on po11y being alive.
+      - alert: Po11yCollectorDown
+        expr: up{job="po11y-collector"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "po11y collector is not being scraped"
+          description: "Prometheus cannot scrape collector:8081. The dashboard feeds are almost certainly stale too."
+
+      # The collector is alive and telling us it cannot reach n8n: down, hung,
+      # or the API key stopped working.
+      - alert: Po11yN8nUnreachable
+        expr: po11y_n8n_up == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "n8n is unreachable from the po11y collector"
+          description: "The collector has failed to reach the n8n API for over 10 minutes."
+
+      # Belt-and-braces for a poll loop that wedged without throwing: the gauge
+      # says up, but nothing has completed. 1800s is 3x the default 600s poll.
+      - alert: Po11yPollStalled
+        expr: time() - po11y_poll_last_success_timestamp_seconds > 1800
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "po11y has not completed a poll in over 30 minutes"
+          description: "Last successful poll was {{ $value | humanizeDuration }} ago."
+
+      - alert: Po11yWorkflowFailing
+        expr: increase(po11y_workflow_errors_total[1h]) >= 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Workflow {{ $labels.workflow_name }} is failing"
+          description: "{{ $value | printf \"%.0f\" }} errored executions in the last hour."
+
+      # Staleness is measured from last SUCCESS, never last run: a workflow
+      # erroring every five minutes has a perfectly fresh last-run timestamp,
+      # so a run-based rule stays silent on exactly the workflow that needs
+      # attention. Workflows that have never succeeded export no series here
+      # and are covered by Po11yWorkflowFailing instead -- see the comment in
+      # metrics.mjs on why zero-filling would be worse.
+      - alert: Po11yWorkflowStale
+        expr: time() - po11y_workflow_last_success_timestamp_seconds > 21600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Workflow {{ $labels.workflow_name }} has not succeeded in 6 hours"
+          description: "Last success was {{ $value | humanizeDuration }} ago."
+
+      - alert: Po11yWorkflowStuck
+        expr: po11y_workflow_running_seconds > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Workflow {{ $labels.workflow_name }} has an execution stuck for over an hour"
+          description: "Oldest running execution started {{ $value | humanizeDuration }} ago."

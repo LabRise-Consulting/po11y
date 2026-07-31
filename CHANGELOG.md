@@ -8,6 +8,16 @@ versioned yet, so `main` is the only line.
 
 ### Added
 
+- Collector `/metrics`: Prometheus exposition on the existing health port
+  (`po11y_n8n_up`, `po11y_poll_last_success_timestamp_seconds`,
+  `po11y_workflow_errors_total`, `po11y_workflow_last_success_timestamp_seconds`,
+  `po11y_workflow_running_seconds`), scraped by the Mode B Prometheus. The error
+  metric is a true accumulated counter rather than the sliding execution
+  window, so `increase()` and `rate()` behave.
+- `docker-compose.alerts.yml`: opt-in Prometheus rules + Alertmanager overlay
+  for Mode B, with an inhibit rule so one unreachable n8n reports as one alert
+  instead of one per workflow. An alternative to the collector's own webhook
+  push, not a companion to it.
 - `SECURITY.md`: confidential-issue disclosure process, plus an explicit
   in-scope/out-of-scope list so the documented design trade-offs in
   `docs/security.md` don't get re-reported as vulnerabilities.

@@ -48,7 +48,7 @@ test:
   script:
     # Directory-scoped node test runner. Node expands the ** glob itself (it is
     # quoted so the shell leaves it alone).
-    - node --test "site/**/*.test.mjs" "lib/**/*.test.mjs"
+    - node --test "site/**/*.test.mjs" "lib/**/*.test.mjs" "collector/**/*.test.mjs"
 
 sync-check:
   # Enforces that the three builder Code nodes in workflows/core/maps.json are
@@ -120,6 +120,8 @@ compose-config:
     OAUTH2_PROXY_CLIENT_SECRET: dummy
     # 32-byte secret (base64url) — oauth2-proxy requires exactly 16/24/32 bytes.
     OAUTH2_PROXY_COOKIE_SECRET: cG8xMXktY2ktZHVtbXktY29va2llLXNlY3JldC0zMmI
+    # Alerting overlay required (:?) var.
+    ALERTMANAGER_WEBHOOK_URL: http://example:5678/webhook/dummy
   before_script:
     # docker:27 ships the docker CLI but not the compose plugin.
     - apk add --no-cache docker-cli-compose
@@ -129,6 +131,10 @@ compose-config:
     # Both base modes must also merge cleanly with the forward-auth overlay.
     - docker compose -f docker-compose.yml -f docker-compose.auth.yml --project-name po11y-ci-check config -q
     - docker compose -f docker-compose.readonly.yml -f docker-compose.auth.yml --project-name po11y-ci-check config -q
+    # The alerting overlay must merge cleanly onto Mode B, alone and stacked
+    # with forward-auth.
+    - docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml --project-name po11y-ci-check config -q
+    - docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml -f docker-compose.auth.yml --project-name po11y-ci-check config -q
     # The two dashboard entrypoints carry the security-sensitive auth/form
     # rendering matrix and must stay byte-identical across modes (same
     # invariant style as sync-check for the workflow nodes).
@@ -152,12 +158,14 @@ smoke:
   stage: smoke
   image: docker:27
   # dind needs a privileged runner, and untagged jobs can land on runners
-  # that don't provide one. po11y-dind = a self-hosted privileged runner.
+  # that don't provide one. `dind` = any privileged runner in the group that
+  # advertises it, rather than one specific host — a single-host tag means the
+  # whole smoke stage stops the moment that host is asleep.
   tags:
-    - po11y-dind
+    - dind
   rules:
-    # That runner only exists on the canonical project. Elsewhere (a fork, a
-    # contributor's namespace) the job would hang forever waiting for a tag
+    # Privileged runners are provided by the labrise group. Elsewhere (a fork,
+    # a contributor's namespace) the job would hang forever waiting for a tag
     # nobody provides, so skip it rather than stall the pipeline — the six
     # validate jobs above still run and are the gate that matters for review.
     - if: '$CI_PROJECT_PATH != "labrise/po11y"'

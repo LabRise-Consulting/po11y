@@ -7,6 +7,7 @@ import {
   apiGet,
   fetchAllWorkflows,
   fetchStatus,
+  fetchExecutions,
   buildAll,
   makeLlm,
   atomicWriteFile,
@@ -144,6 +145,19 @@ test('fetchStatus builds the executions summary shape, sorted by count desc', as
   assert.deepEqual(ex.byWorkflow[1], { name: 'Beta', id: '2', count: 1, errors: 0, lastAt: '2026-07-19T01:30:00Z' });
 });
 
+test('fetchStatus counts crashed executions as errors, both totals and per-workflow', async () => {
+  const recent = [
+    { workflowId: '1', workflowName: 'Alpha', status: 'crashed', startedAt: '2026-07-19T01:00:00Z' },
+    { workflowId: '1', workflowName: 'Alpha', status: 'error', startedAt: '2026-07-19T02:00:00Z' },
+    { workflowId: '2', workflowName: 'Beta', status: 'canceled', startedAt: '2026-07-19T01:30:00Z' },
+  ];
+  const { status } = await fetchStatus(async () => jsonRes({ data: recent }), N8N, 'k', {});
+  const ex = status.executions;
+  assert.equal(ex.errors, 2, 'crashed is a failure; canceled is not');
+  assert.equal(ex.byWorkflow.find((w) => w.id === '1').errors, 2);
+  assert.equal(ex.byWorkflow.find((w) => w.id === '2').errors, 0);
+});
+
 test('fetchStatus name falls back to workflowId when the execution omits a name', async () => {
   const fetchFn = async () =>
     jsonRes({ data: [{ workflowId: '42', status: 'success', startedAt: '2026-07-19T00:00:00Z' }] });
@@ -234,4 +248,31 @@ test('apiGet sends the key in X-N8N-API-KEY (header, not query) and throws on no
   await apiGet(ok, N8N, 'my-key', '/api/v1/workflows');
   assert.equal(sawHeader, 'my-key');
   await assert.rejects(() => apiGet(async () => jsonRes({}, 500), N8N, 'k', '/api/v1/workflows'));
+});
+
+// ---- executions reuse -------------------------------------------------------
+test('fetchStatus reuses pre-fetched executions instead of issuing a second GET', async () => {
+  let calls = 0;
+  const fetchFn = async () => { calls++; return jsonRes({ data: [] }); };
+  const executions = [{ workflowId: 'a', status: 'success', startedAt: '2026-07-28T11:00:00Z' }];
+  const { status } = await fetchStatus(fetchFn, N8N, 'k', { now: Date.now(), executions });
+  assert.equal(calls, 0, 'the watchdog and status.json must share one executions fetch');
+  assert.equal(status.executions.recent, 1);
+});
+
+test('fetchExecutions returns the raw execution list via a GET', async () => {
+  const seen = [];
+  const fetchFn = async (url, opts) => {
+    seen.push({ url, method: opts.method });
+    return jsonRes({ data: [{ workflowId: 'a', status: 'error' }] });
+  };
+  const out = await fetchExecutions(fetchFn, N8N, 'k');
+  assert.equal(out.length, 1);
+  assert.equal(seen[0].method, 'GET');
+  assert.match(seen[0].url, /\/api\/v1\/executions\?limit=100/);
+});
+
+test('fetchExecutions returns an empty list when the executions API is disabled', async () => {
+  const fetchFn = async () => jsonRes({ message: 'not found' }, 404);
+  assert.deepEqual(await fetchExecutions(fetchFn, N8N, 'k'), []);
 });

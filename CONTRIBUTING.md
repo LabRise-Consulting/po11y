@@ -9,7 +9,7 @@ issue, not a public one.
 Everything CI runs is runnable locally, and none of it needs the stack up:
 
 ```sh
-node --test "site/**/*.test.mjs" "lib/**/*.test.mjs"   # unit tests
+node --test "site/**/*.test.mjs" "lib/**/*.test.mjs" "collector/**/*.test.mjs"   # unit tests
 node tools/sync-workflows.mjs --check                   # workflow/lib sync gate
 shellcheck bootstrap.sh ai-map-cli.sh ci/smoke.sh ci/check-expired-markers.sh
 docker compose -f docker-compose.yml config -q          # compose syntax

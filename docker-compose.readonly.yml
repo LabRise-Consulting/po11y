@@ -45,6 +45,31 @@ services:
       - AI_MAP_BASE_URL=${AI_MAP_BASE_URL:-}
       - AI_MAP_API_KEY=${AI_MAP_API_KEY:-}
       - AI_MAP_MODEL=${AI_MAP_MODEL:-}
+      # Optional watchdog. Off unless ALERTS_ENABLED=true; when on it reuses the
+      # execution window already fetched for status.json (no extra n8n calls,
+      # still GET-only) and prepends to notifications.json.
+      - ALERTS_ENABLED=${ALERTS_ENABLED:-false}
+      - ALERT_MIN_ERRORS=${ALERT_MIN_ERRORS:-3}
+      - ALERT_ERROR_RATE=${ALERT_ERROR_RATE:-0.5}
+      - ALERT_STALE_AFTER_MIN=${ALERT_STALE_AFTER_MIN:-0}
+      - ALERT_STUCK_AFTER_MIN=${ALERT_STUCK_AFTER_MIN:-0}
+      - ALERT_RENOTIFY_MIN=${ALERT_RENOTIFY_MIN:-360}
+      - ALERT_IGNORE=${ALERT_IGNORE:-}
+      - ALERT_RULES_FILE=${ALERT_RULES_FILE:-}
+      - ALERT_FEED_MAX=${ALERT_FEED_MAX:-50}
+      # Optional outbound push. The URL is a credential for slack/telegram —
+      # it stays in this process env, is never logged in full and never written
+      # into a feed. Empty = alerts stay in notifications.json only.
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+      - ALERT_WEBHOOK_FORMAT=${ALERT_WEBHOOK_FORMAT:-slack}
+      - ALERT_TELEGRAM_CHAT_ID=${ALERT_TELEGRAM_CHAT_ID:-}
+      - ALERT_WEBHOOK_TIMEOUT_MS=${ALERT_WEBHOOK_TIMEOUT_MS:-10000}
+      # Optional off-box dead-man switch, GETed after every successful poll.
+      # Independent of ALERTS_ENABLED: it answers "is po11y alive at all",
+      # which nothing running inside this container can answer for itself.
+      # Also a credential (monitor id in the path) — same redaction rules.
+      - ALERT_HEARTBEAT_URL=${ALERT_HEARTBEAT_URL:-}
+      - ALERT_HEARTBEAT_TIMEOUT_MS=${ALERT_HEARTBEAT_TIMEOUT_MS:-10000}
     read_only: true
     user: node
     volumes:

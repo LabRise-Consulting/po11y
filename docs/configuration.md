@@ -70,6 +70,153 @@ Newest first. The dashboard shows the newest 5 with a "show all" toggle.
     "link": "https://…" } ]
 ```
 
+In Mode A an n8n sub-workflow owns this file. In Mode B the collector's optional
+watchdog writes it (`ALERTS_ENABLED=true`, see the "Mode B" block in
+`.env.example`), prepending new entries and truncating to `ALERT_FEED_MAX`.
+Enable the `notifications` section in `config.json` to render them.
+
+The watchdog evaluates three rules against the execution window it already
+fetches for `status.json` — no extra n8n calls, still GET-only:
+
+| rule | fires when | budget |
+|------|-----------|--------|
+| `failing` | errors clear both `ALERT_MIN_ERRORS` and `ALERT_ERROR_RATE` in the window | both floors, defaults 3 and 0.5 |
+| `stale` | no *successful* execution within the budget, including an active workflow with no executions at all | `ALERT_STALE_AFTER_MIN`, 0 = off |
+| `stuck` | an execution has sat in `running` past the budget | `ALERT_STUCK_AFTER_MIN`, 0 = off |
+| `unreachable` | a poll could not reach n8n at all | always on with `ALERTS_ENABLED=true` |
+
+The first three are derived from data fetched *out of* n8n, so when n8n itself
+is down, hung or rejecting the API key there is nothing to evaluate and all
+three go quiet on exactly the outage that matters most. `unreachable` covers
+that gap: the collector raises it from the failure path, before any workflow
+data exists. It dedupes like every other rule, so a two-day outage is one
+message plus a "recovered" — not one per `POLL_INTERVAL`.
+
+A failed poll knows nothing about workflows, so it deliberately does **not**
+touch their alert state. Open `failing`/`stale`/`stuck` alerts are carried
+through the outage untouched rather than being announced as recovered and then
+re-announced when n8n returns.
+
+Staleness is measured from the last **success**, not the last run — a workflow
+failing every five minutes has a very fresh last-run time, and that is exactly
+the workflow a run-based check would never flag. A workflow activated more
+recently than its own budget is given the full budget before it can fire.
+
+An alert that stops being true emits a `success` "recovered" entry.
+
+**Outbound push.** Set `ALERT_WEBHOOK_URL` and the same alerts are also POSTed
+there, batched into one message per poll (a broad outage produces a dozen alerts
+at once, and a dozen separate pings is how a channel gets muted). Long bursts
+truncate with a count. `ALERT_WEBHOOK_FORMAT` picks the body shape:
+
+| format | body | for |
+|--------|------|-----|
+| `slack` | `{text}` | Slack incoming webhooks, Mattermost |
+| `discord` | `{content}` | Discord channel webhooks |
+| `telegram` | `{chat_id, text}` | Telegram bot API; needs `ALERT_TELEGRAM_CHAT_ID` |
+| `raw` | `{text, alerts:[…]}` | anything else — an n8n webhook, most usefully |
+
+The webhook URL is a **credential** for Slack and Telegram, which carry their
+secret in the path. The collector never logs it beyond scheme and host, never
+writes it into a feed, and scrubs it out of transport errors before logging
+them. A failing or hung webhook is reported and the poll continues —
+`ALERT_WEBHOOK_TIMEOUT_MS` (default 10000) bounds how long it can delay one.
+
+There is no SMTP client, deliberately: it would mean a mail dependency,
+credentials on disk and bounce handling. For email, point `raw` at an n8n
+webhook and let n8n send it.
+
+**Dead-man switch.** Everything above runs *inside* the collector, so none of it
+survives the machine dying — a dead process cannot send a message. Detecting
+that requires inverting the direction: set `ALERT_HEARTBEAT_URL` and the
+collector GETs it after every **successful** poll, and something off-box alerts
+when the pings stop. A plain GET is what Healthchecks.io, Uptime Kuma push
+monitors and Better Stack heartbeats all accept.
+
+It is deliberately not gated on `ALERTS_ENABLED` — "is po11y alive at all" and
+"is a workflow misbehaving" are different questions and either is useful without
+the other. The URL is a credential for the same reason the webhook URL is (the
+monitor id sits in the path, and anyone holding it can forge a healthy ping and
+mute the switch), so it gets identical handling: scheme + host in logs, never in
+a feed, scrubbed out of transport errors. A ping that fails is logged and
+otherwise ignored, and never counts against `/healthz` —
+`ALERT_HEARTBEAT_TIMEOUT_MS` (default 10000) bounds how long it can delay a
+poll that has already succeeded.
+
+## Prometheus metrics
+
+The Mode B collector serves the Prometheus text exposition at
+`collector:8081/metrics`, on the same port as `/healthz`. Port 8081 has no
+`ports:` mapping — it is reachable from the compose network only, which is where
+Prometheus scrapes it from. The exported series carry workflow ids, names and
+timestamps: a strict subset of what `map.json` already publishes. No
+configuration, no API key, no execution payloads.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `po11y_n8n_up` | gauge | — | `1` if the last poll reached the n8n API, else `0`. |
+| `po11y_poll_last_success_timestamp_seconds` | gauge | — | Unix time of the last successful poll. Absent until the first one succeeds. |
+| `po11y_workflow_errors_total` | counter | `workflow_id`, `workflow_name` | Failed executions observed since collector start. "Failed" is `error` **or** `crashed`, matching the Grafana dashboards; `canceled` is not a failure. |
+| `po11y_workflow_last_success_timestamp_seconds` | gauge | `workflow_id`, `workflow_name` | Unix time of the workflow's last success. **Absent** for a workflow that has never succeeded. |
+| `po11y_workflow_running_seconds` | gauge | `workflow_id`, `workflow_name` | Age of the oldest currently-running execution; `0` if none. |
+
+Two behaviours worth knowing before you write rules against these:
+
+- **`po11y_workflow_errors_total` is accumulated, not the window count.** The
+  collector reads `/api/v1/executions?limit=100`, a sliding window whose error
+  count goes down as it moves. Exporting that directly would make `increase()`
+  read every slide as a counter reset. The counter resets to zero when the
+  collector restarts, which is a genuine counter reset and handled natively.
+- **A workflow that has never succeeded exports no `last_success` series.**
+  Zero-filling would mean 1970, so every staleness rule would fire instantly on
+  workflows that simply have not run yet. Use `Po11yWorkflowFailing` for that
+  case, or `absent()` if you want to alert on it explicitly.
+
+During an n8n outage the collector keeps serving the last-known per-workflow
+series and only flips `po11y_n8n_up` to `0`. Clearing them would restart every
+Prometheus `for:` duration and turn one outage into a burst of flapping alerts on
+recovery. The cost is that an outage also trips the staleness and stuck rules —
+which is what the shipped Alertmanager inhibit rule exists to collapse.
+
+## Alerting: which of the three paths to use
+
+| Path | Enable with | Best when |
+|---|---|---|
+| `notifications.json` feed only | `ALERTS_ENABLED=true` | You read the dashboard and want no outbound traffic. |
+| Collector push | `ALERTS_ENABLED=true` + `ALERT_WEBHOOK_URL` | You want Slack/Discord/Telegram with nothing else to run. |
+| Prometheus + Alertmanager | the `docker-compose.alerts.yml` overlay | You already run Prometheus, or you want silences, grouping, inhibition and on-call routing. |
+
+These are alternatives. Turning on more than one delivers every alert more than
+once. The overlay path does not need `ALERTS_ENABLED` at all — the metrics
+publish either way.
+
+```bash
+docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml up -d
+```
+
+Alertmanager's UI is at `http://127.0.0.1:9093` (or your `BIND_ADDR`). Rules live
+in `observability/alerts.yml`; the thresholds match the watchdog defaults and are
+meant to be edited.
+
+## `alert-state.json` (Mode B, watchdog only — not web-served)
+
+```json
+{ "<rule>:<workflowId>": { "firstSeen": "…", "lastNotified": "…", "workflowName": "…" } }
+```
+
+The `unreachable` rule is instance-wide rather than per-workflow, so its key has
+an empty id (`unreachable:`) and its notification carries no `link` — a
+`/workflow/…` href would render as a live button that 404s.
+
+Bookkeeping so an alert that is still true isn't re-announced every poll;
+`ALERT_RENOTIFY_MIN` sets the repeat interval (0 = say it once). It lives in the
+feed directory because that is the collector's only writable mount under a
+read-only rootfs — but unlike the five feeds above it is **not** web-served:
+[`nginx.conf`](../nginx.conf) aliases `status`, `notifications`, `map`,
+`ai-map` and `forms` by name, and the scoped `/status/<scope>/<feed>` regex
+enumerates the same five. It is collector-internal state, not a feed. Delete it
+(inside the volume) to force every open alert to re-announce.
+
 ## `/map.json` (written by the Maps workflow)
 
 ```json

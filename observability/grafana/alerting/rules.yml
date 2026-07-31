@@ -1,0 +1,374 @@
+# Grafana unified alerting rules for po11y Mode A.
+#
+# Mode A ONLY. This directory is mounted by docker-compose.yml and deliberately
+# NOT by docker-compose.readonly.yml: four of the five rules read n8n's own
+# Postgres, and Mode B has no postgres (its n8n belongs to someone else and the
+# collector never gets database credentials). Provisioning these in Mode B would
+# leave rules permanently erroring against an inert datasource AND double up
+# with the collector's own watchdog.
+#
+# Why SQL rather than Prometheus: n8n's own /metrics records an execution only
+# when it FINISHES, so a hung execution emits nothing at all — "stuck" is not
+# expressible there. Reading execution_entity sees the row the moment it lands.
+# The same vantage point gives queue depth, which no metrics path has.
+#
+# Thresholds mirror observability/alerts.yml exactly, so Mode A and Mode B alert
+# on the same conditions at the same limits. Change one, change the other.
+#
+# These rules are ALWAYS active. Delivery is what is optional: the contact point
+# and notification policy are provisioned only when GRAFANA_ALERT_WEBHOOK_URL is set
+# (see the grafana entrypoint in docker-compose.yml). Unset, alerts still fire
+# and are visible under Alerting in Grafana; nothing is pushed anywhere.
+#
+# Every rule returns rows ONLY for offending entities, so "no rows" means
+# healthy — hence noDataState: OK. The one exception is Po11yN8nUnreachable,
+# where absent data IS the failure.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: po11y
+    folder: Po11y
+    interval: 60s
+    rules:
+      # ---------------------------------------------------------------------
+      # Mode A's equivalent of Po11yN8nUnreachable. This is the one rule that
+      # does not read the database: if n8n is down, Postgres usually is not, so
+      # a SQL query would happily return "nothing wrong" during an outage.
+      # Prometheus scrapes n8n:5678 directly in Mode A (N8N_METRICS=true), so
+      # `up` is a real liveness signal here in a way it is not in Mode B.
+      #
+      # Condition is `up < 1` rather than `up == 0`: PromQL comparison filters
+      # rather than rewrites, so `up == 0` yields a series whose VALUE is 0 and
+      # a greater-than threshold on it could never fire.
+      - uid: po11y-n8n-unreachable
+        title: Po11yN8nUnreachable
+        condition: B
+        for: 10m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "n8n is not being scraped"
+          description: "Prometheus cannot scrape n8n:5678. n8n is down, hung, or has stopped serving /metrics."
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: n8n-prometheus
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: n8n-prometheus
+              expr: up{job="n8n"}
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+                  operator:
+                    type: and
+                  query:
+                    params: [B]
+                  reducer:
+                    type: last
+                    params: []
+                  type: query
+
+      # ---------------------------------------------------------------------
+      # >= 3 errored executions in the last hour, per workflow. HAVING does the
+      # thresholding in SQL so only offenders come back as rows.
+      - uid: po11y-workflow-failing
+        title: Po11yWorkflowFailing
+        condition: B
+        for: 10m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "Workflow {{ $labels.workflow_name }} is failing"
+          description: "{{ $value | printf \"%.0f\" }} errored executions in the last hour."
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: n8n-postgres
+            model:
+              refId: A
+              datasource:
+                type: postgres
+                uid: n8n-postgres
+              format: table
+              rawQuery: true
+              rawSql: |
+                SELECT w."name" AS workflow_name,
+                       COUNT(*)::float8 AS value
+                FROM execution_entity e
+                JOIN workflow_entity w ON w."id" = e."workflowId"
+                WHERE e."status" IN ('error', 'crashed')
+                  AND e."deletedAt" IS NULL
+                  AND e."startedAt" >= NOW() - INTERVAL '1 hour'
+                GROUP BY w."name"
+                HAVING COUNT(*) >= 3;
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [B]
+                  reducer:
+                    type: last
+                    params: []
+                  type: query
+
+      # ---------------------------------------------------------------------
+      # Staleness is measured from last SUCCESS, never last run: a workflow
+      # erroring every five minutes has a perfectly fresh last-run timestamp,
+      # so a run-based rule stays silent on exactly the workflow that needs
+      # attention. The JOIN is on status='success', so a workflow that has NEVER
+      # succeeded returns no row here and is covered by Po11yWorkflowFailing
+      # instead — the same split the collector makes deliberately.
+      #
+      # Restricted to active workflows: a deactivated workflow is stale by
+      # definition and alerting on it is pure noise.
+      - uid: po11y-workflow-stale
+        title: Po11yWorkflowStale
+        condition: B
+        for: 15m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "Workflow {{ $labels.workflow_name }} has not succeeded in 6 hours"
+          description: "Last success was {{ $value | humanizeDuration }} ago."
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: n8n-postgres
+            model:
+              refId: A
+              datasource:
+                type: postgres
+                uid: n8n-postgres
+              format: table
+              rawQuery: true
+              rawSql: |
+                SELECT w."name" AS workflow_name,
+                       EXTRACT(epoch FROM (NOW() - MAX(e."startedAt")))::float8 AS value
+                FROM workflow_entity w
+                JOIN execution_entity e
+                  ON e."workflowId" = w."id"
+                 AND e."status" = 'success'
+                 AND e."deletedAt" IS NULL
+                WHERE w."active" = true
+                GROUP BY w."name"
+                HAVING MAX(e."startedAt") < NOW() - INTERVAL '6 hours';
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [B]
+                  reducer:
+                    type: last
+                    params: []
+                  type: query
+
+      # ---------------------------------------------------------------------
+      # The rule that only Mode A can express. An execution row with
+      # finished=false and no stoppedAt is in flight right now; n8n's Prometheus
+      # histogram is written on completion, so a hang produces no metric ever.
+      #
+      # status <> 'new' excludes executions that are queued but not yet started
+      # — those are a backlog, not a hang, and get their own rule below.
+      - uid: po11y-workflow-stuck
+        title: Po11yWorkflowStuck
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "Workflow {{ $labels.workflow_name }} has an execution stuck for over an hour"
+          description: "Oldest running execution started {{ $value | humanizeDuration }} ago."
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: n8n-postgres
+            model:
+              refId: A
+              datasource:
+                type: postgres
+                uid: n8n-postgres
+              format: table
+              rawQuery: true
+              rawSql: |
+                SELECT w."name" AS workflow_name,
+                       MAX(EXTRACT(epoch FROM (NOW() - e."startedAt")))::float8 AS value
+                FROM execution_entity e
+                JOIN workflow_entity w ON w."id" = e."workflowId"
+                WHERE e."finished" = false
+                  AND e."stoppedAt" IS NULL
+                  AND e."deletedAt" IS NULL
+                  AND e."status" <> 'new'
+                  AND e."startedAt" IS NOT NULL
+                  AND e."startedAt" < NOW() - INTERVAL '1 hour'
+                GROUP BY w."name";
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [B]
+                  reducer:
+                    type: last
+                    params: []
+                  type: query
+
+      # ---------------------------------------------------------------------
+      # Executions accepted but never started. Distinct from "stuck": nothing is
+      # running, work is piling up in front of the queue. There is no Mode B
+      # counterpart — the collector polls the API, which does not expose this.
+      #
+      # Not grouped per workflow: a backlog is a property of the instance, and
+      # one alert saying "the queue is 40 deep" beats 40 saying "I am waiting".
+      #
+      # Measured from createdAt, NOT startedAt. startedAt is nullable and is set
+      # when an execution actually STARTS — which is precisely what a queued
+      # execution has not done, so `startedAt < NOW() - interval` evaluates NULL
+      # and filters the row out. The rule would have been silently unfireable.
+      # (Verified on a live instance: createdAt <> startedAt on all 7562 rows,
+      # with queue waits up to 153s.) The dashboard's queue panel has the same
+      # startedAt assumption and is worth revisiting.
+      - uid: po11y-queue-backlog
+        title: Po11yQueueBacklog
+        condition: B
+        for: 10m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "n8n has executions queued and not starting"
+          description: "{{ $value | printf \"%.0f\" }} executions have been waiting to start for over 15 minutes."
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: n8n-postgres
+            model:
+              refId: A
+              datasource:
+                type: postgres
+                uid: n8n-postgres
+              format: table
+              rawQuery: true
+              rawSql: |
+                SELECT COUNT(*)::float8 AS value
+                FROM execution_entity
+                WHERE "finished" = false
+                  AND "status" = 'new'
+                  AND "startedAt" IS NULL
+                  AND "deletedAt" IS NULL
+                  AND "createdAt" < NOW() - INTERVAL '15 minutes'
+                HAVING COUNT(*) > 0;
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [B]
+                  reducer:
+                    type: last
+                    params: []
+                  type: query

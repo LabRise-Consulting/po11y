@@ -17,6 +17,7 @@ import { writeFileSync, renameSync } from 'node:fs';
 import { buildMap } from '../lib/build-map.mjs';
 import { buildForms } from '../lib/build-forms.mjs';
 import { buildAiMap } from '../lib/build-ai-map.mjs';
+import { isFailed } from './exec-status.mjs';
 
 /**
  * Read-only GET against the n8n public API. The single choke point that keeps
@@ -129,11 +130,14 @@ export async function fetchAllWorkflows(fetchFn, baseUrl, apiKey) {
  *   omits workflowName, so without it the dashboard renders opaque n8n ids.
  * @returns {Promise<{ status: object, warning: (string|null) }>}
  */
-export async function fetchStatus(fetchFn, baseUrl, apiKey, { now = Date.now(), names = null } = {}) {
+export async function fetchStatus(fetchFn, baseUrl, apiKey, { now = Date.now(), names = null, executions = null } = {}) {
   void now; // reserved for future time-window math; keeps the signature stable
   try {
-    const recentRes = await apiGet(fetchFn, baseUrl, apiKey, '/api/v1/executions?limit=100');
-    const recent = Array.isArray(recentRes.data) ? recentRes.data : [];
+    // The watchdog needs the same list, so the caller may hand it in — one GET
+    // per poll serves both. Absent, we fetch it ourselves (unchanged behaviour).
+    const recent = executions
+      ?? (await apiGet(fetchFn, baseUrl, apiKey, '/api/v1/executions?limit=100')).data;
+    if (!Array.isArray(recent)) throw new Error('executions response had no data array');
 
     const byId = new Map();
     for (const e of recent) {
@@ -146,14 +150,14 @@ export async function fetchStatus(fetchFn, baseUrl, apiKey, { now = Date.now(), 
       if (!g) { g = { name, id, count: 0, errors: 0, lastAt: null }; byId.set(id, g); }
       if (g.name === id && name !== id) g.name = name; // upgrade id->real name
       g.count += 1;
-      if (e.status === 'error') g.errors += 1;
+      if (isFailed(e)) g.errors += 1;
       if (at && (!g.lastAt || new Date(at) > new Date(g.lastAt))) g.lastAt = at;
     }
     const byWorkflow = [...byId.values()]
       .sort((a, b) => b.count - a.count || String(a.name).localeCompare(String(b.name)))
       .slice(0, 10);
 
-    const errors = recent.reduce((n, e) => n + (e.status === 'error' ? 1 : 0), 0);
+    const errors = recent.reduce((n, e) => n + (isFailed(e) ? 1 : 0), 0);
     return {
       status: { executions: { recent: recent.length, errors, byWorkflow } },
       warning: null,
@@ -192,6 +196,34 @@ export function makeLlm(fetchFn, { base, key, model }) {
     const data = await res.json();
     return ((data.choices || [])[0] || {}).message?.content || '';
   };
+}
+
+/**
+ * The recent-executions window, fetched once per poll and shared by status.json
+ * and the watchdog.
+ *
+ * The executions API can be disabled on an instance, and a hard failure here
+ * must not abort a poll that can still publish map/forms/ai-map — so this
+ * degrades to an empty list rather than throwing. An empty list is also the
+ * safe input for the watchdog: no executions means no `failing`/`stuck` alerts,
+ * and `stale` still fires off the workflow list.
+ *
+ * NOTE: `limit=100` is a window, not a complete history. On a busy instance a
+ * failure can age out between polls, so the failing rule is a "is it bad right
+ * now" signal rather than an audit log.
+ *
+ * @param {typeof fetch} fetchFn
+ * @param {string} baseUrl
+ * @param {string} apiKey
+ * @returns {Promise<object[]>}
+ */
+export async function fetchExecutions(fetchFn, baseUrl, apiKey) {
+  try {
+    const res = await apiGet(fetchFn, baseUrl, apiKey, '/api/v1/executions?limit=100');
+    return Array.isArray(res.data) ? res.data : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
