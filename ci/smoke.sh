@@ -183,6 +183,33 @@ check_n8n_table_reaches() {
   case "$code" in 403|000) return 1 ;; *) return 0 ;; esac
 }
 
+# 12. POST /mcp/ tools/list → 200 with all ten tools. The only assertion that
+# exercises the MCP server's real boot path (detectSources -> buildRegistry ->
+# createDispatcher -> createApp, mcp/index.mjs main()) and nginx's variable
+# proxy_pass hop; every unit test fakes the layer below it. Ten is the full set
+# — a source being absent makes a tool answer `unavailable`, never disappear.
+check_mcp_tools_list() {
+  code=$(curl_code POST /mcp/ -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+  tools=$(jq -r '.result.tools | length' "$TMP" 2>/dev/null)
+  LAST="POST /mcp/ -> $code; tools=$tools; body: $(snippet)"
+  [ "$code" = 200 ] || return 1
+  [ "$tools" = 10 ] || return 1
+}
+
+# 13. GET /lib/list-rows.mjs → 200 as JavaScript. The list tab imports this
+# module at runtime, so a broken mount or a missing nginx location blanks the
+# tab silently — and the MIME type is load-bearing too: a browser refuses a
+# module served as anything but a JavaScript type (nginx's stock mime.types has
+# no .mjs entry, hence the default_type in nginx.conf).
+check_lib_module() {
+  code=$(curl_code GET /lib/list-rows.mjs)
+  ctype=$(curl -s -m 10 -o /dev/null -w '%{content_type}' "$BASE_URL/lib/list-rows.mjs" 2>/dev/null || true)
+  LAST="GET /lib/list-rows.mjs -> $code; content-type: $ctype"
+  [ "$code" = 200 ] || return 1
+  case "$ctype" in *javascript*) return 0 ;; *) return 1 ;; esac
+}
+
 printf 'po11y smoke: BASE_URL=%s SMOKE_TIMEOUT=%ss\n' "$BASE_URL" "$SMOKE_TIMEOUT"
 
 wait_for 'root serves po11y dashboard'          check_root
@@ -197,5 +224,7 @@ wait_for 'forms.json lists maps-build-now'      check_forms_json
 wait_for 'grafana health is 200'                check_grafana
 wait_for 'n8n-table non-data-table is 403'      check_n8n_table_deny
 wait_for 'n8n-table data-tables reaches n8n'    check_n8n_table_reaches
+wait_for 'mcp tools/list returns ten tools'     check_mcp_tools_list
+wait_for 'list-rows.mjs serves as javascript'   check_lib_module
 
 echo 'po11y smoke: all assertions passed'

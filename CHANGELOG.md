@@ -8,6 +8,11 @@ versioned yet, so `main` is the only line.
 
 ### Added
 
+- MCP server (`mcp/`): read-only Model Context Protocol endpoint at `/mcp/`,
+  behind the dashboard's existing auth. Ten tools — incidents, workflow health,
+  failure explanation, executions, dependency graph, PromQL, read-only SQL, and
+  three content tools over the datasets your workflows publish. Zero runtime
+  dependencies; execution payloads are never returned.
 - Collector `/metrics`: Prometheus exposition on the existing health port
   (`po11y_n8n_up`, `po11y_poll_last_success_timestamp_seconds`,
   `po11y_workflow_errors_total`, `po11y_workflow_last_success_timestamp_seconds`,

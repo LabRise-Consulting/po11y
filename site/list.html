@@ -59,8 +59,7 @@
   <button class="more" id="more" hidden>load more</button>
 
   <script type="module">
-    import { normalizeRows, sortItems, groupByDay, filterByRange, windowComplete, dedupeById, RANGES }
-      from './list.lib.js';
+    import { sortItems, groupByDay, filterByRange, walkPages, RANGES } from '/lib/list-rows.mjs';
 
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
       (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
@@ -93,31 +92,23 @@
       document.title = settings.title || 'List';
     }
 
-    function url(cursor) {
-      // Endpoint may already carry query params; append the page size and, from
-      // the second page on, the cursor the previous response handed back.
-      const u = new URL(settings.endpoint, location.origin);
-      u.searchParams.set('limit', String(settings.pageSize || 250));
-      if (cursor) u.searchParams.set('cursor', cursor);
-      return u.pathname + u.search;
-    }
-
     // Walk pages until the feed runs out, the selected window is provably
     // covered, or the page budget is spent. Returns the rows plus whether the
     // budget was what stopped it — the only case where `load more` can help.
     // A static JSON feed carries no nextCursor, so it settles after one pass.
+    // forceIdSort is deliberately omitted: the browser keeps honouring the
+    // tab's configured sortBy, exactly as before this walk moved into lib/.
     async function loadRows() {
-      const today = todayIso();
-      let rows = [];
-      let cursor = null;
-      for (let page = 0; page < maxPages; page++) {
-        const payload = await (await fetch(url(cursor), { cache: 'no-store' })).json();
-        rows = dedupeById(rows.concat(normalizeRows(payload, settings.mapping)));
-        cursor = payload && payload.nextCursor;
-        if (!cursor) return { rows, truncated: false };
-        if (windowComplete(rows, range, today)) return { rows, truncated: false };
-      }
-      return { rows, truncated: true };
+      const fetchJson = async (u) => (await fetch(u, { cache: 'no-store' })).json();
+      return walkPages(fetchJson, {
+        endpoint: settings.endpoint,
+        mapping: settings.mapping,
+        pageSize: settings.pageSize || 250,
+        maxPages,
+        range,
+        today: todayIso(),
+        base: location.origin,
+      });
     }
 
     function todayIso() {

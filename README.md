@@ -31,11 +31,11 @@ RBAC) to that n8n instead.
 
 ## What you get
 
-▶ **[Watch the 63-second intro video](https://gitlab.com/labrise/po11y/uploads/9ccb990dbeec81b247148aae5d4738ff/intro.mp4)**
-— hosted as a project upload rather than committed, so cloning the stack
-doesn't drag 27 MB of video along with it. It covers both modes: the bundled
-stack, the dashboard, map and Grafana tabs, then the read-only collector
-running against a separate n8n.
+▶ **[Watch the intro video](https://gitlab.com/labrise/po11y/uploads/d04e082c46c4795f13f9c529b840c926/intro.mp4)**
+
+It covers both modes end to end: the bundled stack, the dashboard, map and
+Grafana tabs, the alert rules and the MCP endpoint, then the read-only
+collector running against a separate n8n.
 
 The **Overview** tab: action buttons (each active form trigger in n8n becomes
 a button automatically), monitoring links, running containers, a notification
@@ -57,10 +57,20 @@ health, and the official webhook/form dashboards from
 
 ![Grafana execution analytics](docs/img/grafana.png)
 
-Plus a simpler auto-generated **Map** tab — pan by dragging, zoom with the
-wheel, the buttons or `+`/`-`, and `0` to refit — a staleness badge when the status
+Plus a simpler auto-generated **Map** tab (pan by dragging, zoom with the
+wheel, the buttons or `+`/`-`, and `0` to refit), a staleness badge when the status
 feed stops updating, dark/light theme, and extra tabs for any pages you want
 to serve.
+
+**Alerting** ships on by default in both modes, with no extra service to run:
+Grafana rules against n8n's database in Mode A, a watchdog in the collector in
+Mode B. Both cover failing, stale and stuck workflows plus an unreachable n8n.
+Mode B can instead run a bundled Prometheus + Alertmanager overlay, which buys
+routing and inhibition: one n8n outage arrives as one message rather than one
+per workflow. It replaces the collector's own push rather than joining it
+([docs/alerting.md](docs/alerting.md)). A read-only **MCP server** at `/mcp/`
+lets an agent ask the same questions the dashboard answers, without execution
+payloads ever leaving the box ([docs/mcp.md](docs/mcp.md)).
 
 ## Quickstart: Mode A (bundled)
 
@@ -81,8 +91,8 @@ Everything binds to `127.0.0.1` by default. To reach it from other devices,
 set `BIND_ADDR` in `.env` to a private VPN or LAN IP (and set
 `DASHBOARD_BASIC_AUTH`, see [docs/security.md](docs/security.md)).
 
-**Alerting is on from the first boot.** Five Grafana rules — failing, stale,
-stuck, queue backlog and n8n unreachable — evaluate against n8n's own database
+**Alerting is on from the first boot.** Five Grafana rules (failing, stale,
+stuck, queue backlog and n8n unreachable) evaluate against n8n's own database
 and show up under *Alerting* in Grafana with no configuration. Set
 `GRAFANA_ALERT_WEBHOOK_URL` when you want them to leave the box. Mode A is the
 only mode that can see stuck executions and queue depth at all; see
@@ -95,7 +105,7 @@ editor to see how they work:
 | workflow | what it does |
 |----------|--------------|
 | Po11y - Status publish | every 2 min, lists Docker containers and writes `status.json` |
-| Po11y - Maps | every 10 min, exports all workflows and rebuilds the Map, Architecture and Actions feeds |
+| Po11y - Maps | every 10 min, exports all workflows and rebuilds the Map and Actions feeds; the Architecture feed is only rebuilt when something changed (or once a day) |
 | Po11y example - HN tech news | every 30 min, fetches Hacker News top stories |
 | Po11y example - HN notify | sub-workflow; deduplicates and writes `notifications.json` |
 
@@ -123,7 +133,7 @@ workflows write; the dashboard doesn't know or care which mode produced them.
 **Prerequisites**
 
 - An n8n API key scoped to `workflow:list`, `workflow:read`, `execution:list`
-  and `execution:read` — the only four calls the collector makes. Recent n8n
+  and `execution:read`, the only four calls the collector makes. Recent n8n
   supports scoped keys on Community Edition too (verified on 2.29.8); if yours
   offers no scope picker, the key is full-access, so create it under a
   dedicated, low-privilege operator account instead.
@@ -171,7 +181,7 @@ n8n's host (a bare hostname, not a URL) so the `{host}` deep links resolve.
 **Optional watchdog.** Set `ALERTS_ENABLED=true` and the collector evaluates
 three rules on each poll, writing anything worth saying into the notifications
 feed the dashboard already renders: `failing` (a workflow erroring above both a
-count and a rate floor), `stale` (no *successful* run within its budget —
+count and a rate floor), `stale` (no *successful* run within its budget,
 including an active workflow with no executions at all) and `stuck` (an
 execution sitting in `running` past its budget). It costs no extra n8n calls: it
 reads the same execution window `status.json` is built from. Staleness is
@@ -182,8 +192,8 @@ you want it to end up as email).
 
 Those three rules are computed *from* n8n, so a poll that can't reach n8n at all
 raises a fourth alert of its own (`unreachable`) rather than going quiet on the
-outage you most wanted to hear about — deduped the same way, so a long outage is
-one message and a recovery. Neither survives the box itself dying, which is what
+outage you most wanted to hear about. It is deduped the same way, so a long
+outage is one message and a recovery. Neither survives the box itself dying, which is what
 `ALERT_HEARTBEAT_URL` is for: the collector pings it after every successful poll
 and something off-box (Healthchecks.io, Uptime Kuma, Better Stack) alerts when
 the pings stop. See
@@ -192,12 +202,40 @@ the pings stop. See
 
 Mode B's Grafana is Prometheus-only, so the example config embeds the
 **System health** dashboard. The execution-analytics dashboard is backed by
-n8n's postgres database, which Mode B never connects to — its panels stay
+n8n's postgres database, which Mode B never connects to, so its panels stay
 empty here, which is why `config.example.json` (Mode A) is the wrong starting
 point in this mode. What you don't
 get: form buttons don't fire by default (`ENABLE_FORM_PROXY=false`, see
 [docs/security.md](docs/security.md)), there is never a container list, and
 the `/n8n-table/` list-tab proxy isn't wired up for a remote n8n yet.
+
+## How Po11y compares
+
+Other people are solving overlapping problems; several were found on
+[community.n8n.io](https://community.n8n.io) (surveyed July 2026, so check the
+threads before trusting a cell).
+
+| | what it is | licence | touches your n8n | alerting | per-node detail | architecture map |
+|---|---|---|---|---|---|---|
+| **Po11y** | status page, workflow maps, Grafana, read-only collector | MIT | Mode A: Po11y runs the n8n. **Mode B: never writes** (GET-only, test-enforced) | 5 Grafana rules (Mode A) or collector watchdog + webhook (Mode B) | no | **yes** |
+| **[n8n-trace](https://community.n8n.io/t/273899)** | execution analytics dashboard, its own container + Postgres | MIT | you add its collector workflows | not built (author has it as a maybe) | **yes**: per-node P95, run counts, items out | no |
+| **[n8n Manager](https://community.n8n.io/t/187720)** | self-hosting toolkit: install, upgrade, backup, restore ([n8n-toolkit](https://github.com/thenguyenvn90/n8n-toolkit)) | not stated | it installs and manages the instance | yes, `--monitoring` provisions Grafana rules | no | no |
+| **[FlowPulse](https://community.n8n.io/t/303372)** | commercial, several low-code platforms, "catch silent automation failures" | not disclosed | not disclosed | yes, that is the pitch | not disclosed | no |
+| **[n8n-observability](https://github.com/n8n-io/n8n-observability)** | n8n's own Prometheus + Grafana dashboards | MIT | `N8N_METRICS=true` | build your own rules | no | no |
+| **DIY Error Trigger → Slack/Telegram** | one error workflow per route | n/a | yes, workflows in your instance | failures only, no stale or stuck | the error payload | no |
+
+Where Po11y is behind: **n8n-trace has per-node drill-down and RBAC**
+(Admin/Analyst/Viewer, scoped by instance, workflow id or tag, with an audit
+log). Po11y has neither: it shows you which *workflow* broke, not which node,
+and it deliberately treats read authorization as out of scope
+([docs/security.md](docs/security.md)). If "which node failed and who may see
+it" is your question, n8n-trace answers it better.
+
+Where Po11y is ahead: nothing else in the survey builds an **architecture map**
+of how your workflows call each other, nothing else turns **form triggers into
+action buttons**, and Mode B's read-only posture is stricter than the
+alternatives: it installs no workflows, needs no database of its own, and
+makes four GET calls.
 
 ## Going further
 
@@ -212,6 +250,9 @@ the `/n8n-table/` list-tab proxy isn't wired up for a remote n8n yet.
 - [docs/configuration.md](docs/configuration.md): `config.json` reference,
   every feed contract, multi-team scopes, the DataTable read proxy, and
   custom tab pages.
+- [docs/mcp.md](docs/mcp.md): the read-only MCP server, covering what an agent can ask
+  about a running instance, which tools each mode can serve, and why execution
+  payloads never leave the box.
 - [docs/ai-map.md](docs/ai-map.md): enabling LLM prose on the architecture
   map, and why it costs near zero.
 - [docs/integration.md](docs/integration.md): mounting the dashboard into an
@@ -221,7 +262,7 @@ the `/n8n-table/` list-tab proxy isn't wired up for a remote n8n yet.
 
 ## Contributing
 
-Issues and merge requests welcome — [CONTRIBUTING.md](CONTRIBUTING.md) has the
+Issues and merge requests welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the
 local check suite (all of it runs without bringing the stack up) and the one
 non-obvious rule about `lib/` being the source of truth for the workflow Code
 nodes. Found a security problem? [SECURITY.md](SECURITY.md), not a public

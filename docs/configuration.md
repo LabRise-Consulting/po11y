@@ -333,7 +333,11 @@ sortable cards. Add a `tabs[]` entry with a `list` block:
 
 - `endpoint` — URL the tab fetches. A relative `/n8n-table/…` proxy path for
   live n8n Data Table reads, or any static JSON (`{items:[…]}`, `[…]`, or
-  `{data:[…]}`).
+  `{data:[…]}`). The browser fetches whichever you name. The [MCP](mcp.md)
+  content tools (`po11y_rows`, `po11y_row`) serve only the `/n8n-table/…` form
+  — that is the one that rewrites onto the n8n API, and the only request the
+  read-scoped key may ride on; a dataset on any other endpoint answers with a
+  structured `unsupported endpoint` instead.
 - `mapping` — source-column → card-field map: `title`, `url`, `score`, `day`
   (ISO string, bucketed by date), and `meta` (list of extra columns shown as a
   detail line).

@@ -30,7 +30,14 @@ docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d
 ```
 
 It is opt-in on purpose: tracing is a newer n8n feature and heavier than the
-built-in Prometheus metrics, so the default stack leaves it off.
+built-in Prometheus metrics, so the default stack leaves it off. n8n's own
+docs still describe it as under development, so expect it to keep moving.
+
+The override configures tracing with `N8N_OTEL_*` environment variables, which
+is what makes it reproducible from a clean checkout. Since n8n 2.27 there is
+also a *Settings > OpenTelemetry* screen that can turn it on without env vars;
+the pinned image is new enough for that, so it is an option if you would rather
+click than edit compose files.
 
 **What tracing adds over the metrics.** The Prometheus dashboards are
 aggregates (counts, rates, average durations). Traces are per-execution: a
@@ -54,16 +61,20 @@ anonymously.
 
 ## How Po11y compares
 
-- **[n8n-io/n8n-observability](https://github.com/n8n-io/n8n-observability)**
-  (official, MIT) — Prometheus + Grafana with Webhook/Form execution
-  dashboards. Po11y builds on the same idea and adds the status page, the live
-  container feed, the interactive workflow maps and the automatic form
-  buttons. Its two dashboards are bundled here (Grafana ships four in total).
+The comparison table — n8n-trace, n8n Manager, FlowPulse, n8n's own
+observability repo and the DIY Error Trigger route — lives in the
+[README](../README.md#how-po11y-compares), including where Po11y is behind.
+
+Two more that the table doesn't carry because they answer a different
+question:
+
 - **Workflow visualizers** (e.g. [n8nmermaid](https://github.com/jwa91/n8nmermaid))
   — turn exported JSON into diagrams for pull-request review. Po11y does it
   live from the running instance every 10 minutes.
-- **n8n execution viewers** (e.g. n8nTrace) — push-based dashboards for
-  execution history and errors. Po11y is a system-health, documentation and
-  action panel, not a per-execution log viewer.
 - **DIY (Retool / Appsmith + the n8n REST API)** — maximum control, more to
   build and maintain. Po11y is the pre-packaged, one-command version.
+
+Note for this page specifically: the two Webhook/Form dashboards Po11y ships
+come from
+[n8n-io/n8n-observability](https://github.com/n8n-io/n8n-observability)
+(official, MIT); Grafana ships four in total.

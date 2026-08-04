@@ -106,6 +106,28 @@ collector's `po11y_n8n_up` proves the API key still works whereas
   `.env` to require HTTP Basic Auth for everything the dashboard serves
   (static app, feeds, the grafana/prometheus proxies). Useful when
   `BIND_ADDR` is a private LAN/VPN IP; it is not a substitute for TLS.
+- **MCP access is dashboard access.** `/mcp/` sits behind the same guard as
+  the rest of the dashboard, and the `mcp` container has no authentication of
+  its own — it is not published to the host, so nginx is the only way in.
+  There is no finer-grained grant: anyone who can open the dashboard can call
+  every MCP tool the deployment has sources for. To give an agent content
+  access without execution visibility, leave `MCP_N8N_API_KEY` unset — the
+  executions, failure and workflow tools then report themselves unavailable.
+  `po11y_sql` is a separate case: its read-only guard checks statement
+  *shape* only (one `SELECT`, no stacked statements, no `INTO`), never which
+  tables or columns are touched, so it is full read access to n8n's
+  database — including `execution_data` (raw workflow payloads) and
+  `credentials_entity`. In Mode A that tool is **on by default**: the `mcp`
+  service points `GRAFANA_URL` at Grafana internally, so it is available with
+  `MCP_GRAFANA_SA_TOKEN` empty (that token only matters when anonymous Grafana
+  Viewer access is off). To turn it off, set `MCP_GRAFANA_URL=` — empty — in
+  `.env`: the `mcp` service substitutes its internal default only when that
+  variable is *unset* (`${MCP_GRAFANA_URL-…}`, not `:-`), so an empty value
+  really does reach the container and the tool then reports itself
+  unavailable. This was accepted deliberately on the reasoning above: MCP
+  access is already dashboard access, and `po11y_sql` is read-only against a
+  datastore the dashboard's Grafana embed already queries. Execution payloads
+  are never returned by any other tool.
 
 ### Collector `/metrics`
 
@@ -138,6 +160,21 @@ Two deliberate trade-offs, both opt-in with the overlay:
 
 Residual, and inherent to n8n: anyone who can add or edit workflows can run
 JavaScript in a Code node. Treat editor access as trusted.
+
+**Accepted: the Grafana `n8n_host` variable is URL-settable.** The
+execution-analytics dashboard builds its "open this in n8n" deep links from a
+`textbox` template variable, which Grafana lets a visitor override through the
+query string (`?var-n8n_host=…`). A crafted dashboard URL can therefore point
+those links at a host of the sender's choosing. This is link-target
+manipulation, not an open redirect — nothing here serves a 302 — and it buys an
+attacker only presentation: someone who can already deliver a URL to a victim
+can link them anywhere directly. The variable is kept editable on purpose,
+because in Mode B the n8n host is usually *not* `BIND_ADDR`, and without the
+override every deep link on the dashboard 404s. Baking the host in at
+provisioning time would close it at the cost of that mode. If your Grafana is
+reachable by people you would not trust with a link, put it behind
+`DASHBOARD_BASIC_AUTH` and treat dashboard URLs from third parties the way you
+would treat any other link.
 
 ## Read authorization is out of scope
 

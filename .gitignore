@@ -11,3 +11,4 @@ secrets/
 .playwright-mcp/
 .superpowers/
 docs/superpowers/
+.claude/

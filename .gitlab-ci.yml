@@ -48,7 +48,7 @@ test:
   script:
     # Directory-scoped node test runner. Node expands the ** glob itself (it is
     # quoted so the shell leaves it alone).
-    - node --test "site/**/*.test.mjs" "lib/**/*.test.mjs" "collector/**/*.test.mjs"
+    - node --test "site/**/*.test.mjs" "lib/**/*.test.mjs" "collector/**/*.test.mjs" "mcp/**/*.test.mjs"
 
 sync-check:
   # Enforces that the three builder Code nodes in workflows/core/maps.json are

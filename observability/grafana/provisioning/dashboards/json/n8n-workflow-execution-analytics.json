@@ -337,7 +337,7 @@
         "type": "grafana-postgresql-datasource",
         "uid": "n8n-postgres"
       },
-      "description": "Number of failed executions (error or crashed) in time range",
+      "description": "Number of failed executions (error or crashed) in time range. Green only at zero: one failure is already worth looking at, so the first step is red rather than a count-based ramp.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -349,15 +349,11 @@
             "steps": [
               {
                 "color": "green",
-                "value": 0
-              },
-              {
-                "color": "yellow",
-                "value": 10
+                "value": null
               },
               {
                 "color": "red",
-                "value": 50
+                "value": 1
               }
             ]
           },
@@ -1485,17 +1481,9 @@
               {
                 "id": "color",
                 "value": {
-                  "mode": "continuous-GrYlRd",
+                  "mode": "continuous-YlRd",
                   "seriesBy": "last"
                 }
-              },
-              {
-                "id": "max",
-                "value": 100
-              },
-              {
-                "id": "min",
-                "value": 0
               }
             ]
           },
@@ -1532,6 +1520,36 @@
                 "value": 0
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "workflow_name"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "Open executions in n8n",
+                    "url": "http://${n8n_host}:5678/workflow/${__data.fields.workflowId}/executions"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "workflowId"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
           }
         ]
       },
@@ -1562,7 +1580,7 @@
           "format": "table",
           "hide": false,
           "range": true,
-          "rawSql": "SELECT\n  w.\"name\" AS workflow_name,\n  COUNT(*) FILTER (WHERE e.\"status\" IN ('error', 'crashed')) AS failures,\n  COUNT(*) AS total_executions,\n  ROUND(100.0 * SUM(CASE WHEN e.\"status\" IN ('error', 'crashed') THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS failure_rate_pct,\n  MAX(e.\"startedAt\") AS last_failure\nFROM execution_entity e\nLEFT JOIN workflow_entity w ON w.\"id\" = e.\"workflowId\"\nWHERE $__timeFilter(e.\"startedAt\")\nGROUP BY e.\"workflowId\", w.\"name\"\nHAVING COUNT(*) FILTER (WHERE e.\"status\" IN ('error', 'crashed')) > 0\nORDER BY failures DESC\nLIMIT 10;",
+          "rawSql": "SELECT\n  w.\"name\" AS workflow_name,\n  e.\"workflowId\" AS \"workflowId\",\n  COUNT(*) FILTER (WHERE e.\"status\" IN ('error', 'crashed')) AS failures,\n  COUNT(*) AS total_executions,\n  ROUND(100.0 * SUM(CASE WHEN e.\"status\" IN ('error', 'crashed') THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS failure_rate_pct,\n  MAX(e.\"startedAt\") AS last_failure\nFROM execution_entity e\nLEFT JOIN workflow_entity w ON w.\"id\" = e.\"workflowId\"\nWHERE $__timeFilter(e.\"startedAt\")\nGROUP BY e.\"workflowId\", w.\"name\"\nHAVING COUNT(*) FILTER (WHERE e.\"status\" IN ('error', 'crashed')) > 0\nORDER BY failures DESC\nLIMIT 10;",
           "refId": "A"
         }
       ],

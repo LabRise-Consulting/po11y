@@ -316,11 +316,39 @@ services:
     volumes:
       - ./html:/usr/share/nginx/html:ro
       - ./site:/usr/share/nginx/site:ro
+      # Read-only; only the one file exposed by nginx's exact-match location is
+      # reachable. See nginx.conf's /lib/list-rows.mjs block.
+      - ./lib:/usr/share/nginx/lib:ro
       - ./nginx.conf:/etc/nginx/nginx.conf.template:ro
       - ./config.json:/run/po11y/config.json:ro
       - po11y_status:/po11y-status:ro
     depends_on:
       - grafana
+
+  mcp:
+    build:
+      context: .
+      dockerfile: mcp/Dockerfile
+    container_name: po11y-mcp
+    restart: unless-stopped
+    read_only: true
+    environment:
+      - PORT=8082
+      - STATUS_DIR=/po11y-status
+      - PROMETHEUS_URL=http://prometheus:9090
+      # Mode B already holds a GET-only key for the remote n8n; reuse it.
+      - N8N_API_URL=${N8N_API_URL:?set N8N_API_URL in .env}
+      - N8N_API_KEY=${N8N_API_KEY:?set N8N_API_KEY in .env}
+      - N8N_READ_API_KEY=${N8N_READ_API_KEY:-}
+      # No GRAFANA_URL here: Mode B provisions no postgres datasource, so
+      # po11y_sql reports itself unavailable by construction rather than by
+      # configuration.
+      - CONFIG_PATH=/app/config.json
+    volumes:
+      - po11y_status:/po11y-status:ro
+      - ./config.json:/app/config.json:ro
+    depends_on:
+      - dashboard
 
 volumes:
   po11y_status:
