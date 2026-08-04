@@ -7,11 +7,25 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="48x48">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<script>
+  // Manual theme override from the shell (localStorage "po11y-theme"): apply
+  // before first paint; a toggle in the parent fires the storage event here,
+  // and a reload is the simplest way to re-render mermaid in the new theme.
+  (() => {
+    const t = localStorage.getItem('po11y-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.dataset.theme = t;
+      document.documentElement.style.colorScheme = t;
+    }
+    addEventListener('storage', (e) => { if (e.key === 'po11y-theme') location.reload(); });
+  })();
+</script>
 <style>
   /* Token subset of html/style.css — keep in sync by hand (tiny). */
   :root { --bg: #fafafa; --fg: #1a1a1a; --muted: #71717a; }
+  :root[data-theme=dark] { --bg: #111113; --fg: #e4e4e7; --muted: #a1a1aa; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #111113; --fg: #e4e4e7; --muted: #a1a1aa; }
+    :root:not([data-theme=light]) { --bg: #111113; --fg: #e4e4e7; --muted: #a1a1aa; }
   }
   body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
          font: 14px/1.5 system-ui, sans-serif;
@@ -186,7 +200,8 @@ async function resolveN8nBase() {
 
 (async () => {
   const meta = document.getElementById('meta');
-  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const override = document.documentElement.dataset.theme;
+  const dark = override ? override === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
   mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'neutral' });
   // Scope (config "scopes"): the dashboard passes ?scope=<s> when a non-default
   // scope is active; fetch that namespace's map. No/invalid/default scope keeps

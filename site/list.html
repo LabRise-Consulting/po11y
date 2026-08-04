@@ -8,6 +8,15 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/favicon.ico" sizes="48x48">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <script>
+    // Manual theme override from the shell (localStorage "po11y-theme"): the
+    // page styles ride on color-scheme, so forcing it is the whole job.
+    (() => {
+      const t = localStorage.getItem('po11y-theme');
+      if (t === 'light' || t === 'dark') document.documentElement.style.colorScheme = t;
+      addEventListener('storage', (e) => { if (e.key === 'po11y-theme') location.reload(); });
+    })();
+  </script>
   <style>
     :root { color-scheme: light dark; }
     body { margin: 0; font: 15px/1.5 system-ui, sans-serif; padding: 12px; }

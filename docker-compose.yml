@@ -37,6 +37,9 @@ services:
       - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER:-n8n}
       - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD:?run ./bootstrap.sh (or set in .env)}
       - EXECUTIONS_DATA_MAX_AGE=${EXECUTIONS_DATA_MAX_AGE:-4380}
+      # n8n also prunes by row count (default 10000), which can undercut
+      # MAX_AGE on busy instances; raise it so the age window is what rules.
+      - EXECUTIONS_DATA_PRUNE_MAX_COUNT=${EXECUTIONS_DATA_PRUNE_MAX_COUNT:-100000}
       # --- metrics (scraped by prometheus) ---
       - N8N_METRICS=true
       - N8N_METRICS_INCLUDE_WORKFLOW_ID_LABEL=true

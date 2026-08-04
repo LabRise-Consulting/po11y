@@ -190,6 +190,15 @@ for rid in $RETIRED_IDS; do
     -c "delete from workflow_entity where id='$rid';" >/dev/null 2>&1 || true
 done
 
+# Grafana's execution-analytics panels range-filter on "startedAt"; n8n ships
+# composite indexes with other leading columns but no bare one, so those
+# queries degrade to sequential scans as history grows. Idempotent, cheap on
+# a fresh install, and n8n migrations leave foreign indexes alone.
+compose exec -T postgres psql -U "${DB_POSTGRESDB_USER:-n8n}" \
+  -d "${DB_POSTGRESDB_DATABASE:-n8n}" \
+  -c 'CREATE INDEX IF NOT EXISTS idx_execution_entity_started_at ON execution_entity ("startedAt");' \
+  >/dev/null 2>&1 || true
+
 # Unconditional: a running instance is not guaranteed to pick up CLI-imported
 # active workflows; the restart is cheap.
 compose restart n8n >/dev/null

@@ -42,7 +42,7 @@
         { "id": 30, "title": "Most executed workflows", "span": 2, "h": 340 },
         { "id": 28, "title": "Workflows with most failures", "span": 2, "h": 340 }
       ],
-      "range": "now-7d"
+      "range": "now-24h"
     },
     "promBase": "/prom"
   },

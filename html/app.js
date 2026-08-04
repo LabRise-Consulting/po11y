@@ -1,11 +1,16 @@
 // Po11y — a tiny no-build status dashboard. Everything instance-specific
 // comes from /config.json (see config.example.json / README):
 //   branding      title, lede, footer
-//   cards         named groups of link cards on the Overview tab; a card with
+//   cards         named groups of link cards on the Overview view; a card with
 //                 an "up" (+ optional "mem") prometheus query doubles as a
 //                 live status card (up/DOWN · rss)
-//   tabs          extra tabs, each an iframe onto an instance-served page
-//   sections      which /status.json sections to render, and their headings
+//   tabs          extra sidebar views, each an iframe onto an instance-served
+//                 page; entries sharing a "group" fold into one sidebar entry
+//                 whose view keeps a tab strip (the key is still "tabs" so
+//                 existing configs work unchanged)
+//   sections      which /status.json sections to render, and their headings;
+//                 "notifications" renders as its own sidebar view (with an
+//                 unseen badge), the rest as Overview sections
 //   metrics       grafana embeds (or a deep-link card) + prometheus stat cards
 // Live data: /status.json + /notifications.json, polled every refreshSec;
 // grafana embeds refresh themselves natively (refresh URL param) and the
@@ -118,6 +123,31 @@ const toast = (msg, ok) => {
   setTimeout(() => t.remove(), 6000);
 };
 
+// ---- theme ------------------------------------------------------------------
+// Manual override for the OS color scheme: html[data-theme] + localStorage
+// "po11y-theme" ("light" | "dark"; key absent = follow the OS). The /site/
+// pages read the same key and hear the storage event when it changes here, so
+// iframe views stay in step live. Grafana embeds carry the resolved theme in
+// their URL, so a switch re-renders them — and re-fills the stat cards that
+// re-render wipes.
+let theme = localStorage.getItem('po11y-theme');
+if (theme !== 'light' && theme !== 'dark') theme = 'auto';
+const darkNow = () => theme === 'dark' ||
+  (theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+function applyTheme(next) {
+  theme = next;
+  if (next === 'auto') localStorage.removeItem('po11y-theme');
+  else localStorage.setItem('po11y-theme', next);
+  const root = document.documentElement;
+  if (next === 'auto') { root.removeAttribute('data-theme'); root.style.colorScheme = ''; }
+  else { root.dataset.theme = next; root.style.colorScheme = next; }
+  const btn = $('theme');
+  btn.textContent = { auto: '◐', light: '☀', dark: '☾' }[next];
+  btn.title = `Theme: ${next} (click to change)`;
+  renderMetrics();
+  refreshStatCards();
+}
+
 // ---- static chrome ------------------------------------------------------------
 function buildChrome() {
   document.title = cfg.title;
@@ -127,31 +157,136 @@ function buildChrome() {
     f.href ? `<a href="${safeUrl(withHost(f.href))}">${esc(f.text)}</a>` : esc(f.text))
     .join(' · ');
 
-  // Tabs: Overview + one iframe tab per config entry.
-  const tabs = [{ id: 'overview', label: 'Overview' }, ...(cfg.tabs || [])];
-  const nav = $('tabs');
-  tabs.slice().reverse().forEach((t) => {
-    const btn = document.createElement('button');
-    btn.className = 'tab' + (t.id === 'overview' ? ' active' : '');
-    btn.dataset.view = t.id;
-    btn.setAttribute('role', 'tab');
-    btn.setAttribute('aria-selected', String(t.id === 'overview'));
-    btn.textContent = t.label;
-    nav.prepend(btn);
-  });
+  // Sidebar entries: Overview + one per config tab; entries sharing a "group"
+  // fold into a single entry whose view keeps a tab strip. Grouping is
+  // render-only — /site/ pages still find their own entry in the flat tabs[].
+  const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const entries = [{ id: 'overview', label: 'Overview', tabs: [] }];
   (cfg.tabs || []).forEach((t) => {
+    const g = t.group && entries.find((e) => e.groupLabel === t.group);
+    if (g) g.tabs.push(t);
+    else entries.push(t.group
+      ? { id: `g-${slug(t.group)}`, label: t.group, groupLabel: t.group, tabs: [t] }
+      : { id: t.id, label: t.label, tabs: [t] });
+  });
+  // Overview sub-menu: one jump link per section of the Overview skeleton
+  // (metrics heading, card groups, status sections) — quick navigation on a
+  // page that can grow long. Notifications is not an Overview section any
+  // more: it gets its own view right after Overview (built below), with an
+  // unseen badge on the nav entry.
+  const notifLabel = (cfg.sections || {}).notifications;
+  const ovSections = [
+    ...(cfg.metrics ? [{ id: 'metrics', label: cfg.metrics.heading || 'Metrics' }] : []),
+    ...Object.keys(cfg.cards || {}).map((g, i) => ({ id: `cards-${i}`, label: g })),
+    ...Object.entries(cfg.sections || {}).filter(([k]) => k !== 'notifications')
+      .map(([k, h]) => ({ id: `sec-${k}`, label: h })),
+  ];
+  const navBtn = (e) => `<button class="nav-item${e.id === 'overview' ? ' active' : ''}" data-view="${esc(e.id)}" data-label="${esc(e.label)}"${
+    e.id === 'overview' ? ' aria-current="page"' : ''}>${esc(e.label)}</button>`;
+  $('nav').innerHTML =
+    navBtn(entries[0]) +
+    (ovSections.length ? `<div class="subnav">${ovSections.map((s) =>
+      `<button class="nav-sub" data-target="${esc(s.id)}">${esc(s.label)}</button>`).join('')}</div>` : '') +
+    (notifLabel ? navBtn({ id: 'notifications', label: notifLabel }) : '') +
+    entries.slice(1).map(navBtn).join('');
+  entries.slice(1).forEach((e) => {
     const sec = document.createElement('section');
-    sec.id = `view-${t.id}`;
+    sec.id = `view-${e.id}`;
     sec.className = 'view';
     sec.hidden = true;
-    // src set on first open — don't load every iframe up front
-    sec.innerHTML = `<iframe class="tabframe" data-src="${safeUrl(withHost(scopedSrc(t.src)))}"
-      title="${esc(t.label)}"></iframe>`;
+    const remembered = localStorage.getItem(`po11y-subtab-${e.id}`);
+    const open = e.tabs.some((t) => t.id === remembered) ? remembered : e.tabs[0].id;
+    const strip = e.tabs.length > 1
+      ? `<nav class="tabs subtabs" role="tablist">${e.tabs.map((t) =>
+          `<button class="tab${t.id === open ? ' active' : ''}" role="tab" aria-selected="${
+            t.id === open}" data-sub="${esc(t.id)}">${esc(t.label)}</button>`).join('')}</nav>`
+      : '';
+    // src set on first show — don't load every iframe up front
+    sec.innerHTML = strip + e.tabs.map((t) =>
+      `<iframe class="tabframe" data-sub-pane="${esc(t.id)}" data-src="${safeUrl(withHost(scopedSrc(t.src)))}"
+        title="${esc(t.label)}"${t.id === open ? '' : ' hidden'}></iframe>`).join('');
     $('main').appendChild(sec);
   });
-  // Scope switcher: only when there's a real choice (>1 scope). Sits with the
-  // tabs, mirroring the header idiom; the pick sticks via localStorage and a
-  // reload re-derives every scoped feed.
+  // Notifications view: the feed list plus its all/ok/fail filter, which
+  // used to sit on the Overview heading. Opening it moves the unseen
+  // watermark (markNotifSeen), which clears the nav badge.
+  if (notifLabel) {
+    const sec = document.createElement('section');
+    sec.id = 'view-notifications';
+    sec.className = 'view';
+    sec.hidden = true;
+    sec.innerHTML = `<div class="view-tools"><span class="seg" id="notif-seg">${
+      ['all', 'ok', 'fail'].map((f, i) =>
+        `<button class="segbtn${i ? '' : ' active'}" data-f="${f}">${f}</button>`).join('')}</span></div>
+      <div id="sec-notifications"></div>`;
+    $('main').appendChild(sec);
+    $('notif-seg').addEventListener('click', (e) => {
+      const b = e.target.closest('.segbtn');
+      if (!b) return;
+      notifFilter = b.dataset.f;
+      $('notif-seg').querySelectorAll('.segbtn').forEach((x) => x.classList.toggle('active', x === b));
+      renderNotifications();
+    });
+  }
+  const loadFrame = (f) => { f.src = f.dataset.src; f.removeAttribute('data-src'); };
+  const closeSide = () => { document.body.classList.remove('side-open'); $('backdrop').hidden = true; };
+  function showView(id) {
+    document.querySelectorAll('.nav-item').forEach((b) => {
+      const on = b.dataset.view === id;
+      b.classList.toggle('active', on);
+      if (on) { b.setAttribute('aria-current', 'page'); $('view-title').textContent = b.dataset.label; }
+      else b.removeAttribute('aria-current');
+    });
+    document.querySelectorAll('.view').forEach((v) => { v.hidden = v.id !== `view-${id}`; });
+    document.getElementById(`view-${id}`)
+      .querySelectorAll('iframe[data-src]:not([hidden])').forEach(loadFrame);
+    if (id === 'notifications') markNotifSeen();
+    closeSide();
+  }
+  $('nav').addEventListener('click', (e) => {
+    const sub = e.target.closest('.nav-sub');
+    if (sub) {
+      showView('overview');
+      const body = $(sub.dataset.target);
+      // jump open a collapsed section before scrolling to its heading
+      if (body?.hidden) ov.querySelector(`.sec-h[data-sec="${sub.dataset.target}"]`)?.click();
+      (body?.previousElementSibling || body)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    const btn = e.target.closest('.nav-item');
+    if (btn) showView(btn.dataset.view);
+  });
+  // Sub-tab strip inside a grouped view: swap panes, lazy-load, remember.
+  $('main').addEventListener('click', (e) => {
+    const t = e.target.closest('.subtabs .tab');
+    if (!t) return;
+    const sec = t.closest('.view');
+    sec.querySelectorAll('.tab').forEach((b) => {
+      b.classList.toggle('active', b === t);
+      b.setAttribute('aria-selected', String(b === t));
+    });
+    sec.querySelectorAll('iframe[data-sub-pane]').forEach((f) => {
+      f.hidden = f.dataset.subPane !== t.dataset.sub;
+      if (!f.hidden && f.dataset.src) loadFrame(f);
+    });
+    localStorage.setItem(`po11y-subtab-${sec.id.slice(5)}`, t.dataset.sub);
+  });
+  // Small screens: the sidebar slides in over a backdrop.
+  $('menu').addEventListener('click', () => {
+    const opened = document.body.classList.toggle('side-open');
+    $('backdrop').hidden = !opened;
+  });
+  $('backdrop').addEventListener('click', closeSide);
+  $('theme').addEventListener('click', () =>
+    applyTheme(theme === 'auto' ? 'dark' : theme === 'dark' ? 'light' : 'auto'));
+  // OS scheme flips while on "auto": tokens follow via the media query, but
+  // grafana embeds bake the theme into their URL — re-render them.
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (theme === 'auto') { renderMetrics(); refreshStatCards(); }
+  });
+  // Scope switcher: only when there's a real choice (>1 scope). Sits in the
+  // sidebar above the nav; the pick sticks via localStorage and a reload
+  // re-derives every scoped feed.
   if (scopeKeys().length > 1) {
     const sel = document.createElement('select');
     sel.className = 'scope-switch';
@@ -159,24 +294,8 @@ function buildChrome() {
     sel.innerHTML = scopeKeys().map((k) =>
       `<option value="${esc(k)}"${k === activeScope ? ' selected' : ''}>${esc(cfg.scopes[k])}</option>`).join('');
     sel.addEventListener('change', () => setScope(sel.value));
-    nav.insertBefore(sel, nav.querySelector('.spacer'));
+    $('side').insertBefore(sel, $('nav'));
   }
-
-  document.querySelectorAll('.tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach((b) => {
-        b.classList.toggle('active', b === btn);
-        b.setAttribute('aria-selected', String(b === btn));
-      });
-      document.querySelectorAll('.view').forEach((v) => {
-        v.hidden = v.id !== 'view-' + btn.dataset.view;
-        if (!v.hidden) v.querySelectorAll('iframe[data-src]').forEach((f) => {
-          f.src = f.dataset.src;
-          f.removeAttribute('data-src');
-        });
-      });
-    });
-  });
 
   // Overview skeleton: metrics first, then card groups, then status sections.
   // Every heading collapses its section; the choice sticks via localStorage.
@@ -186,10 +305,21 @@ function buildChrome() {
     return `${heading ? `<h2 class="sec-h${closed ? ' closed' : ''}" data-sec="${id}" title="${esc(heading)} — click to collapse or expand">${esc(heading)}</h2>` : ''}
       <div id="${id}"${cls ? ` class="${cls}"` : ''}${closed ? ' hidden' : ''}></div>`;
   };
+  // The d-solo embeds hide Grafana's time picker, so say in the heading what
+  // window the panels cover ("now-7d" → "last 7 days"); an unparsed range
+  // shows raw, and the deep-link card (embeds off) has its own picker.
+  const metricsHeading = () => {
+    const base = cfg.metrics.heading || 'Metrics';
+    const g = cfg.metrics.grafana;
+    if (!(g && g.embed && g.dashboard)) return base;
+    const m = /^now-(\d+)([mhdwMy])$/.exec(g.range || 'now-7d');
+    const unit = m && { m: 'minute', h: 'hour', d: 'day', w: 'week', M: 'month', y: 'year' }[m[2]];
+    return `${base} — ${m ? `last ${m[1]} ${unit}${m[1] === '1' ? '' : 's'}` : (g.range || 'now-7d')}`;
+  };
   ov.innerHTML =
-    (cfg.metrics ? block(cfg.metrics.heading || 'Metrics', 'metrics', 'cards') : '') +
+    (cfg.metrics ? block(metricsHeading(), 'metrics', 'cards') : '') +
     Object.keys(cfg.cards || {}).map((g, i) => block(g, `cards-${i}`, 'cards')).join('') +
-    Object.entries(cfg.sections || {}).map(([k, h]) => block(h, `sec-${k}`)).join('');
+    ovSections.filter((s) => s.id.startsWith('sec-')).map((s) => block(s.label, s.id)).join('');
   ov.querySelectorAll('.sec-h').forEach((h) => h.addEventListener('click', () => {
     const body = $(h.dataset.sec);
     body.hidden = !body.hidden;
@@ -210,24 +340,6 @@ function buildChrome() {
     inp.addEventListener('input', () => { filters[id] = inp.value.toLowerCase(); rerender(); });
     h.appendChild(inp);
   });
-  // Status tabs on the notifications heading: all / ok / fail.
-  const nh = ov.querySelector('.sec-h[data-sec="sec-notifications"]');
-  if (nh) {
-    const seg = document.createElement('span');
-    seg.className = 'seg';
-    seg.innerHTML = ['all', 'ok', 'fail'].map((f, i) =>
-      `<button class="segbtn${i === 0 ? ' active' : ''}" data-f="${f}">${f}</button>`).join('');
-    seg.addEventListener('click', (e) => {
-      const b = e.target.closest('.segbtn');
-      if (!b) return;
-      e.stopPropagation();
-      notifFilter = b.dataset.f;
-      seg.querySelectorAll('.segbtn').forEach((x) => x.classList.toggle('active', x === b));
-      renderNotifications();
-    });
-    nh.appendChild(seg);
-  }
-
   // Field-less form triggers ({action}) run in place via the same-origin
   // /form/ nginx proxy; everything else is a plain link card. Every card
   // gets a hover tooltip: config "tip" wins, else "name — sub".
@@ -256,8 +368,7 @@ function buildChrome() {
   });
   $('sec-containers')?.classList.add('cards');
 
-  renderMetrics();
-  refreshStatCards();
+  applyTheme(theme); // sets html[data-theme], the button glyph, and renders metrics
 }
 
 // ---- metrics: grafana embeds or deep-link card, plus prometheus stat cards -----
@@ -268,7 +379,7 @@ function renderMetrics() {
   const base = g.base || '/grafana';
   let html = '';
   if (g.embed && g.dashboard) {
-    const theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    const gTheme = darkNow() ? 'dark' : 'light';
     // Native panel auto-refresh: grafana re-queries inside the iframe, no
     // reload/flash. 0 disables.
     const mSec = cfg.metricsRefreshSec ?? 60;
@@ -284,7 +395,7 @@ function renderMetrics() {
         .filter(Boolean).join(';');
       return `<iframe class="gpanel${p.wide ? ' gwide' : ''}" loading="lazy"${
         style ? ` style="${style}"` : ''} title="${esc(p.title || `Grafana panel ${p.id}`)}" src="${safeUrl(
-        `${base}/d-solo/${g.dashboard}?orgId=1&from=${g.range || 'now-7d'}&to=now&theme=${theme}${refresh}&panelId=${p.id}`)}"></iframe>`;
+        `${base}/d-solo/${g.dashboard}?orgId=1&from=${g.range || 'now-7d'}&to=now&theme=${gTheme}${refresh}&panelId=${p.id}`)}"></iframe>`;
     }).join('');
   } else if (g.dashboard) {
     // Embeds off — the deep-link card is the only Grafana entry point. With
@@ -403,6 +514,40 @@ async function refreshNotifications() {
     lastFeed = await fetchJson(feedUrl('notifications'));
   } catch { /* keep the last-good feed (see refreshStatus) */ }
   renderNotifications();
+  // Sitting on the view when the poll lands counts as seeing the new entries.
+  const v = document.getElementById('view-notifications');
+  if (v && !v.hidden) markNotifSeen();
+  else updateNotifBadge();
+}
+
+// Unseen indicator on the Notifications nav entry. The watermark
+// (localStorage "po11y-notif-seen", epoch ms of the newest entry at last
+// visit) is per browser, like every other remembered preference here. The
+// badge counts newer entries and turns red when one of them is a failure;
+// a first run with no watermark baselines silently instead of flagging the
+// whole history as new.
+const notifTs = (n) => new Date(n.ts).getTime() || 0;
+function updateNotifBadge() {
+  const btn = document.querySelector('.nav-item[data-view="notifications"]');
+  if (!btn || !lastFeed) return;
+  const seen = Number(localStorage.getItem('po11y-notif-seen') || 0);
+  if (!seen) { markNotifSeen(); return; }
+  const unseen = lastFeed.filter((n) => notifTs(n) > seen);
+  let b = btn.querySelector('.nav-badge');
+  if (!unseen.length) { b?.remove(); return; }
+  if (!b) {
+    b = document.createElement('span');
+    b.className = 'nav-badge';
+    btn.appendChild(b);
+  }
+  b.textContent = unseen.length > 99 ? '99+' : String(unseen.length);
+  b.classList.toggle('fail', unseen.some((n) => n.status === 'failure'));
+}
+function markNotifSeen() {
+  if (lastFeed?.length) {
+    localStorage.setItem('po11y-notif-seen', String(Math.max(...lastFeed.map(notifTs))));
+  }
+  document.querySelector('.nav-item[data-view="notifications"] .nav-badge')?.remove();
 }
 
 function renderNotifications() {

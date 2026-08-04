@@ -10,10 +10,10 @@ omitted pieces don't render.
 
 | key | what |
 |-----|------|
-| `title`, `lede`, `footer` | branding; `lede` renders right of the title; `footer` is `[{text, href?}]` |
+| `title`, `lede`, `footer` | branding; `lede` renders in the sidebar under the title; `footer` is `[{text, href?}]`, rendered at the sidebar's foot |
 | `cards` | `{ "Group heading": [{name, sub, href, tip?, up?, mem?}] }`, ordered groups of link cards; `tip` overrides the hover tooltip, and an `up` (+ optional `mem`) Prometheus query makes the card double as a live status card (up/DOWN · rss) |
-| `tabs` | `[{id, label, src}]`, iframe tabs; serve `src` yourself (e.g. under `/site/`) |
-| `sections` | which status sections render, and their headings: `{containers, executions, notifications}` |
+| `tabs` | `[{id, label, src, group?}]`, iframe views listed in the sidebar; serve `src` yourself (e.g. under `/site/`). Entries sharing a `group` label fold into one sidebar entry whose view keeps a tab strip (last-open tab remembered per group) |
+| `sections` | which status sections render, and their headings: `{containers, executions, notifications}`. `notifications` renders as its own sidebar view with an unseen badge (count of entries newer than the last visit, red when one is a failure; watermark in localStorage `po11y-notif-seen`); the rest render as Overview sections, each with a sidebar jump link |
 | `metrics` | `{heading, grafana: {embed, base, dashboard, panels: [{id, title?, span?, h?, wide?}], range}, promBase, stats: [{label, up, mem?}]}` — `wide` spans the full row; `span` (1-4, default 2) is how many grid tracks a panel takes on wide screens (the row has 4, so 1 ≈ a quarter); `h` pins the panel height in px (120-800) when the span-derived height cuts the chart off; the Grafana deep-link card renders only when `embed` is off |
 | `refreshSec` | poll interval for status + notifications (default 30) |
 | `metricsRefreshSec` | metrics refresh interval (default 60, `0` disables): grafana embeds get a native `refresh` param (panels re-query themselves, no reload), prometheus stat cards re-poll |
@@ -325,6 +325,13 @@ Data Table's URL in the n8n UI):
 A tab page is any HTML you serve under `/site/`. Copy the design tokens from
 [`html/style.css`](../html/style.css) if you want it to match. The iframe gets
 `class="tabframe"` sizing from the shell; pages load lazily on first open.
+
+The shell's theme toggle writes localStorage `po11y-theme` (`light` | `dark`;
+key absent = follow the OS) and sets `html[data-theme]`. A page that copies
+the tokens should mirror the bundled ones: apply the key before first paint,
+guard its dark `@media` block with `:root:not([data-theme=light])`, add an
+equivalent `:root[data-theme=dark]` block, and reload on the `storage` event
+so a toggle in the shell restyles already-open iframes.
 
 ### `list` tab
 

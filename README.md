@@ -37,13 +37,13 @@ It covers both modes end to end: the bundled stack, the dashboard, map and
 Grafana tabs, the alert rules and the MCP endpoint, then the read-only
 collector running against a separate n8n.
 
-The **Overview** tab: action buttons (each active form trigger in n8n becomes
+The **Overview** view: action buttons (each active form trigger in n8n becomes
 a button automatically), monitoring links, running containers, a notification
 feed and Grafana panels.
 
 ![Dashboard overview](docs/img/dashboard.png)
 
-The **Architecture** tab: an interactive map of your workflows, rebuilt from
+The **Architecture** view: an interactive map of your workflows, rebuilt from
 the live n8n instance every 10 minutes. The structure is computed
 deterministically from the workflow export; an LLM (optional, see
 [docs/ai-map.md](docs/ai-map.md)) only writes the one-line descriptions, with
@@ -57,10 +57,10 @@ health, and the official webhook/form dashboards from
 
 ![Grafana execution analytics](docs/img/grafana.png)
 
-Plus a simpler auto-generated **Map** tab (pan by dragging, zoom with the
+Plus a simpler auto-generated **Map** view (pan by dragging, zoom with the
 wheel, the buttons or `+`/`-`, and `0` to refit), a staleness badge when the status
-feed stops updating, dark/light theme, and extra tabs for any pages you want
-to serve.
+feed stops updating, a dark/light theme toggle, and extra sidebar views for
+any pages you want to serve.
 
 **Alerting** ships on by default in both modes, with no extra service to run:
 Grafana rules against n8n's database in Mode A, a watchdog in the collector in
