@@ -237,8 +237,10 @@ async function resolveN8nBase() {
     }
 
     // Clickable workflow nodes: map.json.entries links each mermaid node id
-    // (nid) back to the raw n8n id + description. Older publishers without
-    // entries → the map renders exactly as before, nothing clickable.
+    // (nid) back to the raw n8n id + description. Both publishers write it
+    // (the Mode A Code node and the Mode B collector, pinned to each other by
+    // collector/collect.test.mjs); a map from some other publisher without
+    // entries renders exactly as before, nothing clickable.
     const entries = new Map((d.entries || []).map((e) => [e.nid, e]));
     if (!entries.size) return;
     const n8nBase = await resolveN8nBase();

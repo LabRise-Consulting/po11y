@@ -3,6 +3,22 @@
 The dashboard is just static files plus a config, so you can mount it into a
 compose stack you already have:
 
+**`nginx.conf` is a template, not a drop-in config.** Mounting it straight at
+`conf.d/default.conf` does not start: it carries a `${N8N_READ_API_KEY}`
+placeholder that nginx reads as an unknown variable, plus three literal
+includes that this repo's `dashboard` entrypoint writes at container start and
+nginx refuses to start without:
+
+```
+/etc/nginx/auth.conf           the Basic Auth / forward-auth guard
+/etc/nginx/forward-auth.conf   the oauth2-proxy auth_request block
+/etc/nginx/form-proxy.conf     the /form/ submit proxy
+```
+
+So mount it as a *template* and render it. The smallest thing that boots —
+note that empty include files mean **no authentication**, so add your own guard
+before exposing this:
+
 ```yaml
 # docker-compose.yml
 dashboard:
@@ -10,16 +26,27 @@ dashboard:
   ports: ["8080:80"]
   volumes:
     - ./external/po11y/html:/usr/share/nginx/html:ro
-    - ./external/po11y/nginx.conf:/etc/nginx/conf.d/default.conf:ro  # or your copy
+    - ./external/po11y/nginx.conf:/etc/nginx/nginx.conf.template:ro  # template, not default.conf
     - ./dashboard/site:/usr/share/nginx/site:ro                      # your tab pages
     - ./dashboard/config.json:/run/po11y/config.json:ro              # your config
     - status-volume:/po11y-status:ro                                 # your publisher writes here
+  entrypoint:
+    - sh
+    - -euc
+    - |
+      N8N_READ_API_KEY="$${N8N_READ_API_KEY:-}" \
+        envsubst '$${N8N_READ_API_KEY}' \
+        < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf
+      : > /etc/nginx/auth.conf
+      : > /etc/nginx/forward-auth.conf
+      : > /etc/nginx/form-proxy.conf
+      exec nginx -g 'daemon off;'
 ```
 
-(If you use the `/n8n-table/` proxy, render `nginx.conf`'s
-`${N8N_READ_API_KEY}` reference yourself before mounting it — see the
-`dashboard` service entrypoint in this repo's `docker-compose.yml` for the
-one-line `envsubst` that does it.)
+Copy the real rendering out of this repo's `docker-compose.yml` `dashboard`
+entrypoint when you want auth, the form proxy or the `/n8n-table/` proxy — it
+is one `sh` block, and it also whitelists the API key to the n8n JWT charset
+before substituting it.
 
 Pin Po11y as a git submodule so updates are deliberate:
 

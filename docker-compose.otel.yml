@@ -24,23 +24,18 @@ services:
   grafana:
     # The base compose mounts provisioning-src read-only and copies it into a
     # writable /tmp tree at startup, so we can't drop a file into it directly.
-    # Mount the Tempo datasource at a fresh path and extend the entrypoint to
-    # copy it into the provisioning tree. Keep the rest of this block in sync
-    # with the grafana entrypoint in docker-compose.yml.
+    # Instead we mount Tempo's datasource and dashboard into the extras
+    # directory that observability/grafana/entrypoint.sh folds into the tree.
+    #
+    # This block deliberately does NOT re-declare `entrypoint`. Compose replaces
+    # an entrypoint instead of merging it, so the copy that used to live here
+    # dropped the base file's alerting branch: `-f docker-compose.yml -f
+    # docker-compose.otel.yml` booted with all five Mode A alert rules missing,
+    # with the alerting volume still mounted and unread. Volumes DO merge, which
+    # is why the extras mechanism works and an inline entrypoint does not.
     volumes:
-      - ./deploy/otel/tempo-datasource.yml:/etc/po11y-otel/tempo-datasource.yml:ro
-      - ./deploy/otel/n8n-traces-dashboard.json:/etc/po11y-otel/n8n-traces-dashboard.json:ro
-    entrypoint:
-      - sh
-      - -euc
-      - |
-        rm -rf /tmp/grafana-provisioning
-        cp -r /etc/grafana/provisioning-src /tmp/grafana-provisioning
-        cp /etc/po11y-otel/tempo-datasource.yml /tmp/grafana-provisioning/datasources/tempo.yml
-        cp /etc/po11y-otel/n8n-traces-dashboard.json /tmp/grafana-provisioning/dashboards/json/n8n-traces.json
-        sed -i "s|__WEB_BIND_ADDR__|$$BIND_ADDR|g" /tmp/grafana-provisioning/dashboards/json/*.json
-        sed -i "s|/etc/grafana/provisioning/|/tmp/grafana-provisioning/|g" /tmp/grafana-provisioning/dashboards/dashboards.yml
-        exec /run.sh
+      - ./deploy/otel/tempo-datasource.yml:/etc/po11y-grafana-extras/datasources/tempo.yml:ro
+      - ./deploy/otel/n8n-traces-dashboard.json:/etc/po11y-grafana-extras/dashboards/n8n-traces.json:ro
 
   tempo:
     image: grafana/tempo:2.6.1

@@ -11,9 +11,14 @@ function fixtureDir() {
   return dir;
 }
 
-test('feeds: available only when the status dir exists', () => {
+test('feeds: available only when at least one feed FILE exists, not just the dir', () => {
   assert.equal(makeFeeds({ statusDir: fixtureDir() }).available(), true);
   assert.equal(makeFeeds({ statusDir: '/nope/not/here' }).available(), false);
+  // The mount point exists in every deployment — a scoped layout where all
+  // collectors publish into subdirs leaves it empty, and "available" then
+  // made every feed tool describe a healthy-empty instance.
+  const empty = mkdtempSync(join(tmpdir(), 'po11y-mcp-empty-'));
+  assert.equal(makeFeeds({ statusDir: empty }).available(), false);
 });
 
 test('feeds: read parses a feed, readSafe swallows a missing one', () => {
@@ -123,6 +128,19 @@ test('grafana: a write statement never reaches the network', async () => {
     fetchFn: async () => { called = true; return { ok: true, json: async () => ({}) }; } });
   await assert.rejects(() => g.query('DELETE FROM execution_entity'));
   assert.equal(called, false);
+});
+
+test('datatables: every request is a GET', async () => {
+  // makeDataTables is the second hand-built fetch path to n8n (in Mode B it
+  // targets the REMOTE n8n with N8N_READ_API_KEY). The GET-only invariant is
+  // asserted for makeN8n above; without this twin assertion a write verb could
+  // creep in here unnoticed.
+  const calls = [];
+  const fetchFn = async (u, opts) => { calls.push({ u, opts }); return { ok: true, json: async () => ({ data: [] }) }; };
+  const t = makeDataTables({ n8nUrl: 'http://n8n:5678', readKey: 'READKEY', fetchFn });
+  await t.fetchJson('/n8n-table/data-tables/42/rows');
+  await t.fetchJson('https://feeds.example.com/rows.json');
+  for (const c of calls) assert.equal(c.opts.method, 'GET');
 });
 
 test('datatables: a /n8n-table/ path is rewritten onto the n8n API and carries the key', async () => {

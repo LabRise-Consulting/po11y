@@ -13,6 +13,8 @@
 #                        remote must run with N8N_METRICS=true — absent metrics
 #                        degrade gracefully to an empty Grafana tab)
 #   POLL_INTERVAL        seconds between polls (default 600)
+#   EXECUTIONS_LIMIT     recent-executions window per poll (default 100, max
+#                        250 — n8n's API cap; see "Sizing the window" in README)
 #   BIND_ADDR / DASHBOARD_PORT / DASHBOARD_BASIC_AUTH / GRAFANA_ADMIN_PASSWORD
 #                        reused verbatim from Mode A (see .env.example)
 #   ENABLE_FORM_PROXY / FORM_PROXY_UPSTREAM   see the dashboard service + nginx
@@ -39,16 +41,21 @@ services:
       - N8N_API_URL=${N8N_API_URL:?set N8N_API_URL to the remote n8n base URL}
       - N8N_API_KEY=${N8N_API_KEY:?set N8N_API_KEY to a public-API key on that n8n}
       - POLL_INTERVAL=${POLL_INTERVAL:-600}
+      - EXECUTIONS_LIMIT=${EXECUTIONS_LIMIT:-100}
       - STATUS_DIR=/po11y-status
+      # Empty = bind every interface, which here is the compose network only
+      # (the health/metrics port is deliberately not published). See .env.example.
+      - BIND_HOST=${BIND_HOST:-}
       # Optional AI architecture-map prose (OpenAI-compatible endpoint). Empty =
       # free heuristic map. Never logged; only makeLlm sees the key.
       - AI_MAP_BASE_URL=${AI_MAP_BASE_URL:-}
       - AI_MAP_API_KEY=${AI_MAP_API_KEY:-}
       - AI_MAP_MODEL=${AI_MAP_MODEL:-}
-      # Optional watchdog. Off unless ALERTS_ENABLED=true; when on it reuses the
+      # Watchdog, ON by default (ALERTS_ENABLED=false opts out). It reuses the
       # execution window already fetched for status.json (no extra n8n calls,
-      # still GET-only) and prepends to notifications.json.
-      - ALERTS_ENABLED=${ALERTS_ENABLED:-false}
+      # still GET-only) and prepends to notifications.json. Nothing is pushed
+      # anywhere unless ALERT_WEBHOOK_URL is set.
+      - ALERTS_ENABLED=${ALERTS_ENABLED:-true}
       - ALERT_MIN_ERRORS=${ALERT_MIN_ERRORS:-3}
       - ALERT_ERROR_RATE=${ALERT_ERROR_RATE:-0.5}
       - ALERT_STALE_AFTER_MIN=${ALERT_STALE_AFTER_MIN:-0}
@@ -126,8 +133,8 @@ services:
       # the Mode B tabs. These are passed only so provisioning interpolation has
       # values; they wire up to nothing.
       - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE:-n8n}
-      - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER:-n8n}
-      - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD:-}
+      - PO11Y_RO_USER=po11y_ro
+      - PO11Y_RO_PASSWORD=${PO11Y_RO_PASSWORD:-}
       # Grafana interpolates ${VAR} in provisioning YAML but NOT in dashboard
       # JSON — the entrypoint seds the n8n deep-link host into a rendered copy.
       # The n8n deep links target BIND_ADDR:5678; with a remote n8n that host is
@@ -140,16 +147,13 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=${DASHBOARD_GRAFANA_EMBED:-true}
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       - GF_SECURITY_ALLOW_EMBEDDING=${DASHBOARD_GRAFANA_EMBED:-true}
-    entrypoint:
-      - sh
-      - -euc
-      - |
-        rm -rf /tmp/grafana-provisioning
-        cp -r /etc/grafana/provisioning-src /tmp/grafana-provisioning
-        sed -i "s|__WEB_BIND_ADDR__|$$BIND_ADDR|g" /tmp/grafana-provisioning/dashboards/json/*.json
-        sed -i "s|/etc/grafana/provisioning/|/tmp/grafana-provisioning/|g" /tmp/grafana-provisioning/dashboards/dashboards.yml
-        exec /run.sh
+    # The same script Mode A uses. Mode B mounts no alerting-src, so the script's
+    # alerting branch is skipped: four of the five Mode A rules query a postgres
+    # that does not exist here. Mode B's alerting is the collector watchdog and
+    # the optional docker-compose.alerts.yml overlay.
+    entrypoint: ["sh", "/etc/po11y-grafana-entrypoint.sh"]
     volumes:
+      - ./observability/grafana/entrypoint.sh:/etc/po11y-grafana-entrypoint.sh:ro
       - ./observability/grafana/provisioning:/etc/grafana/provisioning-src:ro
       - grafana_data:/var/lib/grafana
     depends_on:

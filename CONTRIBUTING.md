@@ -9,9 +9,11 @@ issue, not a public one.
 Everything CI runs is runnable locally, and none of it needs the stack up:
 
 ```sh
-node --test "site/**/*.test.mjs" "lib/**/*.test.mjs" "collector/**/*.test.mjs"   # unit tests
+node --test "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" \
+  "collector/**/*.test.mjs" "mcp/**/*.test.mjs"                          # unit tests
 node tools/sync-workflows.mjs --check                   # workflow/lib sync gate
-shellcheck bootstrap.sh ai-map-cli.sh ci/smoke.sh ci/check-expired-markers.sh
+shellcheck bootstrap.sh ai-map-cli.sh ci/smoke.sh ci/check-expired-markers.sh \
+  observability/grafana/entrypoint.sh
 docker compose -f docker-compose.yml config -q          # compose syntax
 kustomize build deploy/k8s | kubeconform -strict -summary
 ```
@@ -26,7 +28,8 @@ pre-commit run --files <changed files>
 The `smoke` job (full docker-in-docker bring-up, run twice for idempotency)
 only runs on the canonical project, because it needs a privileged runner that
 forks don't have. Everything else runs on stock GitLab shared runners, so a
-merge request from a fork gets a real pipeline.
+merge request from a fork gets a real pipeline. The full pipeline schematic —
+stages, triggers, what each job gates — is in [docs/ci.md](docs/ci.md).
 
 ## The one non-obvious rule: `lib/` is the source of truth
 

@@ -11,6 +11,7 @@ import {
   buildAll,
   makeLlm,
   atomicWriteFile,
+  feedDocuments,
 } from './collect.mjs';
 
 const core = JSON.parse(
@@ -227,6 +228,100 @@ test('buildAll degrades to a heuristic ai-map when the LLM throws (poll must not
   assert.match(ai.degraded, /AI gateway 503/);
 });
 
+test('buildAll survives an ai-map throw the no-LLM retry cannot fix', async () => {
+  // buildAll's catch assumes any throw came from the LLM transport and retries
+  // with llm:null. A defect that is NOT the transport throws on both attempts;
+  // before the fix the second throw escaped buildAll and took map.json,
+  // forms.json and status.json down with the cosmetic ai-map — and because
+  // poll() keeps last-good files on failure, the feeds froze permanently.
+  //
+  // prevAiMap is the one input only buildAiMap reads, so a throwing accessor on
+  // it fails exactly the ai-map builder, on both attempts, without disturbing
+  // buildMap/buildForms.
+  const poisonedPrev = { get nodes() { throw new Error('ai-map input unreadable'); } };
+  const { map, forms, ai } = await buildAll(core, poisonedPrev, {
+    now: Date.now(), aiConfigured: false, model: '', llm: null,
+  });
+  assert.ok(map.mermaid.startsWith('graph TD'), 'map still published');
+  assert.ok(Array.isArray(forms.forms), 'forms still published');
+  assert.equal(ai.action, 'skip', 'ai-map degrades to a no-op instead of throwing');
+  assert.match(ai.degraded, /ai-map input unreadable/);
+});
+
+// ---- makeLlm request fidelity -----------------------------------------------
+test('makeLlm sends stream:false — Mode A OmniRoute routes default to SSE without it', async () => {
+  let body = null;
+  const fetchFn = async (url, opts) => {
+    body = JSON.parse(opts.body);
+    return jsonRes({ choices: [{ message: { content: '{}' } }] });
+  };
+  const llm = makeLlm(fetchFn, { base: AI, key: 'k', model: 'auto/best-free' });
+  await llm('prompt');
+  assert.equal(body.stream, false, 'without this res.json() throws on an SSE reply');
+  assert.equal(body.model, 'auto/best-free');
+  assert.equal(body.max_tokens, 3000);
+  assert.deepEqual(body.response_format, { type: 'json_object' });
+});
+
+// ---- feed documents: the two modes must publish the same shape --------------
+//
+// Mode A publishes map.json/forms.json from Code nodes in
+// workflows/core/maps.json; Mode B publishes them from here. Nothing enforced
+// that the two agreed, and they did not: the collector dropped `entries`, which
+// is the entire clickable-node/dialog feature of the Map tab, so Mode B's Map
+// tab had never been interactive. These tests read the SHIPPED Mode A node
+// source, so the modes cannot drift apart again without failing here.
+const MAPS = JSON.parse(
+  readFileSync(new URL('../workflows/core/maps.json', import.meta.url), 'utf8'),
+);
+
+/** Key names in the `const published = { … }` literal of a Mode A Code node. */
+function modeAPublishedKeys(nodeName) {
+  const node = MAPS.nodes.find((n) => n.name === nodeName);
+  assert.ok(node, `maps.json has no node named ${nodeName}`);
+  const literal = /const published = \{([^}]*)\}/.exec(node.parameters.jsCode);
+  assert.ok(literal, `${nodeName} no longer builds a "published" object literal`);
+  return literal[1].split(',').map((p) => p.split(':')[0].trim()).filter(Boolean).sort();
+}
+
+test('the collector publishes map.json with the keys the Mode A node publishes', async () => {
+  const { map, forms } = await buildAll(core, null, { now: 0, aiConfigured: false, llm: null });
+  const docs = feedDocuments({ map, forms }, '2026-08-06T00:00:00.000Z');
+  assert.deepEqual(
+    Object.keys(docs['map.json']).sort(),
+    modeAPublishedKeys('Build + publish map.json'),
+  );
+});
+
+test('the collector publishes forms.json with the keys the Mode A node publishes', async () => {
+  const { map, forms } = await buildAll(core, null, { now: 0, aiConfigured: false, llm: null });
+  const docs = feedDocuments({ map, forms }, '2026-08-06T00:00:00.000Z');
+  assert.deepEqual(
+    Object.keys(docs['forms.json']).sort(),
+    modeAPublishedKeys('Publish forms.json'),
+  );
+});
+
+test('map.json entries carry the mermaid node id back to the raw n8n workflow', async () => {
+  // site/map.html keys its dialog off entries[].nid and early-returns without
+  // them — this is the payload that makes the Map tab clickable.
+  const { map, forms } = await buildAll(core, null, { now: 0, aiConfigured: false, llm: null });
+  const { entries } = feedDocuments({ map, forms }, '2026-08-06T00:00:00.000Z')['map.json'];
+  assert.ok(entries.length > 0);
+  for (const e of entries) {
+    assert.match(e.nid, /^wf_/);
+    assert.ok(e.id !== undefined && e.name && typeof e.sub === 'string');
+    assert.ok(map.mermaid.includes(e.nid), 'every entry names a node the diagram drew');
+  }
+});
+
+test('feedDocuments stamps both feeds with the caller\'s single generated_at', async () => {
+  const { map, forms } = await buildAll(core, null, { now: 0, aiConfigured: false, llm: null });
+  const docs = feedDocuments({ map, forms }, 'STAMP');
+  assert.equal(docs['map.json'].generated_at, 'STAMP');
+  assert.equal(docs['forms.json'].generated_at, 'STAMP');
+});
+
 // ---- atomic write helper ----------------------------------------------------
 test('atomicWriteFile writes via tmp then rename and leaves no .tmp behind', () => {
   const dir = mkdtempSync(join(tmpdir(), 'po11y-collect-'));
@@ -275,4 +370,32 @@ test('fetchExecutions returns the raw execution list via a GET', async () => {
 test('fetchExecutions returns an empty list when the executions API is disabled', async () => {
   const fetchFn = async () => jsonRes({ message: 'not found' }, 404);
   assert.deepEqual(await fetchExecutions(fetchFn, N8N, 'k'), []);
+});
+
+test('fetchExecutions honors a caller-supplied window size', async () => {
+  const paths = [];
+  const fetchFn = async (url) => { paths.push(new URL(url).search); return jsonRes({ data: [] }); };
+  await fetchExecutions(fetchFn, N8N, 'k', 250);
+  assert.deepEqual(paths, ['?limit=250']);
+});
+
+test('fetchExecutions clamps the window to the n8n API cap of 250', async () => {
+  const paths = [];
+  const fetchFn = async (url) => { paths.push(new URL(url).search); return jsonRes({ data: [] }); };
+  await fetchExecutions(fetchFn, N8N, 'k', 1000);
+  assert.deepEqual(paths, ['?limit=250']);
+});
+
+test('fetchExecutions floors a nonsensical window to 1', async () => {
+  const paths = [];
+  const fetchFn = async (url) => { paths.push(new URL(url).search); return jsonRes({ data: [] }); };
+  await fetchExecutions(fetchFn, N8N, 'k', 0);
+  assert.deepEqual(paths, ['?limit=1']);
+});
+
+test('fetchStatus fallback fetch uses the same caller-supplied window size', async () => {
+  const paths = [];
+  const fetchFn = async (url) => { paths.push(new URL(url).search); return jsonRes({ data: [] }); };
+  await fetchStatus(fetchFn, N8N, 'k', { limit: 250 });
+  assert.deepEqual(paths, ['?limit=250']);
 });

@@ -21,14 +21,16 @@
 // config.json's "baseUrl" (a bare host, not a URL prefix) to substitute a
 // different host instead — e.g. a remote n8n in Mode B.
 
+// Pure helpers (escaping, url policy, scope routing, range labels, …) live in
+// app.lib.js so they can be unit-tested (node --test "html/**/*.test.mjs");
+// everything DOM-shaped stays here.
+import { esc, safeUrl, ago, refreshMs, formCards, withHost as withHostOf,
+  scopeKeys as scopeKeysOf, pickScope, feedUrl as feedUrlOf,
+  scopedSrc as scopedSrcOf, withTab, metricsRangeLabel }
+  from './app.lib.js';
+
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
-  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-// hrefs from external data: escaping keeps attributes intact but not URL
-// schemes — allow only http(s)/relative so a hostile `javascript:` can't land.
-const safeUrl = (u) => /^(https?:\/\/|\/)/i.test(String(u ?? '')) ? esc(u) : '#';
-const withHost = (u) => String(u ?? '').replaceAll('{host}',
-  (typeof cfg.baseUrl === 'string' && cfg.baseUrl) ? cfg.baseUrl : window.location.hostname);
+const withHost = (u) => withHostOf(u, cfg, window.location.hostname);
 
 // ---- scopes -----------------------------------------------------------------
 // Multi-team views: config "scopes" ({ "<scope>": "Display name", … }) lets
@@ -36,32 +38,15 @@ const withHost = (u) => String(u ?? '').replaceAll('{host}',
 // is the flat canonical files (/status.json …); a non-default scope <s> lives
 // under /status/<s>/ (nginx maps both — see nginx.conf). 0 or 1 entry keeps
 // exactly today's behavior (flat paths, no switcher). activeScope is null in
-// that flat case; otherwise the localStorage-remembered scope key.
-// nginx's namespaced route only matches [a-z0-9-]+ (see nginx.conf); a key
-// outside that charset would 404 silently instead of ever fetching, so drop
-// it here — same charset guard the site pages (map.html/ai-map.html) use.
-const scopeKeys = () => (cfg.scopes && typeof cfg.scopes === 'object') ? Object.keys(cfg.scopes).filter((k) => {
-  if (/^[a-z0-9-]+$/.test(k)) return true;
-  console.warn(`po11y: dropping invalid scope key "${k}" (must match [a-z0-9-]+)`);
-  return false;
-}) : [];
+// that flat case; otherwise the localStorage-remembered scope key. The
+// key-validation/pick/path logic itself lives in app.lib.js.
+const scopeKeys = () => scopeKeysOf(cfg.scopes);
 let activeScope = null;
 function initScope() {
-  const keys = scopeKeys();
-  if (keys.length <= 1) { activeScope = null; return; } // flat, no switcher
-  let s = localStorage.getItem('po11y-scope');
-  if (!keys.includes(s)) s = keys.includes('default') ? 'default' : keys[0];
-  activeScope = s;
+  activeScope = pickScope(scopeKeys(), localStorage.getItem('po11y-scope'));
 }
-// One helper every feed fetch routes through: default (or no scopes) → the
-// legacy flat path (/status.json); else the namespaced path.
-const feedUrl = (feed) => (!activeScope || activeScope === 'default')
-  ? `/${feed}.json`
-  : `/status/${activeScope}/${feed}.json`;
-// iframe tabs (map/ai-map) fetch their own feed; pass the active non-default
-// scope down the tab URL so those pages can scope their fetch too.
-const scopedSrc = (src) => (!activeScope || activeScope === 'default') ? src
-  : String(src ?? '') + (String(src).includes('?') ? '&' : '?') + 'scope=' + encodeURIComponent(activeScope);
+const feedUrl = (feed) => feedUrlOf(feed, activeScope);
+const scopedSrc = (src) => scopedSrcOf(src, activeScope);
 function setScope(next) {
   if (!scopeKeys().includes(next) || next === activeScope) return;
   localStorage.setItem('po11y-scope', next);
@@ -100,14 +85,6 @@ const fetchJson = async (url) => {
   const r = await fetch(url, { cache: 'no-store' });
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json();
-};
-const ago = (iso) => {
-  const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (!isFinite(m)) return '?';
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m} min ago`;
-  const h = Math.round(m / 60);
-  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
 };
 const toast = (msg, ok) => {
   let box = $('toasts');
@@ -203,7 +180,7 @@ function buildChrome() {
       : '';
     // src set on first show — don't load every iframe up front
     sec.innerHTML = strip + e.tabs.map((t) =>
-      `<iframe class="tabframe" data-sub-pane="${esc(t.id)}" data-src="${safeUrl(withHost(scopedSrc(t.src)))}"
+      `<iframe class="tabframe" data-sub-pane="${esc(t.id)}" data-src="${safeUrl(withHost(scopedSrc(withTab(t))))}"
         title="${esc(t.label)}"${t.id === open ? '' : ' hidden'}></iframe>`).join('');
     $('main').appendChild(sec);
   });
@@ -305,16 +282,13 @@ function buildChrome() {
     return `${heading ? `<h2 class="sec-h${closed ? ' closed' : ''}" data-sec="${id}" title="${esc(heading)} — click to collapse or expand">${esc(heading)}</h2>` : ''}
       <div id="${id}"${cls ? ` class="${cls}"` : ''}${closed ? ' hidden' : ''}></div>`;
   };
-  // The d-solo embeds hide Grafana's time picker, so say in the heading what
-  // window the panels cover ("now-7d" → "last 7 days"); an unparsed range
-  // shows raw, and the deep-link card (embeds off) has its own picker.
+  // Only embedded panels pin a window (the deep-link card, embeds off, has its
+  // own picker) — so only then does the heading carry the range label.
   const metricsHeading = () => {
     const base = cfg.metrics.heading || 'Metrics';
     const g = cfg.metrics.grafana;
     if (!(g && g.embed && g.dashboard)) return base;
-    const m = /^now-(\d+)([mhdwMy])$/.exec(g.range || 'now-7d');
-    const unit = m && { m: 'minute', h: 'hour', d: 'day', w: 'week', M: 'month', y: 'year' }[m[2]];
-    return `${base} — ${m ? `last ${m[1]} ${unit}${m[1] === '1' ? '' : 's'}` : (g.range || 'now-7d')}`;
+    return `${base} — ${metricsRangeLabel(g.range)}`;
   };
   ov.innerHTML =
     (cfg.metrics ? block(metricsHeading(), 'metrics', 'cards') : '') +
@@ -490,13 +464,18 @@ function renderExecutions() {
   const rows = (ex.byWorkflow || []).filter((w) =>
     !f || String(w.name ?? '').toLowerCase().includes(f));
   if (!rows.length) { el.innerHTML = `<p class="empty">${f ? 'no match' : 'no executions yet'}</p>`; return; }
-  const summary = `<p class="updated">${ex.recent ?? 0} recent · ${ex.errors ?? 0} errors</p>`;
+  // status.json is user-writable in Mode A (a Code node publishes it), so these
+  // counters are external data like every other field here — esc() them even
+  // though the collector only ever writes numbers.
+  const summary = `<p class="updated">${esc(ex.recent ?? 0)} recent · ${esc(ex.errors ?? 0)} errors</p>`;
   el.innerHTML = summary + rows.map((w) => {
     const dot = w.errors ? 'fail' : 'ok';
-    const errPart = w.errors ? `<b class="err">${w.errors} errors</b>` : `${w.errors ?? 0} errors`;
+    const errPart = w.errors
+      ? `<b class="err">${esc(w.errors)} errors</b>`
+      : `${esc(w.errors ?? 0)} errors`;
     return `<div class="notif"><span class="dot ${dot}"></span>
       <div><b>${esc(w.name)}</b> <span class="updated">${w.lastAt ? esc(ago(w.lastAt)) : 'never'}</span>
-      <p>${w.count ?? 0} runs · ${errPart}</p></div></div>`;
+      <p>${esc(w.count ?? 0)} runs · ${errPart}</p></div></div>`;
   }).join('');
 }
 
@@ -593,28 +572,33 @@ function renderNotifications() {
     // so in the lede, which is empty by default and always visible.
     console.warn('po11y: /config.json unreadable — using built-in defaults');
     cfg.lede = 'config.json not readable — run: cp config.example.json config.json';
+    // Without a config the poll interval is the built-in 30 s, so a 5-minute
+    // staleness threshold would light the "stale" badge permanently and blame
+    // the publisher for the missing config. Say the one true thing (the lede)
+    // rather than two things, one of them wrong.
+    cfg.staleAfterMin = Infinity;
   }
   initScope();
-  // Auto-discovered form triggers (forms.json, published by the maps
-  // workflow) become Actions cards; config-declared cards win on collisions.
+  // Auto-discovered form triggers (forms.json, published by the maps workflow
+  // or the Mode B collector) become Actions cards; config-declared cards win on
+  // collisions. Card shape depends on the /form/ proxy and cfg.n8nUrl — see
+  // formCards in app.lib.js.
   try {
     const feed = await fetchJson(feedUrl('forms'));
     const actions = (cfg.cards = cfg.cards || {}).Actions = cfg.cards.Actions || [];
-    const have = new Set(actions.map((c) => (c.href || '').split('/form/')[1]).filter(Boolean));
-    for (const f of feed.forms || []) {
-      if (have.has(f.path)) continue;
-      // Field-less forms fire in place (fetch POST via the /form/ proxy);
-      // forms with inputs still open n8n's own form page.
-      actions.push(f.fields === 0
-        ? { name: f.name, sub: f.sub, action: f.path }
-        : { name: f.name, sub: f.sub, href: `http://{host}:5678/form/${f.path}` });
-    }
+    actions.push(...formCards(feed, actions, {
+      formProxy: cfg.formProxy !== false,
+      cfg,
+      hostname: window.location.hostname,
+    }));
     if (!actions.length) delete cfg.cards.Actions;
   } catch { /* feed optional */ }
   buildChrome();
   refreshStatus();
   refreshNotifications();
-  setInterval(() => { refreshStatus(); refreshNotifications(); }, (cfg.refreshSec ?? 30) * 1000);
+  setInterval(() => { refreshStatus(); refreshNotifications(); }, refreshMs(cfg.refreshSec, 30));
+  // 0 disables the metrics poll outright (documented); anything else is clamped
+  // like the feed poll rather than trusted as a delay.
   const mSec = cfg.metricsRefreshSec ?? 60;
-  if (mSec > 0) setInterval(refreshStatCards, mSec * 1000);
+  if (mSec > 0) setInterval(refreshStatCards, refreshMs(mSec, 60));
 })();

@@ -45,9 +45,12 @@ feed and Grafana panels.
 
 The **Architecture** view: an interactive map of your workflows, rebuilt from
 the live n8n instance every 10 minutes. The structure is computed
-deterministically from the workflow export; an LLM (optional, see
-[docs/ai-map.md](docs/ai-map.md)) only writes the one-line descriptions, with
-heuristic text when none is configured.
+deterministically from the workflow export; an LLM only writes the one-line
+descriptions. By default that LLM is the bundled OmniRoute gateway's keyless
+free-tier route, which sends a workflow-structure digest (names, node types,
+connections — see [docs/ai-map.md](docs/ai-map.md) for the exact field list)
+to a third-party provider. `OMNIROUTE_ENABLED=false` opts out entirely and
+falls back to heuristic text computed locally.
 
 ![Architecture map](docs/img/architecture.png)
 
@@ -62,15 +65,17 @@ wheel, the buttons or `+`/`-`, and `0` to refit), a staleness badge when the sta
 feed stops updating, a dark/light theme toggle, and extra sidebar views for
 any pages you want to serve.
 
-**Alerting** ships on by default in both modes, with no extra service to run:
-Grafana rules against n8n's database in Mode A, a watchdog in the collector in
-Mode B. Both cover failing, stale and stuck workflows plus an unreachable n8n.
-Mode B can instead run a bundled Prometheus + Alertmanager overlay, which buys
-routing and inhibition: one n8n outage arrives as one message rather than one
-per workflow. It replaces the collector's own push rather than joining it
-([docs/alerting.md](docs/alerting.md)). A read-only **MCP server** at `/mcp/`
-lets an agent ask the same questions the dashboard answers, without execution
-payloads ever leaving the box ([docs/mcp.md](docs/mcp.md)).
+**Alerting** needs no extra service to run: Grafana rules against n8n's
+database in Mode A, a watchdog in the collector in Mode B. Both cover failing,
+stale and stuck workflows plus an unreachable n8n. Mode A's rules are on from
+the first boot; Mode B's watchdog is on by default too (`ALERTS_ENABLED=false`
+opts out, and the stale/stuck budgets default to off — see
+[docs/alerting.md](docs/alerting.md)). Mode B can instead run a bundled
+Prometheus + Alertmanager overlay, which buys routing and inhibition: one n8n
+outage arrives as one message rather than one per workflow. It replaces the
+collector's own push rather than joining it. A read-only **MCP server** at
+`/mcp/` lets an agent ask the same questions the dashboard answers
+([docs/mcp.md](docs/mcp.md)).
 
 ## Quickstart: Mode A (bundled)
 
@@ -94,8 +99,9 @@ set `BIND_ADDR` in `.env` to a private VPN or LAN IP (and set
 **Alerting is on from the first boot.** Five Grafana rules (failing, stale,
 stuck, queue backlog and n8n unreachable) evaluate against n8n's own database
 and show up under *Alerting* in Grafana with no configuration. Set
-`GRAFANA_ALERT_WEBHOOK_URL` when you want them to leave the box. Mode A is the
-only mode that can see stuck executions and queue depth at all; see
+`GRAFANA_ALERT_WEBHOOK_URL` when you want them to leave the box. Queue depth is
+something only Mode A can see (the API has no equivalent); stuck executions
+both modes can, Mode B at poll-interval granularity. See
 [docs/alerting.md](docs/alerting.md) for why, and for the three other
 mechanisms.
 
@@ -133,7 +139,10 @@ workflows write; the dashboard doesn't know or care which mode produced them.
 **Prerequisites**
 
 - An n8n API key scoped to `workflow:list`, `workflow:read`, `execution:list`
-  and `execution:read`, the only four calls the collector makes. Recent n8n
+  and `execution:read`. The collector itself makes three GETs per poll
+  (`/workflows`, `/executions`, and `/workflows/{id}` only as a fallback when a
+  listing arrives without its nodes); `execution:read` is there for the MCP
+  server's `po11y_failure`, which reuses the same key. Recent n8n
   supports scoped keys on Community Edition too (verified on 2.29.8); if yours
   offers no scope picker, the key is full-access, so create it under a
   dedicated, low-privilege operator account instead.
@@ -153,6 +162,7 @@ for the full list with defaults):
 | `N8N_METRICS_TARGET` | yes | `host:port` of the remote n8n's `/metrics` |
 | `GRAFANA_ADMIN_PASSWORD` | yes | no `bootstrap.sh` here to generate one |
 | `POLL_INTERVAL` | no | seconds between polls, default `600` |
+| `EXECUTIONS_LIMIT` | no | recent-executions window per poll, default `100`, max `250` (n8n API cap) — see "Sizing the window" below |
 | `STATUS_DIR` | no | feed directory, default `/po11y-status`; set `/po11y-status/<scope>` for a scoped collector ([docs/configuration.md](docs/configuration.md)) |
 | `AI_MAP_BASE_URL` / `AI_MAP_API_KEY` / `AI_MAP_MODEL` | no | optional AI prose, empty = heuristic map |
 | `ENABLE_FORM_PROXY` / `FORM_PROXY_UPSTREAM` | no | default `false` in this mode ([docs/security.md](docs/security.md)) |
@@ -178,9 +188,9 @@ instead of a container list (there's no Docker socket); the Mode B example
 config enables that `executions` section for you. Set `baseUrl` to the remote
 n8n's host (a bare hostname, not a URL) so the `{host}` deep links resolve.
 
-**Optional watchdog.** Set `ALERTS_ENABLED=true` and the collector evaluates
-three rules on each poll, writing anything worth saying into the notifications
-feed the dashboard already renders: `failing` (a workflow erroring above both a
+**Watchdog.** On by default (`ALERTS_ENABLED=false` opts out), the collector
+evaluates three rules on each poll, writing anything worth saying into the
+notifications feed the dashboard already renders: `failing` (a workflow erroring above both a
 count and a rate floor), `stale` (no *successful* run within its budget,
 including an active workflow with no executions at all) and `stuck` (an
 execution sitting in `running` past its budget). It costs no extra n8n calls: it
@@ -189,6 +199,16 @@ measured from the last success rather than the last run, so a workflow failing
 every five minutes still ages into an alert. Set `ALERT_WEBHOOK_URL` to also
 push those alerts to Slack, Discord, Telegram or any webhook (an n8n one, if
 you want it to end up as email).
+
+**Sizing the window.** The collector sees the most recent `EXECUTIONS_LIMIT`
+executions per poll (default 100), not a complete history. If your instance
+runs more executions than that per `POLL_INTERVAL`, the excess never reaches
+the dashboard or the `failing` rule — at 2 executions/minute and the defaults,
+that is 1200 executions per poll competing for 100 slots. Tune until
+`EXECUTIONS_LIMIT >= executions per POLL_INTERVAL`: raise `EXECUTIONS_LIMIT`
+(capped at 250 by n8n's API) and/or lower `POLL_INTERVAL`. `stale` and
+`unreachable` are unaffected — staleness keys on last-success age, not on
+window membership.
 
 Those three rules are computed *from* n8n, so a poll that can't reach n8n at all
 raises a fourth alert of its own (`unreachable`) rather than going quiet on the
@@ -234,8 +254,8 @@ it" is your question, n8n-trace answers it better.
 Where Po11y is ahead: nothing else in the survey builds an **architecture map**
 of how your workflows call each other, nothing else turns **form triggers into
 action buttons**, and Mode B's read-only posture is stricter than the
-alternatives: it installs no workflows, needs no database of its own, and
-makes four GET calls.
+alternatives: it installs no workflows, needs no database of its own, and only
+ever GETs.
 
 ## Going further
 
@@ -250,9 +270,10 @@ makes four GET calls.
 - [docs/configuration.md](docs/configuration.md): `config.json` reference,
   every feed contract, multi-team scopes, the DataTable read proxy, and
   custom tab pages.
-- [docs/mcp.md](docs/mcp.md): the read-only MCP server, covering what an agent can ask
-  about a running instance, which tools each mode can serve, and why execution
-  payloads never leave the box.
+- [docs/mcp.md](docs/mcp.md): the read-only MCP server, covering what an agent
+  can ask about a running instance, which tools each mode can serve, why the
+  ops tools report execution *shapes* rather than execution data, and which two
+  tools deliberately do return content (`po11y_sql`, `po11y_row`).
 - [docs/ai-map.md](docs/ai-map.md): enabling LLM prose on the architecture
   map, and why it costs near zero.
 - [docs/integration.md](docs/integration.md): mounting the dashboard into an
@@ -265,8 +286,9 @@ makes four GET calls.
 Issues and merge requests welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the
 local check suite (all of it runs without bringing the stack up) and the one
 non-obvious rule about `lib/` being the source of truth for the workflow Code
-nodes. Found a security problem? [SECURITY.md](SECURITY.md), not a public
-issue.
+nodes. [docs/ci.md](docs/ci.md) is the pipeline schematic — what each CI job
+gates and why forks still get a real pipeline. Found a security problem?
+[SECURITY.md](SECURITY.md), not a public issue.
 
 ## About
 

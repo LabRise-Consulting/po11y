@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, mergeNotifications, envNumber, unreachableAlert } from './watchdog.mjs';
+import { readFileSync } from 'node:fs';
+import { summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, mergeNotifications, envNumber, unreachableAlert, DEFAULT_FEED_MAX } from './watchdog.mjs';
 
 const T = (iso) => new Date(iso).getTime();
 const NOW = T('2026-07-28T12:00:00Z');
@@ -421,4 +422,20 @@ test('an unscoped pass resolves everything, which is what a successful poll mean
   const clean = reconcileAlerts([], open.state, { now: NOW + 60_000, renotifyMin: 999 });
   assert.equal(clean.fire.length, 2);
   assert.deepEqual(clean.state, {});
+});
+
+// ---- the notifications cap has one home -------------------------------------
+// DEFAULT_FEED_MAX is exported precisely so the copies that CANNOT import it
+// (an env-file comment, a Code node's inlined jsCode) are pinned here instead
+// of drifting silently — the cap used to live in four places.
+test('.env.example documents the same ALERT_FEED_MAX default the code uses', () => {
+  const env = readFileSync(new URL('../.env.example', import.meta.url), 'utf8');
+  assert.match(env, new RegExp(`default ${DEFAULT_FEED_MAX}\\)`), 'comment names the default');
+  assert.match(env, new RegExp(`^ALERT_FEED_MAX=${DEFAULT_FEED_MAX}$`, 'm'));
+});
+
+test('the hn-notify example workflow caps its feed at the same default', () => {
+  const wf = readFileSync(new URL('../workflows/examples/hn-notify.json', import.meta.url), 'utf8');
+  assert.ok(wf.includes(`slice(0, ${DEFAULT_FEED_MAX})`),
+    'hn-notify.json no longer slices at DEFAULT_FEED_MAX — update it or this pin');
 });

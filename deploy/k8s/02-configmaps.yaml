@@ -13,6 +13,18 @@
 #   kubectl -n po11y create configmap grafana-dashboards-json \
 #     --from-file=observability/grafana/provisioning/dashboards/json/
 #
+#   # Grafana entrypoint + Mode A alert rules — created from the canonical repo
+#   # files rather than inlined here, so the k8s copy cannot drift from what
+#   # compose runs (the same reason the entrypoint is one shared script at all):
+#   kubectl -n po11y create configmap grafana-entrypoint \
+#     --from-file=observability/grafana/entrypoint.sh
+#   kubectl -n po11y create configmap grafana-alerting \
+#     --from-file=observability/grafana/alerting/
+#
+#   # Module behind the dashboard's list tabs (nginx serves it at
+#   # /lib/list-rows.mjs; optional — only a config with a list tab needs it):
+#   kubectl -n po11y create configmap po11y-lib --from-file=lib/list-rows.mjs
+#
 # The grafana entrypoint sed-loops over dashboards/json/*.json, so the
 # grafana-dashboards-json ConfigMap MUST exist before grafana starts or the
 # container crash-loops on an unmatched glob.
@@ -23,11 +35,27 @@ metadata:
   name: po11y-nginx
   namespace: po11y
 data:
-  # Verbatim copy of ./nginx.conf. Upstreams (grafana:3000, prometheus:9090)
-  # resolve to the ClusterIP Services of the same name in this namespace.
-  # The resolver line is Docker's embedded DNS (127.0.0.11); on k8s it is
-  # harmless — nginx also passes literal Service names to kube-dns via the
-  # variable-upstream form, so backends being down never blocks nginx start.
+  # A REDUCED copy of ./nginx.conf — not a verbatim one. Upstreams
+  # (grafana:3000, prometheus:9090) resolve to the ClusterIP Services of the
+  # same name in this namespace. The resolver line is Docker's embedded DNS
+  # (127.0.0.11); on k8s it is harmless — nginx also passes literal Service
+  # names to kube-dns via the variable-upstream form, so backends being down
+  # never blocks nginx start.
+  #
+  # Deliberately absent here, because the compose entrypoints render them at
+  # container start and nothing renders them on k8s:
+  #
+  #   - the auth include. THERE IS NO AUTHENTICATION ON K8S. Neither Basic Auth
+  #     nor forward-auth OIDC exists in this config, so anything that can reach
+  #     the Service can read every feed and every embedded Grafana panel. Put
+  #     an authenticating Ingress in front of it — see the warning in README.md.
+  #   - /mcp/ (no mcp Deployment here either)
+  #   - the /form/ submit proxy
+  #   - the /status/<scope>/ regexes (no multi-team scopes)
+  #   - /n8n-table/ (the DataTable read proxy)
+  #   - the identity-header scrubs the forward-auth path relies on
+  #
+  # Keep this list current when you edit ./nginx.conf.
   default.conf: |
     server {
       listen 80;
@@ -69,6 +97,16 @@ data:
 
       location /site/ {
         alias /usr/share/nginx/site/;
+      }
+
+      # Module behind the dashboard's list tabs (mirrors ./nginx.conf, incl.
+      # its exact-match + default_type rationale). 404s harmlessly unless the
+      # optional po11y-lib ConfigMap is mounted — and a config with no list
+      # tab never requests it.
+      location = /lib/list-rows.mjs {
+        alias /usr/share/nginx/lib/list-rows.mjs;
+        default_type text/javascript;
+        add_header Cache-Control "no-cache";
       }
 
       location /grafana/ {
@@ -174,6 +212,10 @@ data:
   # ./observability/grafana/provisioning/datasources/datasources.yml
   # Grafana interpolates ${VAR} in provisioning YAML from the pod env, so the
   # DB_POSTGRESDB_* env vars on the grafana Deployment fill these in.
+  # KNOWN DIVERGENCE from compose: compose authenticates this datasource as
+  # the read-only po11y_ro role (created by bootstrap.sh); these manifests
+  # have no bootstrap equivalent, so Grafana here still uses n8n's own DB
+  # credentials with full privileges.
   datasources.yml: |
     apiVersion: 1
 

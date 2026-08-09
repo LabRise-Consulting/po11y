@@ -73,6 +73,20 @@ test('/healthz reports source availability', async () => {
   });
 });
 
+test('/healthz answers GET and HEAD, and refuses anything that could change state', async () => {
+  // The health branch sat above the method check, so POST and DELETE to
+  // /healthz both answered 200 — a read-only server advertising a write it
+  // does not implement.
+  await withServer(app, async (base) => {
+    assert.equal((await fetch(`${base}/healthz`, { method: 'HEAD' })).status, 200);
+    for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
+      const res = await fetch(`${base}/healthz`, { method });
+      assert.equal(res.status, 405, `${method} /healthz`);
+      assert.equal(res.headers.get('allow'), 'GET, HEAD');
+    }
+  });
+});
+
 test('an oversized body is rejected with 413', async () => {
   const small = createApp({ dispatch: echoDispatch, health: () => ({}), maxBody: 16 });
   await withServer(small, async (base) => {

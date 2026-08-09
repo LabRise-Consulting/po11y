@@ -1,10 +1,22 @@
 # Prometheus alerting rules for po11y (Mode B). Loaded only when the alerting
 # overlay is in play — see docker-compose.alerts.yml.
 #
-# The thresholds here are the same defaults the in-collector watchdog documents
-# in .env.example, restated as PromQL. Running both is supported but means
-# double notification: pick one path, or leave ALERTS_ENABLED=false and let
-# Alertmanager own routing.
+# These are NOT the watchdog's defaults restated. They are the thresholds that
+# make sense for a rule that runs continuously against a counter, and they
+# differ from the watchdog's on purpose:
+#
+#   rule      here                          watchdog default
+#   failing   >= 3 errors in 1h             >= 3 errors AND >= 50% of the window
+#   stale     no success in 6h              off (ALERT_STALE_AFTER_MIN=0)
+#   stuck     running > 1h                  off (ALERT_STUCK_AFTER_MIN=0)
+#
+# The watchdog's `failing` also carries an error-*rate* floor that no PromQL
+# rule here reproduces: a busy workflow with three failures among a thousand
+# runs alerts here and does not there. Tune to taste; do not assume parity.
+#
+# Running both is supported but means double notification: pick one path, or
+# set ALERTS_ENABLED=false (the watchdog is on by default) and let Alertmanager
+# own routing.
 groups:
   - name: po11y
     interval: 60s

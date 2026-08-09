@@ -335,8 +335,14 @@ export function alertsToNotifications(fire, { now = Date.now(), baseUrl = '' } =
  * @param {number} [max]
  * @returns {object[]}
  */
-export function mergeNotifications(fresh, prev, max = 50) {
-  const keep = Number(max) > 0 ? Number(max) : 50;
+// The one home of the notifications.json cap. index.mjs reads it for the
+// ALERT_FEED_MAX default and a test pins .env.example's documented default to
+// it; the hn-notify example workflow hard-codes its own copy (a Code node
+// cannot import this module) — that copy is pinned by the same test.
+export const DEFAULT_FEED_MAX = 50;
+
+export function mergeNotifications(fresh, prev, max = DEFAULT_FEED_MAX) {
+  const keep = Number(max) > 0 ? Number(max) : DEFAULT_FEED_MAX;
   const tail = Array.isArray(prev) ? prev : [];
   return [...(Array.isArray(fresh) ? fresh : []), ...tail].slice(0, keep);
 }

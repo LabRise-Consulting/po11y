@@ -26,10 +26,27 @@ spec:
       labels:
         app: n8n
     spec:
+      # The n8n image runs as the node user (uid/gid 1000); fsGroup makes the
+      # two PVCs (n8n-data, po11y-status) writable by it regardless of what the
+      # storage provisioner chowns fresh volumes to.
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: n8n
           # <-- REPLACE with your pushed image (built from ./Dockerfile).
           image: po11y-n8n:latest
+          # No readOnlyRootFilesystem: n8n writes settings/binary-data under
+          # /home/node/.n8n (the PVC) but also scratch files elsewhere; the
+          # rest of the baseline applies.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 5678
           env:

@@ -56,6 +56,7 @@ get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/[[:space:]
 # Generated secrets (kept if already set). N8N_OWNER_PASSWORD gets an 'A1'
 # prefix so it always satisfies n8n's policy (>=8 chars, number, capital).
 [ -n "$(get_env DB_POSTGRESDB_PASSWORD)" ] || set_env DB_POSTGRESDB_PASSWORD "$(openssl rand -hex 24)"
+[ -n "$(get_env PO11Y_RO_PASSWORD)" ]      || set_env PO11Y_RO_PASSWORD "$(openssl rand -hex 24)"
 [ -n "$(get_env GRAFANA_ADMIN_PASSWORD)" ] || set_env GRAFANA_ADMIN_PASSWORD "$(openssl rand -hex 16)"
 [ -n "$(get_env N8N_OWNER_PASSWORD)" ]     || set_env N8N_OWNER_PASSWORD "A1$(openssl rand -hex 16)"
 
@@ -113,6 +114,16 @@ if [ "$BIND" != "127.0.0.1" ] && [ "$BIND" != "localhost" ] \
   echo "bootstrap: REFUSING — BIND_ADDR=$BIND is not loopback and"
   echo "  DASHBOARD_BASIC_AUTH is empty. Set it, or set PO11Y_ALLOW_OPEN_BIND=1."
   exit 78
+fi
+# DASHBOARD_BASIC_AUTH gates only nginx on :8080. A non-loopback bind also
+# publishes three ports that auth does not touch — say so every run, because
+# the interlock passing reads as "auth covers me" when it does not.
+if [ "$BIND" != "127.0.0.1" ] && [ "$BIND" != "localhost" ]; then
+  echo "bootstrap: WARNING — BIND_ADDR=$BIND also publishes ports DASHBOARD_BASIC_AUTH does NOT gate:"
+  echo "  $BIND:5678  n8n editor (own login) + unauthenticated /metrics"
+  echo "  $BIND:3000  Grafana (anonymous Viewer unless DASHBOARD_GRAFANA_EMBED=false)"
+  echo "  $BIND:9090  Prometheus (no auth)"
+  echo "  Restrict these at a firewall, or keep BIND_ADDR loopback behind your own proxy."
 fi
 
 # ---- 2. stack up ----------------------------------------------------------------
@@ -198,6 +209,29 @@ compose exec -T postgres psql -U "${DB_POSTGRESDB_USER:-n8n}" \
   -d "${DB_POSTGRESDB_DATABASE:-n8n}" \
   -c 'CREATE INDEX IF NOT EXISTS idx_execution_entity_started_at ON execution_entity ("startedAt");' \
   >/dev/null 2>&1 || true
+
+# Read-only role for Grafana's n8n-postgres datasource (and so for the MCP
+# po11y_sql tool, which queries through it). SELECT-only — no sequence or
+# signal grants, so SELECT setval(...) / pg_terminate_backend(...) fail at the
+# database, and credentials_entity / execution_data are denied outright.
+# Deny-by-default: no ALTER DEFAULT PRIVILEGES, so tables added by future n8n
+# migrations stay unreadable until this block re-runs on the next bootstrap.
+# Loud on failure — if the role is wrong, Grafana panels and alert rules break.
+PO11Y_RO_PW="$(get_env PO11Y_RO_PASSWORD)"
+compose exec -T postgres psql -U "${DB_POSTGRESDB_USER:-n8n}" \
+  -d "${DB_POSTGRESDB_DATABASE:-n8n}" \
+  -v ON_ERROR_STOP=1 -v pw="$PO11Y_RO_PW" >/dev/null <<'SQL'
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'po11y_ro') THEN
+    CREATE ROLE po11y_ro LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+  END IF;
+END $$;
+ALTER ROLE po11y_ro PASSWORD :'pw';
+GRANT USAGE ON SCHEMA public TO po11y_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO po11y_ro;
+REVOKE ALL ON TABLE credentials_entity, execution_data FROM po11y_ro;
+SQL
+echo "bootstrap: po11y_ro role granted (read-only, credentials/execution payloads denied)"
 
 # Unconditional: a running instance is not guaranteed to pick up CLI-imported
 # active workflows; the restart is cheap.

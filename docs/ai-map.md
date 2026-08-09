@@ -30,10 +30,25 @@ model. An LLM is optional and improves the text. Two ways to enable that:
    use `llm`, `ollama run <model>`, or anything that reads a prompt on stdin
    and prints the answer).
 
+**What the LLM sees.** Exactly the per-workflow digest built in
+`lib/build-ai-map.mjs` (`digestOf`): workflow id, name and active flag, and
+per node its name, its type, plus — only when the node has them — the schedule
+`rule`, webhook `path`, `url` (truncated to 120 chars), `command` (160 chars),
+the called sub-workflow id, and the `//` comment lines of Code nodes (300
+chars). n8n credential objects, execution data and node payloads are never
+part of it — but a secret hardcoded into a node's URL or command text is
+inside those truncated fields, so it WILL be sent. With the default bundled
+OmniRoute route that digest goes to a third-party free-tier provider; set
+`OMNIROUTE_ENABLED=false` for the heuristic map (nothing leaves the box), or
+point `AI_MAP_BASE_URL` at an endpoint you trust.
+
 **Cost is near zero.** The map's structure is free (built from code). The LLM
 is only called when a workflow actually changed, and the call is differential:
 per-node content signatures (`sigs` in the published map) let unchanged nodes
 keep their previous prose, so the prompt carries only the changed workflows'
 digest. An unchanged map skips the call entirely; the "Build maps now" form
-forces a full re-annotation. A cheap model (e.g. `mistral-small-latest`) is
-plenty, and the keyless heuristic and local-Ollama paths cost nothing at all.
+forces a full re-annotation — in Mode B, where there is no form, send the
+collector a SIGHUP instead (`docker kill -s HUP po11y-collector`): it polls
+immediately and re-annotates everything. A cheap model (e.g.
+`mistral-small-latest`) is plenty, and the keyless heuristic and local-Ollama
+paths cost nothing at all.

@@ -1,8 +1,13 @@
 # Grafana — dashboards over the n8n postgres + prometheus. Compose:
-# grafana/grafana-oss:11.3.1. The custom entrypoint is mirrored verbatim: it
-# copies the read-only provisioning source to a writable /tmp copy, seds the
-# n8n deep-link host into the dashboard JSON, and rewrites the dashboards.yml
-# provider path. Grafana serves from the /grafana/ subpath behind nginx.
+# grafana/grafana-oss:11.3.1. Runs the SHARED entrypoint script
+# (observability/grafana/entrypoint.sh, mounted from the grafana-entrypoint
+# ConfigMap — see README step 3): it copies the read-only provisioning source
+# to a writable /tmp copy, seds the n8n deep-link host into the dashboard
+# JSON, rewrites the dashboards.yml provider path, and copies the alerting
+# rules in when /etc/grafana/alerting-src is present. An inline copy of that
+# script used to live here and (exactly like the compose otel overlay once
+# did) silently lacked the alerting branch — ci/check-grafana-entrypoint.sh
+# now guards this file too. Grafana serves from /grafana/ behind nginx.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,18 +30,23 @@ spec:
       # grafana image runs as uid/gid 472; make the PVC writable by it.
       securityContext:
         fsGroup: 472
+        runAsUser: 472
+        runAsGroup: 472
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: grafana
           image: grafana/grafana-oss:11.3.1
-          # Verbatim copy of the compose entrypoint (sh -euc <script>).
-          command: ["sh", "-euc"]
-          args:
-            - |
-              rm -rf /tmp/grafana-provisioning
-              cp -r /etc/grafana/provisioning-src /tmp/grafana-provisioning
-              sed -i "s|__WEB_BIND_ADDR__|$BIND_ADDR|g" /tmp/grafana-provisioning/dashboards/json/*.json
-              sed -i "s|/etc/grafana/provisioning/|/tmp/grafana-provisioning/|g" /tmp/grafana-provisioning/dashboards/dashboards.yml
-              exec /run.sh
+          # The one true entrypoint, same file compose mounts (see the header
+          # comment). It writes the rendered provisioning tree to /tmp, which
+          # is an emptyDir so the rootfs can stay read-only.
+          command: ["sh", "/etc/po11y-grafana-entrypoint.sh"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 3000
           env:
@@ -75,7 +85,21 @@ spec:
               value: "Viewer"
             - name: GF_SECURITY_ALLOW_EMBEDDING
               value: "true"
+            # Optional alert delivery. Empty/unset => the entrypoint drops the
+            # contact-points + policies files, so the five Mode A rules stay
+            # visible and firing in the UI but deliver nowhere (same default as
+            # compose). Set a webhook URL to enable delivery.
+            # - name: GRAFANA_ALERT_WEBHOOK_URL
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: po11y-secrets
+            #       key: GRAFANA_ALERT_WEBHOOK_URL
           volumeMounts:
+            # The shared entrypoint script (create imperatively, see README).
+            - name: entrypoint
+              mountPath: /etc/po11y-grafana-entrypoint.sh
+              subPath: entrypoint.sh
+              readOnly: true
             # Provisioning source tree, assembled from two ConfigMaps into the
             # layout the entrypoint expects under /etc/grafana/provisioning-src.
             - name: provisioning
@@ -90,15 +114,34 @@ spec:
             - name: dashboards-json
               mountPath: /etc/grafana/provisioning-src/dashboards/json
               readOnly: true
+            # Mode A alert rules (create imperatively, see README). The volume
+            # is optional: without the ConfigMap the directory mounts empty and
+            # the entrypoint provisions no rules — the pre-alerting behavior.
+            - name: alerting
+              mountPath: /etc/grafana/alerting-src
+              readOnly: true
+            # The entrypoint renders the provisioning copy under /tmp; emptyDir
+            # keeps that writable under readOnlyRootFilesystem.
+            - name: tmp
+              mountPath: /tmp
             - name: data
               mountPath: /var/lib/grafana
       volumes:
+        - name: entrypoint
+          configMap:
+            name: grafana-entrypoint
         - name: provisioning
           configMap:
             name: grafana-provisioning
         - name: dashboards-json
           configMap:
             name: grafana-dashboards-json
+        - name: alerting
+          configMap:
+            name: grafana-alerting
+            optional: true
+        - name: tmp
+          emptyDir: {}
         - name: data
           persistentVolumeClaim:
             claimName: grafana-data

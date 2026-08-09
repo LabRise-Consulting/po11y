@@ -1,8 +1,24 @@
-.env
+# `.env*` not `.env`: editor backups (.env~, .env.save) hold the real API key
+# under a name the bare pattern misses.
+.env*
+!.env.example
+*~
 config.json
 packs/*
 !packs/.gitkeep
 secrets/
+
+# Dashboard payloads the collector publishes at runtime. They carry the
+# workflow names of whoever ran the stack, so they must never be committed.
+# Anything under html/ that genuinely belongs in the repo needs a negation
+# below (see packs/.gitkeep for the same pattern).
+html/*.json
+
+# Local dev symlinks into the checkout. They hold absolute paths.
+html/lib
+html/site
+lib/lib
+site/site
 
 # Agent/tooling scratch. These were tracked once and are stripped from
 # history: local planning output and browser-automation dumps are noise for

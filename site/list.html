@@ -88,11 +88,18 @@
     // option — covering a window means walking pages by cursor.
     const basePages = (r) => (r === 'all' ? 1 : 8);
 
-    // Which tab am I? Match the config tabs[] entry whose src ends with list.html.
+    // Which tab am I? app.js passes my tabs[] id as ?tab=<id> — two list tabs
+    // share this src, so filename matching alone picks the FIRST entry for
+    // both. Fall back to the filename match for a hand-written URL without
+    // the parameter. (?scope= may also be present; deliberately unused — list
+    // data comes from n8n DataTables, not the scoped feeds volume.)
     async function loadSettings() {
       try {
         const cfg = await (await fetch('/config.json', { cache: 'no-store' })).json();
-        const me = (cfg.tabs || []).find((t) => String(t.src || '').includes('list.html'));
+        const myId = new URLSearchParams(location.search).get('tab');
+        const tabs = cfg.tabs || [];
+        const me = (myId && tabs.find((t) => t.id === myId))
+          || tabs.find((t) => String(t.src || '').includes('list.html'));
         if (me && me.list) settings = { ...settings, ...me.list };
       } catch { /* defaults */ }
       sortBy = settings.defaultSort || 'day';

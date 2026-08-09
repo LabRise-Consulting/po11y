@@ -8,16 +8,25 @@
 //     network and is never published to the host. nginx's /mcp/ location sits
 //     behind the same auth guard as the dashboard (Basic Auth, or forward-auth
 //     OIDC). MCP access is therefore dashboard access — see docs/security.md.
-//   - No execution payloads leave this process; tools report shapes and error
-//     text only (see mcp/tools/ops.mjs).
+//   - The ops tools never return execution payloads: they report shapes and
+//     error text only (see describeShape in mcp/tools/ops.mjs). This is NOT a
+//     process-wide guarantee — po11y_sql runs arbitrary SELECTs against n8n's
+//     database (execution_data included) and po11y_row returns a dataset row in
+//     full. Both are deliberate and documented in docs/mcp.md and
+//     docs/security.md; MCP access is dashboard access.
 //   - No secret (API key, connection string) appears in any response or log.
 
 import { createServer } from 'node:http';
+import { pathToFileURL } from 'node:url';
 import { createDispatcher } from './protocol.mjs';
 import { detectSources } from './sources.mjs';
 import { buildRegistry } from './registry.mjs';
 
 const PORT = Number(process.env.PORT || 8082);
+// Unpublished under the shipped compose, so binding every interface means the
+// compose network. BIND_HOST narrows it for deployments where it would mean
+// more than that — this process answers without authentication by design.
+const BIND_HOST = process.env.BIND_HOST || '';
 const MAX_BODY = Number(process.env.MCP_MAX_BODY || 1_048_576); // 1 MiB
 
 /**
@@ -76,7 +85,16 @@ export function createApp({ dispatch, health, maxBody = MAX_BODY }) {
   return async function app(req, res) {
     const path = String(req.url || '').split('?')[0];
 
-    if (path === '/healthz') return send(res, 200, health());
+    // Health is read-only: the branch used to sit above the method check, so a
+    // POST or DELETE to /healthz answered 200 and made a read-only server look
+    // like it accepted writes.
+    if (path === '/healthz') {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { allow: 'GET, HEAD' });
+        return res.end();
+      }
+      return send(res, 200, health());
+    }
     if (path !== '/mcp' && path !== '/mcp/') return send(res, 404, { error: 'not found' });
 
     // No server-initiated streams: nothing here pushes notifications, so the
@@ -149,9 +167,12 @@ async function main() {
 
   const enabled = Object.entries(sources).filter(([, v]) => v.available()).map(([k]) => k);
   // Names only — never a URL with credentials in it.
-  process.stdout.write(`po11y-mcp: listening on :${PORT}, sources: ${enabled.join(', ') || 'none'}\n`);
-  createServer(createApp({ dispatch, health })).listen(PORT);
+  process.stdout.write(`po11y-mcp: listening on ${BIND_HOST || '*'}:${PORT}, sources: ${enabled.join(', ') || 'none'}\n`);
+  const server = createServer(createApp({ dispatch, health }));
+  if (BIND_HOST) server.listen(PORT, BIND_HOST); else server.listen(PORT);
 }
 
-// Import-safe: tests import createApp without starting a listener.
-if (process.argv[1] && process.argv[1].endsWith('index.mjs')) main();
+// Import-safe: tests import createApp without starting a listener. Comparing
+// the resolved module URL rather than the basename — `endsWith('index.mjs')`
+// fired for ANY entry script with that name, which is most of them.
+if (import.meta.url === pathToFileURL(process.argv[1] || '').href) main();

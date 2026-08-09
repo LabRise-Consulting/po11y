@@ -5,7 +5,7 @@
 // per-instance tool code exists. Rows are returned as mapped card fields
 // (title/url/score/day/badge/meta/detail), never raw columns.
 
-import { walkPages, sortItems, filterByRange } from '../../lib/list-rows.mjs';
+import { walkPages, sortItems, filterByRange, RANGES } from '../../lib/list-rows.mjs';
 import { unavailable, N8N_TABLE_PREFIX } from '../sources.mjs';
 import { clampLimit } from './ops.mjs';
 
@@ -71,6 +71,11 @@ export function todayIso(now = new Date()) {
  * Pull a dataset's rows. forceIdSort is ON here and OFF in the browser: the
  * walk must be exact (docs/configuration.md:287), and the caller re-sorts
  * afterwards anyway.
+ *
+ * The page budget deliberately differs from site/list.html's: the browser
+ * starts at 1 page for 'all' and lets the reader click "load more"; a tool
+ * call has no second click, so it spends its whole budget (default 8, the
+ * same ceiling the browser's bounded ranges use) in one walk.
  */
 async function loadRows(tables, tab, { range = 'all', maxPages = 8 } = {}) {
   return walkPages((u) => tables.fetchJson(u), {
@@ -125,7 +130,8 @@ export function rowsTool({ datatables }, config) {
       required: ['dataset'],
       properties: {
         dataset: { type: 'string', description: 'Dataset id from po11y_datasets.' },
-        range: { type: 'string', enum: ['all', 'today', '7d', '30d'], description: 'Rolling window over the day field.' },
+        // Keys come from the lib the browser uses too — one home (D2 rule).
+        range: { type: 'string', enum: RANGES.map((r) => r.key), description: 'Rolling window over the day field.' },
         minScore: { type: 'number', description: 'Drop rows scoring below this.' },
         badge: { type: 'string', description: 'Restrict to one badge value (provenance).' },
         match: { type: 'string', description: 'Case-insensitive substring over title, meta and badge.' },

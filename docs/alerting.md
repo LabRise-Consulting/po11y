@@ -10,7 +10,7 @@ each mode can see different things.
 
 | | Mechanism | Mode | Ships on by default | Delivers to |
 |---|---|---|---|---|
-| 1 | **Notifications feed** | A + B | B only | The dashboard's Notifications panel |
+| 1 | **Notifications feed** | A + B | B: yes (`ALERTS_ENABLED=false` opts out); A: no, nothing writes it | The dashboard's Notifications panel |
 | 2 | **Grafana alerting** | **A only** | **yes** | Webhook (`GRAFANA_ALERT_WEBHOOK_URL`) |
 | 3 | **Collector push** | **B only** | no | Slack / Discord / Telegram / raw |
 | 4 | **Prometheus + Alertmanager** | **B only** | no (opt-in overlay) | Webhook |
@@ -49,22 +49,27 @@ polls, and only what the API chooses to expose.
 
 That difference is not cosmetic:
 
-- **Stuck executions** are visible only in Mode A. n8n's own Prometheus metrics
-  record an execution when it *finishes*, so an execution that hangs forever
-  emits nothing at all. A database row with `finished = false` and no
-  `stoppedAt` is unambiguous.
-- **Queue backlog** (`status = 'new'`) is likewise Mode A only. The API has no
+- **Stuck executions** are visible to *n8n's own metrics* only in Mode A: those
+  metrics record an execution when it *finishes*, so one that hangs forever
+  emits nothing at all, while a database row with `finished = false` and no
+  `stoppedAt` is unambiguous. Mode B closes the gap from the other side — the
+  collector derives `po11y_workflow_running_seconds` from the executions API
+  each poll, so **both modes alert on stuck workflows**; Mode B's granularity is
+  the poll interval rather than instant. The collector watchdog's `stuck` rule
+  and the Alertmanager overlay's `Po11yWorkflowStuck` both run off that gauge.
+- **Queue backlog** (`status = 'new'`) genuinely is Mode A only. The API has no
   equivalent.
-- Mode B compensates with `po11y_workflow_running_seconds`, a gauge the
-  collector derives by polling — which is why Mode B can still alert on stuck
-  workflows, just with poll-interval granularity.
 
 ## 1. Notifications feed
 
 The dashboard's Notifications panel, fed by `notifications.json`.
 
-In **Mode B** the collector's watchdog writes it, and it is on by default — no
-configuration at all. In **Mode A** nothing writes it out of the box:
+In **Mode B** the collector's watchdog writes it, on by default
+(`ALERTS_ENABLED=false` opts out) — and note that two of its three rules stay
+off until you give them a budget (`ALERT_STALE_AFTER_MIN` and
+`ALERT_STUCK_AFTER_MIN` both default to `0` = off), so the default gets you
+`failing` and `unreachable` only. In **Mode A**
+nothing writes it out of the box:
 `workflows/core/` contains only the maps and status-publish workflows. The
 example workflow `workflows/examples/hn-notify.json` demonstrates the shape.
 

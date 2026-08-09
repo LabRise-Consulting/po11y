@@ -138,8 +138,11 @@ check_map_json() {
   jq -e '.mermaid | startswith("graph TD")' "$TMP" >/dev/null 2>&1 || return 1
 }
 
-# 7. GET /ai-map.json → 200, at least one node. Heuristic path — CI has no LLM
-# key, so this asserts the deterministic structure, not the prose.
+# 7. GET /ai-map.json → 200, at least one node. Heuristic path — the CI .env
+# sets AI_MAP_BASE_URL without a key, which the ai-map workflow reads as "LLM
+# off", so this asserts the deterministic structure, not the prose. (Without
+# that, bootstrap auto-wires OmniRoute's auto/best-free and this check races a
+# live LLM call against the 90 s budget.)
 check_ai_map_json() {
   code=$(curl_code GET /ai-map.json)
   LAST="GET /ai-map.json -> $code; body: $(snippet)"
@@ -197,6 +200,29 @@ check_mcp_tools_list() {
   [ "$tools" = 10 ] || return 1
 }
 
+# 13b. po11y_sql runs as the read-only po11y_ro role, and that role cannot
+# read credentials_entity or execution_data. Probed through the MCP tool
+# itself — the whole chain (nginx → mcp → Grafana datasource → postgres) as
+# the role, not a docker exec — via non-mutating privilege introspection, so
+# this stays safe to run against any live deployment.
+sql_call() { # sql_call SQL -> tool result text (the JSON the tool returned)
+  curl -s -m 10 -X POST "$BASE_URL/mcp/" -H 'content-type: application/json' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"po11y_sql\",\"arguments\":{\"sql\":\"$1\"}}}" \
+    2>/dev/null | jq -r '.result.content[0].text // empty' 2>/dev/null
+}
+
+check_sql_role() {
+  out=$(sql_call 'SELECT current_user::text AS u')
+  LAST="po11y_sql current_user -> $(printf '%s' "$out" | head -c 200)"
+  [ "$(printf '%s' "$out" | jq -r '.rows[0][0]' 2>/dev/null)" = "po11y_ro" ]
+}
+
+check_sql_denied_tables() {
+  out=$(sql_call "SELECT has_table_privilege('credentials_entity','SELECT')::text AS cred, has_table_privilege('execution_data','SELECT')::text AS payloads")
+  LAST="po11y_sql table privileges -> $(printf '%s' "$out" | head -c 200)"
+  [ "$(printf '%s' "$out" | jq -r '.rows[0] | join(",")' 2>/dev/null)" = "false,false" ]
+}
+
 # 13. GET /lib/list-rows.mjs → 200 as JavaScript. The list tab imports this
 # module at runtime, so a broken mount or a missing nginx location blanks the
 # tab silently — and the MIME type is load-bearing too: a browser refuses a
@@ -225,6 +251,8 @@ wait_for 'grafana health is 200'                check_grafana
 wait_for 'n8n-table non-data-table is 403'      check_n8n_table_deny
 wait_for 'n8n-table data-tables reaches n8n'    check_n8n_table_reaches
 wait_for 'mcp tools/list returns ten tools'     check_mcp_tools_list
+wait_for 'po11y_sql runs as po11y_ro'           check_sql_role
+wait_for 'po11y_ro denied credentials/payloads' check_sql_denied_tables
 wait_for 'list-rows.mjs serves as javascript'   check_lib_module
 
 echo 'po11y smoke: all assertions passed'

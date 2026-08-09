@@ -30,6 +30,7 @@ import {
   buildAll,
   makeLlm,
   atomicWriteFile,
+  feedDocuments,
 } from './collect.mjs';
 import {
   summarizeExecutions,
@@ -39,51 +40,43 @@ import {
   mergeNotifications,
   envNumber,
   unreachableAlert,
+  DEFAULT_FEED_MAX,
 } from './watchdog.mjs';
+import { loadAlertConfig } from './alert-config.mjs';
 import { pushAlerts, pingHeartbeat, redactUrl, FORMATS } from './notify.mjs';
 import { accumulateErrors, buildSnapshot, renderMetrics } from './metrics.mjs';
+import { guardOutbound, scopeDirWarning, makeRequestHandler } from './daemon.mjs';
 
 // ---- config (env only; no config file, no secrets on disk) ------------------
 const N8N_API_URL = process.env.N8N_API_URL;
 const N8N_API_KEY = process.env.N8N_API_KEY;
 const POLL_INTERVAL = Number(process.env.POLL_INTERVAL || 600); // seconds
+// Recent-executions window per poll; collect.mjs clamps to n8n's API cap (250).
+// On a busy instance size this so window >= executions per POLL_INTERVAL, or
+// the failing-rate rule samples (the stale rule keys on last-success age and
+// is unaffected). See "Sizing the window" in README.md.
+const EXECUTIONS_LIMIT = Number(process.env.EXECUTIONS_LIMIT || 100);
 const STATUS_DIR = process.env.STATUS_DIR || '/po11y-status';
 const PORT = Number(process.env.PORT || 8081);
+// The health/metrics listener binds every interface by default, which is right
+// under the shipped compose (the port is never published, so "every interface"
+// means the compose network). Outside it — host networking, a k8s pod sharing a
+// node's network namespace — that quietly exposes /metrics, so BIND_HOST makes
+// the reach explicit without changing any existing deployment.
+const BIND_HOST = process.env.BIND_HOST || '';
 
 // ---- watchdog config --------------------------------------------------------
-// Env-only like the rest of the collector. ALERT_RULES_FILE is the escape hatch
-// for the structured bits (perWorkflow budgets) that don't fit an env var; it is
-// a path, never a secret, and env always wins over the file.
-// A malformed numeric env var must not silently disable a rule — envNumber
-// falls back to the default and flags it, and we say so loudly here.
+// Resolution rules live in alert-config.mjs (extracted so they are testable);
+// this file only supplies process.env and keeps the numeric-env helper the rest
+// of the daemon's own settings use.
 const num = (v, dflt, name) => {
   const { value, invalid } = envNumber(v, dflt);
   if (invalid) console.error(`collector: ${name}="${v}" is not a valid number — using ${dflt}`);
   return value;
 };
-function loadAlertConfig() {
-  let file = {};
-  const path = process.env.ALERT_RULES_FILE || '';
-  if (path) {
-    try { file = JSON.parse(readFileSync(path, 'utf8')); } catch (e) {
-      console.error(`collector: ALERT_RULES_FILE unreadable (${e.message}) — using env only`);
-    }
-  }
-  return {
-    ...file,
-    enabled: process.env.ALERTS_ENABLED === 'true' || (file.enabled ?? false),
-    staleAfterMin: num(process.env.ALERT_STALE_AFTER_MIN, file.staleAfterMin ?? 0, 'ALERT_STALE_AFTER_MIN'),
-    stuckAfterMin: num(process.env.ALERT_STUCK_AFTER_MIN, file.stuckAfterMin ?? 0, 'ALERT_STUCK_AFTER_MIN'),
-    minErrors: num(process.env.ALERT_MIN_ERRORS, file.minErrors ?? 3, 'ALERT_MIN_ERRORS'),
-    errorRate: num(process.env.ALERT_ERROR_RATE, file.errorRate ?? 0.5, 'ALERT_ERROR_RATE'),
-    ignore: process.env.ALERT_IGNORE
-      ? process.env.ALERT_IGNORE.split(',').map((s) => s.trim()).filter(Boolean)
-      : (file.ignore || []),
-  };
-}
 const ALERTS = loadAlertConfig();
 const RENOTIFY_MIN = num(process.env.ALERT_RENOTIFY_MIN, 360, 'ALERT_RENOTIFY_MIN');
-const NOTIFICATIONS_MAX = num(process.env.ALERT_FEED_MAX, 50, 'ALERT_FEED_MAX');
+const NOTIFICATIONS_MAX = num(process.env.ALERT_FEED_MAX, DEFAULT_FEED_MAX, 'ALERT_FEED_MAX');
 
 // ---- outbound push (optional) -----------------------------------------------
 // The URL is a credential (Slack and Telegram both put their secret in the
@@ -124,7 +117,7 @@ const HEARTBEAT = {
 const AI_BASE = process.env.AI_MAP_BASE_URL || '';
 const AI_KEY = process.env.AI_MAP_API_KEY || '';
 const AI_MODEL = process.env.AI_MAP_MODEL || '';
-const aiConfigured = !!(AI_BASE && AI_KEY && AI_MODEL);
+let aiConfigured = !!(AI_BASE && AI_KEY && AI_MODEL);
 
 if (!N8N_API_URL || !N8N_API_KEY) {
   // Never echo the key; only report which var is missing.
@@ -132,10 +125,27 @@ if (!N8N_API_URL || !N8N_API_KEY) {
   process.exit(2);
 }
 
+// docs/security.md promises the outbound URLs never target the n8n host —
+// guardOutbound (daemon.mjs) enforces it: refuse the URL and keep running,
+// same posture as the ALERT_WEBHOOK_FORMAT check above.
+{
+  const guarded = guardOutbound({
+    pushUrl: PUSH.url, heartbeatUrl: HEARTBEAT.url, aiBase: AI_BASE, aiConfigured,
+  }, N8N_API_URL);
+  guarded.errors.forEach((m) => console.error(m));
+  PUSH.url = guarded.pushUrl;
+  HEARTBEAT.url = guarded.heartbeatUrl;
+  aiConfigured = guarded.aiConfigured;
+}
+
 // Named-volume subdirs don't exist until created — a second collector sets
 // STATUS_DIR=/po11y-status/<scope>, and that nested dir has never been
 // mkdir'd. The /po11y-status mount is writable even under a read_only
 // rootfs, so this is safe at startup, before the first poll.
+// A scope name outside nginx's [a-z0-9-] charset would publish feeds the
+// dashboard 404s on forever — say so now instead (scopeDirWarning).
+const dirWarning = scopeDirWarning(STATUS_DIR);
+if (dirWarning) console.error(dirWarning);
 mkdirSync(STATUS_DIR, { recursive: true });
 
 const feedPath = (name) => join(STATUS_DIR, name);
@@ -170,19 +180,23 @@ async function poll() {
   let prevAiMap = null;
   try { prevAiMap = JSON.parse(readFileSync(feedPath('ai-map.json'), 'utf8')); } catch { /* first run */ }
 
+  // Consume a pending SIGHUP force only once the build it applies to has
+  // succeeded — a poll that dies fetching workflows keeps the force armed.
+  const forced = forceAiMap;
   const now = Date.now();
   const { map, forms, ai } = await buildAll(workflows, prevAiMap, {
-    now, forced: false, aiConfigured, model: AI_MODEL, llm,
+    now, forced, aiConfigured, model: AI_MODEL, llm,
   });
+  if (forced) forceAiMap = false;
 
   const stamp = new Date(now).toISOString();
 
-  atomicWriteFile(feedPath('map.json'), JSON.stringify({
-    generated_at: stamp, mermaid: map.mermaid, workflows: map.workflows,
-  }));
-  atomicWriteFile(feedPath('forms.json'), JSON.stringify({
-    generated_at: stamp, forms: forms.forms,
-  }));
+  // Shapes live in collect.mjs, pinned by test against the Mode A Code nodes so
+  // the two publishers of these feeds cannot drift apart again.
+  const docs = feedDocuments({ map, forms }, stamp);
+  for (const [name, body] of Object.entries(docs)) {
+    atomicWriteFile(feedPath(name), JSON.stringify(body));
+  }
 
   // ai-map: buildAiMap owns the publish policy. Only 'publish'/'republish'
   // yield a map to write; 'skip-fresh'/'keep-annotated' leave the file as-is.
@@ -202,8 +216,8 @@ async function poll() {
   // the dashboard shows real names instead of n8n ids.
   const names = new Map(workflows.map((w) => [String(w.id), w.name]).filter(([, n]) => n));
   // One executions GET per poll, shared by status.json and the watchdog.
-  const executions = await fetchExecutions(fetch, N8N_API_URL, N8N_API_KEY);
-  const { status, warning } = await fetchStatus(fetch, N8N_API_URL, N8N_API_KEY, { now, names, executions });
+  const executions = await fetchExecutions(fetch, N8N_API_URL, N8N_API_KEY, EXECUTIONS_LIMIT);
+  const { status, warning } = await fetchStatus(fetch, N8N_API_URL, N8N_API_KEY, { names, executions });
   if (warning) console.error(warning);
   atomicWriteFile(feedPath('status.json'), JSON.stringify({ generated_at: stamp, ...status }));
 
@@ -273,7 +287,15 @@ async function publishAlerts(alerts, now, { rules = null } = {}) {
     // Persist state even when nothing fired, so "already notified" survives a
     // restart and an open alert isn't re-announced on every boot.
     atomicWriteFile(feedPath('alert-state.json'), JSON.stringify(state));
-    if (!fire.length) return;
+    if (!fire.length) {
+      // An enabled watchdog materializes the feed even with nothing to say:
+      // an empty feed means "all clear", a missing one means "not running" —
+      // and the dashboard stops 404ing on notifications.json on healthy
+      // installs. Only ever seeds; an existing feed is never touched here.
+      try { readFileSync(feedPath('notifications.json')); }
+      catch { atomicWriteFile(feedPath('notifications.json'), '[]'); }
+      return;
+    }
 
     // Push first: the feed write is local and cannot really fail, whereas the
     // webhook is the part with a timeout. Ordering them this way means a slow
@@ -349,35 +371,48 @@ async function tick() {
 }
 
 // ---- health endpoint --------------------------------------------------------
-// Exposes ONLY liveness counters/timestamps — no config, no key, no feed data.
-// 503 once three consecutive polls have failed so an orchestrator can restart.
-const server = createServer((req, res) => {
-  if (req.method === 'GET' && (req.url === '/healthz' || req.url.startsWith('/healthz?'))) {
-    const code = health.consecutiveFailures >= 3 ? 503 : 200;
-    res.writeHead(code, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(health));
-    return;
-  }
-  if (req.method === 'GET' && (req.url === '/metrics' || req.url.startsWith('/metrics?'))) {
-    // Same exposure as the feeds the dashboard already serves (workflow ids,
-    // names, timestamps) and nothing more — no config, no key. Port 8081 is not
-    // published in compose; Prometheus reaches it over the compose network.
-    res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
-    res.end(renderMetrics(metricsSnapshot));
-    return;
-  }
-  res.writeHead(404, { 'content-type': 'application/json' });
-  res.end('{"error":"not found"}');
-});
+// Handler logic lives in daemon.mjs (makeRequestHandler). /metrics has the same
+// exposure as the feeds the dashboard already serves (workflow ids, names,
+// timestamps) and nothing more; port 8081 is not published in compose —
+// Prometheus reaches it over the compose network.
+const server = createServer(makeRequestHandler({
+  health: () => health,
+  metricsText: () => renderMetrics(metricsSnapshot),
+}));
 
 // ---- lifecycle --------------------------------------------------------------
 let timer = null;
+let ticking = false;
+async function runTick() {
+  if (ticking) return;
+  ticking = true;
+  try { await tick(); } finally { ticking = false; }
+}
 function schedule() {
   timer = setTimeout(async () => {
-    await tick();
+    await runTick();
     schedule(); // re-arm only after the poll settles (no overlapping polls)
   }, POLL_INTERVAL * 1000);
 }
+
+// ---- forced ai-map rebuild (Mode B's "Build maps now") ----------------------
+// Mode A wires a form trigger; Mode B's equivalent is a signal:
+//   docker kill -s HUP po11y-collector
+// The next build re-annotates every node (forced:true), ignoring the 20 h
+// freshness window and the differential sigs. Idle → an immediate poll;
+// mid-poll → the force arms for the next scheduled one (a poll runs seconds,
+// the interval is minutes — not worth an overlap-safe queue).
+let forceAiMap = false;
+process.on('SIGHUP', () => {
+  forceAiMap = true;
+  if (ticking) {
+    console.error('collector: SIGHUP — ai-map rebuild forced for the next poll (one is in flight)');
+    return;
+  }
+  console.error('collector: SIGHUP — polling now with a full ai-map rebuild');
+  if (timer) clearTimeout(timer);
+  (async () => { await runTick(); schedule(); })();
+});
 
 let shuttingDown = false;
 function shutdown(signal) {
@@ -399,9 +434,10 @@ server.on('error', (e) => {
   process.exit(1);
 });
 
-server.listen(PORT, () => {
-  console.error(`collector: polling ${N8N_API_URL} every ${POLL_INTERVAL}s -> ${STATUS_DIR}; health on :${PORT}/healthz`);
+const listenArgs = BIND_HOST ? [PORT, BIND_HOST] : [PORT];
+server.listen(...listenArgs, () => {
+  console.error(`collector: polling ${N8N_API_URL} every ${POLL_INTERVAL}s (window ${EXECUTIONS_LIMIT} executions) -> ${STATUS_DIR}; health on ${BIND_HOST || '*'}:${PORT}/healthz`);
 });
 
 // Poll immediately on boot, then on the interval.
-(async () => { await tick(); schedule(); })();
+(async () => { await runTick(); schedule(); })();

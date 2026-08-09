@@ -36,6 +36,9 @@
     </main>
   </div>
 </div>
-<script src="app.js"></script>
+<!-- type=module so app.js can import the unit-tested helpers in app.lib.js;
+     module scripts are deferred, which this tag already relied on by sitting
+     at the end of the body. -->
+<script type="module" src="app.js"></script>
 </body>
 </html>

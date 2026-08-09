@@ -19,6 +19,12 @@ spec:
       labels:
         app: postgres
     spec:
+      # Only the seccomp baseline: the official postgres entrypoint starts as
+      # root to chown its data dir, then setuids to the postgres user itself —
+      # runAsNonRoot / dropped capabilities would break that init dance.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:16-alpine

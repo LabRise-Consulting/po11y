@@ -14,10 +14,27 @@ the containers section is simply empty.
 
 Plain manifests live in [`deploy/k8s/`](../deploy/k8s) — build and push the
 n8n image, create the static-file ConfigMaps, set the Secrets, then
-`kubectl apply -k deploy/k8s`. Generic clusters have no Docker socket, so the
-containers feed is empty there; everything else works. Community-supported:
-schema-checked in CI, not smoke-tested. See
-[`deploy/k8s/README.md`](../deploy/k8s/README.md).
+`kubectl apply -k deploy/k8s`. Community-supported: schema-checked in CI, never
+smoke-tested, and a **subset** of what compose gives you. What is missing:
+
+| | on compose | on k8s |
+|---|---|---|
+| Mode A (bundled n8n) | yes | yes |
+| Mode B (collector against a remote n8n) | yes | **no Deployment exists** |
+| Dashboard authentication | Basic Auth or forward-auth OIDC | **none** — the nginx ConfigMap has no auth include |
+| MCP server (`/mcp/`) | yes | no Deployment, no route |
+| Grafana alert rules | five, provisioned | **none** — no alerting ConfigMap or mount |
+| Form submit proxy (`/form/`) | yes | no |
+| List tabs (`/lib/list-rows.mjs`) | yes | no route — the tab fails to load |
+| Multi-team scopes, DataTable proxy | yes | no |
+| Container hardening | `read_only`, `user: node` | only `fsGroup`; no `readOnlyRootFilesystem`, `runAsNonRoot`, dropped capabilities or NetworkPolicy |
+| Containers feed | Docker socket | empty (no socket on a generic cluster) |
+
+The authentication gap is the one to plan around: put an authenticating Ingress
+in front of the dashboard Service, and treat the rest of this table as work to
+do rather than as choices already made for you.
+
+See [`deploy/k8s/README.md`](../deploy/k8s/README.md).
 
 ## Tracing with OpenTelemetry (opt-in)
 

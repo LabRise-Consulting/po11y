@@ -52,6 +52,29 @@ export function redactUrl(url) {
 }
 
 /**
+ * Does urlStr point at the same host:port as baseStr? Backs the startup check
+ * for docs/security.md's claim that the outbound URLs (AI_MAP_BASE_URL,
+ * ALERT_WEBHOOK_URL, ALERT_HEARTBEAT_URL) never target the n8n host — the
+ * collector refuses such a URL instead of merely documenting that it won't
+ * happen. host (not hostname) so a webhook on the same machine but another
+ * port — a local Uptime Kuma next to n8n — stays legal.
+ *
+ * Unparseable URLs return false: the fetch will fail loudly on its own, and
+ * this check must never be the thing that hides that error.
+ *
+ * @param {string} urlStr
+ * @param {string} baseStr
+ * @returns {boolean}
+ */
+export function targetsHost(urlStr, baseStr) {
+  try {
+    return new URL(urlStr).host === new URL(baseStr).host;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * One human-readable line per alert, with a deep link when we can build one.
  *
  * Link syntax is per-platform and cannot be shared:

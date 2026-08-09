@@ -55,6 +55,19 @@ kubectl -n po11y create configmap po11y-site   --from-file=site/
 # Grafana dashboard JSON (required — grafana crash-loops without it)
 kubectl -n po11y create configmap grafana-dashboards-json \
   --from-file=observability/grafana/provisioning/dashboards/json/
+
+# Grafana entrypoint (required) + Mode A alert rules (optional but recommended).
+# Both come from the canonical repo files so the k8s copy cannot drift from
+# what compose runs. Skip grafana-alerting and Grafana simply starts with no
+# alert rules; without a GRAFANA_ALERT_WEBHOOK_URL env on the Deployment the
+# rules are visible and firing but deliver nowhere (same default as compose).
+kubectl -n po11y create configmap grafana-entrypoint \
+  --from-file=observability/grafana/entrypoint.sh
+kubectl -n po11y create configmap grafana-alerting \
+  --from-file=observability/grafana/alerting/
+
+# List-tab module (optional — only a config with a list tab needs it):
+kubectl -n po11y create configmap po11y-lib --from-file=lib/list-rows.mjs
 ```
 
 (If you flatten `workflows/` and `packs/`, you can add `n8n-workflows` /
@@ -79,10 +92,36 @@ kubectl -n po11y port-forward svc/dashboard 8080:80
 ```
 
 For a real exposure, uncomment the Ingress or NodePort block in
-`50-dashboard.yaml`.
+`50-dashboard.yaml` — **and put authentication in front of it first**. See the
+next section: these manifests have none.
 
 ## Caveats vs. the compose stack
 
+- **There is no authentication.** On compose the dashboard entrypoint renders
+  an auth include into nginx (Basic Auth via `DASHBOARD_BASIC_AUTH`, or
+  forward-auth OIDC via `docker-compose.auth.yml`). Nothing renders it here, and
+  the nginx ConfigMap ships without it, so anything that can reach the Service
+  reads every feed and every embedded Grafana panel. Terminate auth at an
+  Ingress before exposing this outside the cluster.
+- **No Mode B.** There is no collector Deployment, so the read-only mode
+  against a remote n8n is compose-only today.
+- **No MCP server.** No Deployment and no `/mcp/` route.
+- **Grafana alert rules need their ConfigMap.** The Deployment runs the shared
+  `observability/grafana/entrypoint.sh` (mounted from the `grafana-entrypoint`
+  ConfigMap), which provisions Mode A's five rules when the `grafana-alerting`
+  ConfigMap is present — create both in step 3. Without the alerting ConfigMap
+  Grafana starts with none; without `GRAFANA_ALERT_WEBHOOK_URL` the rules fire
+  in the UI but deliver nowhere (see the commented env in `40-grafana.yaml`).
+- **Reduced nginx config.** Besides auth and `/mcp/`, the ConfigMap omits the
+  `/form/` submit proxy, the `/status/<scope>/` routes, `/n8n-table/`, and the
+  identity-header scrubs. The header comment in `02-configmaps.yaml` lists them.
+- **Container hardening is baseline, not verified.** Pods now set a seccomp
+  RuntimeDefault profile plus, where the image tolerates it, `runAsNonRoot`,
+  `allowPrivilegeEscalation: false`, dropped capabilities and
+  `readOnlyRootFilesystem` (grafana, prometheus, dashboard). postgres keeps its
+  root-then-setuid init and the nginx master still binds :80 as root, as on
+  compose. There is still **no NetworkPolicy** — add one for anything real —
+  and none of this is smoke-tested (see the support level note above).
 - **Containers section is empty.** On compose a `docker-socket-proxy` sidecar
   bind-mounts the host Docker socket (read-only, container-list endpoint only)
   so n8n can render the "Running containers" card. Generic Kubernetes has **no

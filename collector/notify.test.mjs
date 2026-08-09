@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPushPayload, pushAlerts, pingHeartbeat, redactUrl, FORMATS } from './notify.mjs';
+import { buildPushPayload, pushAlerts, pingHeartbeat, redactUrl, targetsHost, FORMATS } from './notify.mjs';
 import { alertLink } from './watchdog.mjs';
 
 const firing = (name, msg = 'something broke') => ({
@@ -276,4 +276,20 @@ test('telegram still sends no parse_mode, so a workflow named a_b cannot 400 the
   const p = buildPushPayload([firing('sync_daily_v2')], { format: 'telegram', chatId: '1' });
   assert.equal(p.parse_mode, undefined);
   assert.match(p.text, /sync_daily_v2/);
+});
+
+test('targetsHost: same host:port as n8n is caught, other ports and hosts are not', () => {
+  const n8n = 'http://n8n.internal:5678';
+  assert.equal(targetsHost('http://n8n.internal:5678/webhook/x', n8n), true);
+  // Same machine, different port — a local Uptime Kuma next to n8n is legal.
+  assert.equal(targetsHost('http://n8n.internal:3001/api/push/x', n8n), false);
+  assert.equal(targetsHost('https://hooks.slack.com/services/x', n8n), false);
+  // Scheme does not matter; the claim is about where bytes go.
+  assert.equal(targetsHost('https://n8n.internal:5678/x', n8n), true);
+});
+
+test('targetsHost: unparseable URLs are false — the fetch must be what fails loudly', () => {
+  assert.equal(targetsHost('not a url', 'http://n8n:5678'), false);
+  assert.equal(targetsHost('http://ok:1', 'not a url'), false);
+  assert.equal(targetsHost('', 'http://n8n:5678'), false);
 });

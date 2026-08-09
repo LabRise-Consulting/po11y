@@ -18,6 +18,20 @@ import { buildMap } from '../lib/build-map.mjs';
 import { buildForms } from '../lib/build-forms.mjs';
 import { buildAiMap } from '../lib/build-ai-map.mjs';
 import { isFailed } from './exec-status.mjs';
+import { summarizeExecutions } from './watchdog.mjs';
+
+// The default executions window, shared by fetchExecutions and fetchStatus's
+// own fallback fetch — one number, so the two requests cannot quietly diverge.
+// Overridable per call (daemon: EXECUTIONS_LIMIT env), capped at 250 because
+// that is the hard `limit` maximum of n8n's executions API.
+const EXECUTIONS_LIMIT = 100;
+const EXECUTIONS_LIMIT_MAX = 250;
+
+/** Clamp a caller-supplied executions window to what the n8n API accepts. */
+const clampLimit = (n) => {
+  const v = Math.floor(Number(n));
+  return Number.isFinite(v) ? Math.min(EXECUTIONS_LIMIT_MAX, Math.max(1, v)) : EXECUTIONS_LIMIT;
+};
 
 /**
  * Read-only GET against the n8n public API. The single choke point that keeps
@@ -103,10 +117,11 @@ export async function fetchAllWorkflows(fetchFn, baseUrl, apiKey) {
  * socket (Mode B never touches Docker). One GET against the executions API —
  * the recent window — folds into an at-a-glance execution health summary.
  *
- * Dashboard section key: `executions` (config `sections.executions`). The
- * dashboard renders status.json sections generically from config; app.js has a
- * dedicated renderer for `containers`/`notifications` and a config-driven
- * heading for anything else.
+ * Dashboard section key: `executions` (config `sections.executions`). Section
+ * rendering is NOT generic: app.js has three renderers (`containers`,
+ * `executions`, `notifications`) and any other key in config `sections` gets a
+ * heading over a div nothing ever fills. Adding a status.json section means
+ * adding a renderer.
  *
  * Shape:
  *   { executions: { recent, errors, byWorkflow: [{ name, id, count, errors, lastAt }] } }
@@ -125,35 +140,31 @@ export async function fetchAllWorkflows(fetchFn, baseUrl, apiKey) {
  * @param {typeof fetch} fetchFn
  * @param {string} baseUrl
  * @param {string} apiKey
- * @param {{ now?: number, names?: Map<string,string> }} [opts] - `names` is an
- *   id->name map from the already-fetched workflow list; the executions API
- *   omits workflowName, so without it the dashboard renders opaque n8n ids.
+ * @param {{ names?: Map<string,string>, executions?: object[], limit?: number }} [opts] -
+ *   `names` is an id->name map from the already-fetched workflow list; the
+ *   executions API omits workflowName, so without it the dashboard renders
+ *   opaque n8n ids. `executions` is the recent window the caller already
+ *   fetched for the watchdog, so one GET per poll serves both. `limit` sizes
+ *   the fallback fetch when `executions` is absent — pass the same value given
+ *   to fetchExecutions so the two windows cannot diverge.
  * @returns {Promise<{ status: object, warning: (string|null) }>}
  */
-export async function fetchStatus(fetchFn, baseUrl, apiKey, { now = Date.now(), names = null, executions = null } = {}) {
-  void now; // reserved for future time-window math; keeps the signature stable
+export async function fetchStatus(fetchFn, baseUrl, apiKey, { names = null, executions = null, limit = EXECUTIONS_LIMIT } = {}) {
   try {
     // The watchdog needs the same list, so the caller may hand it in — one GET
     // per poll serves both. Absent, we fetch it ourselves (unchanged behaviour).
     const recent = executions
-      ?? (await apiGet(fetchFn, baseUrl, apiKey, '/api/v1/executions?limit=100')).data;
+      ?? (await apiGet(fetchFn, baseUrl, apiKey, `/api/v1/executions?limit=${clampLimit(limit)}`)).data;
     if (!Array.isArray(recent)) throw new Error('executions response had no data array');
 
-    const byId = new Map();
-    for (const e of recent) {
-      const id = String(e.workflowId ?? '');
-      // executions without includeData omit the name: prefer whatever the
-      // execution carries, then the caller's workflow-list map, then the id.
-      const name = e.workflowName || (e.workflowData || {}).name || names?.get(id) || id;
-      const at = e.startedAt || e.stoppedAt || e.createdAt || null;
-      let g = byId.get(id);
-      if (!g) { g = { name, id, count: 0, errors: 0, lastAt: null }; byId.set(id, g); }
-      if (g.name === id && name !== id) g.name = name; // upgrade id->real name
-      g.count += 1;
-      if (isFailed(e)) g.errors += 1;
-      if (at && (!g.lastAt || new Date(at) > new Date(g.lastAt))) g.lastAt = at;
-    }
-    const byWorkflow = [...byId.values()]
+    // One fold, owned by the watchdog: summarizeExecutions tracks a strict
+    // superset of what status.json needs (lastOkAt/running serve alert rules),
+    // so byWorkflow is a projection of it rather than a second hand-rolled
+    // aggregation that could drift. Side effect kept on purpose: executions
+    // with no workflowId at all (summarize skips them) no longer produce a
+    // blank byWorkflow row; they still count toward `recent` and `errors`.
+    const byWorkflow = [...summarizeExecutions(recent, { names }).values()]
+      .map(({ name, id, count, errors, lastAt }) => ({ name, id, count, errors, lastAt }))
       .sort((a, b) => b.count - a.count || String(a.name).localeCompare(String(b.name)))
       .slice(0, 10);
 
@@ -190,6 +201,11 @@ export function makeLlm(fetchFn, { base, key, model }) {
         messages: [{ role: 'user', content: prompt }],
         response_format: { type: 'json_object' },
         max_tokens: 3000,
+        // stream:false is explicit — some gateways (OmniRoute auto/* routes,
+        // Mode A's bundled default) reply with SSE when the field is absent,
+        // and res.json() then throws on every poll. Mode A's Code node sends
+        // it too; keep the two bodies identical.
+        stream: false,
       }),
     });
     if (!res.ok) throw new Error(`LLM POST -> ${res.status}`);
@@ -208,18 +224,18 @@ export function makeLlm(fetchFn, { base, key, model }) {
  * safe input for the watchdog: no executions means no `failing`/`stuck` alerts,
  * and `stale` still fires off the workflow list.
  *
- * NOTE: `limit=100` is a window, not a complete history. On a busy instance a
- * failure can age out between polls, so the failing rule is a "is it bad right
- * now" signal rather than an audit log.
+ * NOTE: EXECUTIONS_LIMIT is a window, not a complete history. On a busy
+ * instance a failure can age out between polls, so the failing rule is a "is
+ * it bad right now" signal rather than an audit log.
  *
  * @param {typeof fetch} fetchFn
  * @param {string} baseUrl
  * @param {string} apiKey
  * @returns {Promise<object[]>}
  */
-export async function fetchExecutions(fetchFn, baseUrl, apiKey) {
+export async function fetchExecutions(fetchFn, baseUrl, apiKey, limit = EXECUTIONS_LIMIT) {
   try {
-    const res = await apiGet(fetchFn, baseUrl, apiKey, '/api/v1/executions?limit=100');
+    const res = await apiGet(fetchFn, baseUrl, apiKey, `/api/v1/executions?limit=${clampLimit(limit)}`);
     return Array.isArray(res.data) ? res.data : [];
   } catch {
     return [];
@@ -250,14 +266,58 @@ export async function buildAll(workflows, prevAiMap, opts = {}) {
   // stays); changed structure -> heuristic publish. aiConfigured:false so it
   // never calls the LLM again. `prevAiMap` is safe to reuse: buildAiMap only
   // mutates prev on the republish branch, which returns before any llm call.
+  //
+  // The retry only helps when the LLM was the thing that threw. A structural
+  // defect in the export (a node the builder cannot read) throws on BOTH
+  // attempts, and the second throw would escape this function — taking the
+  // already-built map and forms down with the cosmetic ai-map. So the retry
+  // gets its own guard and degrades to a no-op result the caller skips.
   let ai;
   try {
     ai = await buildAiMap(workflows, { prev: prevAiMap, forced, now, aiConfigured, model, llm });
   } catch (e) {
-    ai = await buildAiMap(workflows, { prev: prevAiMap, forced, now, aiConfigured: false, model: '', llm: null });
-    ai.degraded = e.message;
+    try {
+      ai = await buildAiMap(workflows, { prev: prevAiMap, forced, now, aiConfigured: false, model: '', llm: null });
+      ai.degraded = e.message;
+    } catch (e2) {
+      ai = { action: 'skip', summary: {}, degraded: `ai-map build failed — ${e2.message}` };
+    }
   }
   return { map, forms, ai };
+}
+
+/**
+ * The map.json and forms.json documents, ready to write.
+ *
+ * Mode A builds these in the Code-node wrappers in tools/sync-workflows.mjs;
+ * the two modes publish the same feeds and must publish the same shape. They
+ * did not: this collector wrote map.json without `entries`, the field
+ * site/map.html needs for its clickable nodes and workflow dialog, so Mode B's
+ * Map tab was a static picture and the tab's own comment blamed "older
+ * publishers" for a gap the shipped collector was creating. collect.test.mjs
+ * pins these key sets against the Mode A node source in
+ * workflows/core/maps.json.
+ *
+ * The caller supplies one `stamp` for the whole poll so the feeds it writes
+ * share a generated_at.
+ *
+ * @param {{ map: object, forms: object }} built - the buildAll result
+ * @param {string} stamp - ISO timestamp
+ * @returns {{ 'map.json': object, 'forms.json': object }}
+ */
+export function feedDocuments({ map, forms }, stamp) {
+  return {
+    'map.json': {
+      generated_at: stamp,
+      mermaid: map.mermaid,
+      workflows: map.workflows,
+      entries: map.entries,
+    },
+    'forms.json': {
+      generated_at: stamp,
+      forms: forms.forms,
+    },
+  };
 }
 
 /**

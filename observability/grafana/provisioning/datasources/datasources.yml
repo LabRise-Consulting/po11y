@@ -7,9 +7,12 @@ datasources:
     access: proxy
     url: postgres:5432
     database: ${DB_POSTGRESDB_DATABASE}
-    user: ${DB_POSTGRESDB_USER}
+    # Dedicated read-only role (created by bootstrap.sh): SELECT on everything
+    # except credentials_entity and execution_data, no sequence/signal grants.
+    # Grafana never holds n8n's own database credentials.
+    user: ${PO11Y_RO_USER}
     secureJsonData:
-      password: ${DB_POSTGRESDB_PASSWORD}
+      password: ${PO11Y_RO_PASSWORD}
     jsonData:
       sslmode: disable
       postgresVersion: 1600

@@ -37,7 +37,7 @@ tool call.
 
 | source | Mode A | Mode B | turned on by |
 |---|---|---|---|
-| feeds | always | always | `STATUS_DIR` — defaults to `/po11y-status`, the shared volume both compose files mount read-only into the `mcp` service |
+| feeds | always | always | `STATUS_DIR` — defaults to `/po11y-status`, the shared volume both compose files mount read-only into the `mcp` service. One MCP serves ONE scope: the default points at the flat (default-scope) feeds; for a non-default scope set `STATUS_DIR=/po11y-status/<scope>` on the `mcp` service — one mcp service per scope. The source reports itself unavailable until at least one feed file actually exists there (the directory alone proves nothing — it is a mount point). |
 | prometheus | always | always | `PROMETHEUS_URL` — defaults to `http://prometheus:9090` internally; nothing to set |
 | n8n | opt-in | always | `MCP_N8N_API_KEY` in Mode A (mint one in n8n → Settings → n8n API; the server only ever GETs). Mode B reuses the collector's own `N8N_API_URL`/`N8N_API_KEY`, since that key already exists. |
 | grafana | on by default | never | Mode A's `mcp` service points `GRAFANA_URL` at Grafana internally, so `po11y_sql` is available out of the box, independent of `MCP_GRAFANA_SA_TOKEN`. That token only matters when anonymous Grafana Viewer access is off (`DASHBOARD_GRAFANA_EMBED=false`); without it the tool still reports itself available but a query fails with a 401. Turn the source off with `MCP_GRAFANA_URL=` (empty) in `.env`. Mode B's compose file never sets `GRAFANA_URL`, so the tool is unavailable by construction, not by configuration. |
@@ -80,8 +80,9 @@ detail payload each dataset row carries for the same reason.
 The two exceptions: `po11y_row` deliberately returns one dataset row in full
 — reading a row is the point of a content tool — and `po11y_sql` runs
 whatever `SELECT` you write against n8n's live database, so it returns
-exactly the columns and rows that statement asks for, execution payloads
-included if you query for them. See the next section.
+exactly the columns and rows that statement asks for. The database role it
+runs as cannot read `execution_data` (raw payloads) or `credentials_entity`,
+so those stay out of reach even by SQL. See the next section.
 
 ## Why `po11y_sql` is Mode A only
 
@@ -90,15 +91,17 @@ Postgres driver — Po11y has zero runtime dependencies, which rules out a wire
 protocol client. Mode A already provisions a Grafana datasource against n8n's
 own Postgres (`observability/grafana/provisioning/datasources/datasources.yml`,
 uid `n8n-postgres`) for the four Mode A alert rules to query, so SQL travels
-as plain HTTP JSON through a datasource that already exists — no new database
-role, password, or driver. Mode B has no such datasource, so the tool is off
-there by construction.
+as plain HTTP JSON through a datasource that already exists. Mode B has no
+such datasource, so the tool is off there by construction.
 
-The read-only guard (`assertSelect`) checks statement *shape* only — one
-`SELECT`, no stacked statements, no `INTO` — not which tables or columns it
-touches. That makes this full read access to n8n's database, including
-`execution_data` and `credentials_entity`, and in Mode A it is on by default.
-Set `MCP_GRAFANA_URL=` (empty) in `.env` to turn the source — and so the tool —
+That datasource authenticates as `po11y_ro`, a dedicated read-only role
+created by `bootstrap.sh`: `SELECT`-only (so `SELECT setval(...)` and
+`pg_terminate_backend(...)` fail at the database), with `credentials_entity`
+and `execution_data` denied outright. The `assertSelect` guard in front of it
+checks statement *shape* — one `SELECT`, no stacked statements, no `INTO` —
+as defence-in-depth and for fast, useful errors. Everything else in the n8n
+schema is readable, and in Mode A the tool is on by default. Set
+`MCP_GRAFANA_URL=` (empty) in `.env` to turn the source — and so the tool —
 off. See [docs/security.md](security.md) for the trade-off and why it's
 accepted.
 

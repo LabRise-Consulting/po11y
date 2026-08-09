@@ -41,9 +41,14 @@ spec:
       labels:
         app: docker-proxy
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: docker-proxy
           image: tecnativa/docker-socket-proxy:0.2
+          securityContext:
+            allowPrivilegeEscalation: false
           env:
             - name: CONTAINERS
               value: "1"   # GET /containers/json only

@@ -31,15 +31,31 @@ export function incidentsTool({ feeds }) {
     },
     async handler({ limit = 20 } = {}) {
       if (!feeds.available()) return unavailable('po11y_incidents', 'STATUS_DIR');
-      // null means the watchdog has not run yet; [] means it ran and found nothing.
-      // Collapsing them would answer "no open failures" when we actually have no data.
+      // null means nothing has written the feed; [] means a writer ran and found
+      // nothing. Collapsing them would answer "no open failures" when we
+      // actually have no data.
+      //
+      // A missing feed is not necessarily a fault: nothing in workflows/core/
+      // writes notifications.json, so a stock Mode A deploy legitimately has
+      // none unless an example or a workflow of your own publishes one. Say so,
+      // or an agent goes looking for a watchdog that was never running.
       const all = feeds.readSafe('notifications.json');
-      if (!all) return { error: 'notifications.json has not been written yet', open: 0, incidents: [] };
-      // Array.isArray, not just the truthiness guard above: a hand-written
-      // Mode A Code node can publish an object ({notifications: […]}) where the
-      // watchdog writes a bare array, and [...all] on that throws a TypeError
-      // that escapes as a bare -32603. Same defensiveness watchdog.mjs's
-      // mergeNotifications already applies to the same file.
+      if (!all) {
+        return {
+          error: 'notifications.json has not been written',
+          reason: 'In Mode B the collector watchdog writes this feed (on by default; ALERTS_ENABLED=false disables it). '
+            + 'In Mode A nothing in workflows/core/ does — the feed appears once a workflow '
+            + 'of yours publishes it, as workflows/examples/hn-notify.json does.',
+          open: 0,
+          incidents: [],
+        };
+      }
+      // Array.isArray, not just the truthiness guard above: a Code node of your
+      // own can publish an object ({notifications: […]}) where the watchdog
+      // writes a bare array, and [...all] on that throws a TypeError that
+      // escapes as a bare -32603. Same defensiveness watchdog.mjs's
+      // mergeNotifications already applies to the same file. (No in-tree
+      // workflow writes the wrapper shape; this guards user-written ones.)
       if (!Array.isArray(all)) {
         return {
           error: 'notifications.json is not a feed array; po11y writes a top-level array of alerts',
@@ -64,22 +80,30 @@ export function incidentsTool({ feeds }) {
   };
 }
 
-/** Collect neighbours of `start` out to `depth` hops, following edges both ways. */
+/**
+ * Collect neighbours of `start` out to `depth` hops, following edges both ways.
+ *
+ * ai-map.json spells an edge as the array `[from, to, kind]` — see
+ * lib/build-ai-map.mjs, which serialises exactly that, and site/ai-map.html,
+ * which reads e[0]/e[1]. Anything else in `edges` is from a publisher we do not
+ * know and is skipped rather than guessed at.
+ */
 function slice(graph, startId, depth) {
+  const edges = (graph.edges || []).filter((e) => Array.isArray(e) && e.length >= 2);
   const keep = new Set([startId]);
   let frontier = [startId];
   for (let d = 0; d < depth; d++) {
     const next = [];
-    for (const e of graph.edges || []) {
-      if (frontier.includes(e.from) && !keep.has(e.to)) { keep.add(e.to); next.push(e.to); }
-      if (frontier.includes(e.to) && !keep.has(e.from)) { keep.add(e.from); next.push(e.from); }
+    for (const [from, to] of edges) {
+      if (frontier.includes(from) && !keep.has(to)) { keep.add(to); next.push(to); }
+      if (frontier.includes(to) && !keep.has(from)) { keep.add(from); next.push(from); }
     }
     frontier = next;
     if (!frontier.length) break;
   }
   return {
     nodes: (graph.nodes || []).filter((n) => keep.has(n.id)),
-    edges: (graph.edges || []).filter((e) => keep.has(e.from) && keep.has(e.to)),
+    edges: edges.filter(([from, to]) => keep.has(from) && keep.has(to)),
   };
 }
 
@@ -179,10 +203,11 @@ const execRow = (e) => ({
   id: e.id,
   // executions fetched without includeData=true omit workflowData, so
   // workflowName (present on list rows) is the primary source; workflowId is
-  // the last resort so the row is never silently unnamed. Mirrors the
-  // fallback chain collector/collect.mjs:147 and collector/watchdog.mjs:47
-  // already use for the same reason — no second API round-trip to build a
-  // name map.
+  // the last resort so the row is never silently unnamed. Same idea as the
+  // chains in collector/collect.mjs (fetchStatus) and collector/watchdog.mjs
+  // (summarizeExecutions), but deliberately SHORTER: those two consult a
+  // workflow-list name map the caller already fetched; this tool has no such
+  // map and accepts the id as a name rather than paying a second round-trip.
   workflow: e.workflowName || (e.workflowData && e.workflowData.name) || e.workflowId || null,
   workflow_id: e.workflowId,
   status: e.status,
@@ -378,9 +403,10 @@ export function sqlTool({ grafana }) {
   return {
     name: 'po11y_sql',
     title: 'Query the n8n database (read-only)',
-    description: 'Run one SELECT against n8n\'s database through Grafana\'s datasource proxy. '
-      + 'Mode A only. Note execution_entity."startedAt" is NULL until a run starts — filter on '
-      + '"createdAt" when enqueue time is what you mean.',
+    description: 'Run one SELECT against n8n\'s database through Grafana\'s datasource proxy, as '
+      + 'a read-only role: credentials_entity and execution_data are denied. Mode A only. Note '
+      + 'execution_entity."startedAt" is NULL until a run starts — filter on "createdAt" when '
+      + 'enqueue time is what you mean.',
     inputSchema: {
       type: 'object',
       required: ['sql'],

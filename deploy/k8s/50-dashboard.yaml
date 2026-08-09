@@ -27,12 +27,29 @@ spec:
                 matchLabels:
                   app: n8n
               topologyKey: kubernetes.io/hostname
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: nginx
           image: nginx:1.27-alpine
+          # The nginx master must start as root to bind :80 and spawn workers
+          # (same as compose), so no runAsNonRoot here — but the rootfs is
+          # read-only with emptyDirs for the paths nginx actually writes.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           ports:
             - containerPort: 80
           volumeMounts:
+            # nginx's writable paths under readOnlyRootFilesystem: cache tree,
+            # pid/temp files. (The image's IPv6-listen entrypoint script also
+            # tries to edit default.conf, finds it read-only, and skips — same
+            # as on compose, where the file is a read-only bind mount.)
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /run
             - name: nginx-conf
               mountPath: /etc/nginx/conf.d/default.conf
               subPath: default.conf
@@ -58,6 +75,12 @@ spec:
             - name: status
               mountPath: /po11y-status
               readOnly: true
+            # Optional list-tab module (po11y-lib ConfigMap, see 02-configmaps
+            # header). Missing ConfigMap => empty dir => /lib/list-rows.mjs 404s,
+            # which only a config with a list tab would ever notice.
+            - name: lib
+              mountPath: /usr/share/nginx/lib
+              readOnly: true
       volumes:
         - name: nginx-conf
           configMap:
@@ -77,6 +100,14 @@ spec:
         - name: status
           persistentVolumeClaim:
             claimName: po11y-status
+        - name: lib
+          configMap:
+            name: po11y-lib
+            optional: true
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
 ---
 # Internal Service. Choose how to expose it below.
 apiVersion: v1

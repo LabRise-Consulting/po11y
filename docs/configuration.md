@@ -11,7 +11,7 @@ omitted pieces don't render.
 | key | what |
 |-----|------|
 | `title`, `lede`, `footer` | branding; `lede` renders in the sidebar under the title; `footer` is `[{text, href?}]`, rendered at the sidebar's foot |
-| `cards` | `{ "Group heading": [{name, sub, href, tip?, up?, mem?}] }`, ordered groups of link cards; `tip` overrides the hover tooltip, and an `up` (+ optional `mem`) Prometheus query makes the card double as a live status card (up/DOWN · rss) |
+| `cards` | `{ "Group heading": [{name, sub, href \| action, tip?, up?, mem?}] }`, ordered groups of link cards; `tip` overrides the hover tooltip, and an `up` (+ optional `mem`) Prometheus query makes the card double as a live status card (up/DOWN · rss). `action` (a form-trigger path, instead of `href`) renders a button that POSTs through the `/form/` proxy in place — it needs `formProxy` — and a card declared either way suppresses the auto-discovered card for the same form |
 | `tabs` | `[{id, label, src, group?}]`, iframe views listed in the sidebar; serve `src` yourself (e.g. under `/site/`). Entries sharing a `group` label fold into one sidebar entry whose view keeps a tab strip (last-open tab remembered per group) |
 | `sections` | which status sections render, and their headings: `{containers, executions, notifications}`. `notifications` renders as its own sidebar view with an unseen badge (count of entries newer than the last visit, red when one is a failure; watermark in localStorage `po11y-notif-seen`); the rest render as Overview sections, each with a sidebar jump link |
 | `metrics` | `{heading, grafana: {embed, base, dashboard, panels: [{id, title?, span?, h?, wide?}], range}, promBase, stats: [{label, up, mem?}]}` — `wide` spans the full row; `span` (1-4, default 2) is how many grid tracks a panel takes on wide screens (the row has 4, so 1 ≈ a quarter); `h` pins the panel height in px (120-800) when the span-derived height cuts the chart off; the Grafana deep-link card renders only when `embed` is off |
@@ -20,6 +20,8 @@ omitted pieces don't render.
 | `staleAfterMin` | staleness threshold (default 5) |
 | `statusHint` | text shown while `status.json` is missing |
 | `baseUrl` | optional; a bare host (not a URL prefix) substituted for `{host}` instead of the browser's hostname — see below |
+| `n8nUrl` | where n8n itself is, for workflow and form deep links (default `http://{host}:5678`). Read by the dashboard's Actions cards and by the Map/Architecture tabs — set it in Mode B, where n8n is not on the dashboard's host |
+| `formProxy` | whether nginx serves the same-origin `/form/` proxy (default `true`; set `false` when `ENABLE_FORM_PROXY` is not `true`, which is Mode B's default). With it off, a field-less form trigger becomes a link to n8n's own form page instead of an in-place POST button that could only ever 404 |
 | `scopes` | optional; multi-team views: `{ "<scope>": "Display name" }`, `<scope>` restricted to `[a-z0-9-]+` — see below |
 
 `{host}` inside any `href`/`src` is replaced with the browser's hostname, so
@@ -45,7 +47,13 @@ Keys outside the charset are dropped with a console warning.
 
 To feed a non-default scope, run a collector with
 `STATUS_DIR=/po11y-status/<scope>` (created at startup). The `/form/` proxy
-remains single-upstream — form firing is scope-agnostic.
+remains single-upstream — form firing is scope-agnostic. Two more per-layer
+notes: `list` tabs are scope-agnostic too (their rows come from n8n Data
+Tables via `/n8n-table/`, not from the scoped feeds volume — the `?scope=`
+the shell appends is deliberately ignored there), and the MCP server reads
+exactly one scope — whatever its own `STATUS_DIR` points at (see
+[docs/mcp.md](mcp.md)). Scopes are not routed by the `deploy/k8s/`
+manifests.
 
 ## `/status.json` (your publisher writes this)
 
@@ -70,20 +78,22 @@ Newest first. The dashboard shows the newest 5 with a "show all" toggle.
     "link": "https://…" } ]
 ```
 
-In Mode A an n8n sub-workflow owns this file. In Mode B the collector's optional
-watchdog writes it (`ALERTS_ENABLED=true`, see the "Mode B" block in
-`.env.example`), prepending new entries and truncating to `ALERT_FEED_MAX`.
+In Mode A an n8n sub-workflow owns this file. In Mode B the collector's
+watchdog writes it — on by default, `ALERTS_ENABLED=false` opts out (see the
+"Mode B" block in `.env.example`) — prepending new entries and truncating to
+`ALERT_FEED_MAX`.
 Enable the `notifications` section in `config.json` to render them.
 
 The watchdog evaluates three rules against the execution window it already
-fetches for `status.json` — no extra n8n calls, still GET-only:
+fetches for `status.json` (`EXECUTIONS_LIMIT`, default 100 — see "Sizing the
+window" in the README) — no extra n8n calls, still GET-only:
 
 | rule | fires when | budget |
 |------|-----------|--------|
 | `failing` | errors clear both `ALERT_MIN_ERRORS` and `ALERT_ERROR_RATE` in the window | both floors, defaults 3 and 0.5 |
 | `stale` | no *successful* execution within the budget, including an active workflow with no executions at all | `ALERT_STALE_AFTER_MIN`, 0 = off |
 | `stuck` | an execution has sat in `running` past the budget | `ALERT_STUCK_AFTER_MIN`, 0 = off |
-| `unreachable` | a poll could not reach n8n at all | always on with `ALERTS_ENABLED=true` |
+| `unreachable` | a poll could not reach n8n at all | always on while the watchdog is enabled |
 
 The first three are derived from data fetched *out of* n8n, so when n8n itself
 is down, hung or rejecting the API key there is nothing to evaluate and all
@@ -163,7 +173,7 @@ configuration, no API key, no execution payloads.
 Two behaviours worth knowing before you write rules against these:
 
 - **`po11y_workflow_errors_total` is accumulated, not the window count.** The
-  collector reads `/api/v1/executions?limit=100`, a sliding window whose error
+  collector reads `/api/v1/executions?limit=<EXECUTIONS_LIMIT>` (default 100), a sliding window whose error
   count goes down as it moves. Exporting that directly would make `increase()`
   read every slide as a counter reset. The counter resets to zero when the
   collector restarts, which is a genuine counter reset and handled natively.
@@ -182,8 +192,8 @@ which is what the shipped Alertmanager inhibit rule exists to collapse.
 
 | Path | Enable with | Best when |
 |---|---|---|
-| `notifications.json` feed only | `ALERTS_ENABLED=true` | You read the dashboard and want no outbound traffic. |
-| Collector push | `ALERTS_ENABLED=true` + `ALERT_WEBHOOK_URL` | You want Slack/Discord/Telegram with nothing else to run. |
+| `notifications.json` feed only | nothing — the watchdog is on by default | You read the dashboard and want no outbound traffic. |
+| Collector push | `ALERT_WEBHOOK_URL` | You want Slack/Discord/Telegram with nothing else to run. |
 | Prometheus + Alertmanager | the `docker-compose.alerts.yml` overlay | You already run Prometheus, or you want silences, grouping, inhibition and on-call routing. |
 
 These are alternatives. Turning on more than one delivers every alert more than
@@ -195,8 +205,11 @@ docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml up -d
 ```
 
 Alertmanager's UI is at `http://127.0.0.1:9093` (or your `BIND_ADDR`). Rules live
-in `observability/alerts.yml`; the thresholds match the watchdog defaults and are
-meant to be edited.
+in `observability/alerts.yml` and are meant to be edited. Their thresholds do
+**not** match the collector watchdog's defaults — the watchdog ships with
+`stale` and `stuck` off, and its `failing` rule carries an error-rate floor no
+PromQL rule here reproduces. The header comment in `alerts.yml` tabulates the
+differences.
 
 ## `alert-state.json` (Mode B, watchdog only — not web-served)
 
@@ -217,14 +230,21 @@ read-only rootfs — but unlike the five feeds above it is **not** web-served:
 enumerates the same five. It is collector-internal state, not a feed. Delete it
 (inside the volume) to force every open alert to re-announce.
 
-## `/map.json` (written by the Maps workflow)
+## `/map.json` (written by the Maps workflow, or the Mode B collector)
 
 ```json
-{ "generated_at": "…", "mermaid": "graph TD\n …", "workflows": 4 }
+{
+  "generated_at": "…",
+  "mermaid": "graph TD\n …",
+  "workflows": 4,
+  "entries": [{ "nid": "wf_42", "id": "42", "name": "…", "sub": "…" }]
+}
 ```
 
 Rendered by the bundled [`site/map.html`](../site/map.html) tab (mermaid is
-bundled too, no CDN).
+bundled too, no CDN). `entries` links each mermaid node id back to the raw n8n
+workflow; it is what makes the diagram's nodes clickable, so a map published
+without it renders as a static picture.
 
 ## `/forms.json` (written by the Maps workflow)
 

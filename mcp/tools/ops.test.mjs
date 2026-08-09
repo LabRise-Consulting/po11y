@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { incidentsTool, graphTool, executionsTool, failureTool, workflowTool, promqlTool, sqlTool,
   describeShape } from './ops.mjs';
+import { buildAiMap } from '../../lib/build-ai-map.mjs';
 
 const feedsWith = (files) => ({
   available: () => true,
@@ -49,7 +50,19 @@ test('incidents: open counts the full backlog, not just the limit-capped page', 
 test('incidents: a feed that has never been written is distinguished from an empty one', async () => {
   const tool = incidentsTool({ feeds: feedsWith({}) });
   const out = await tool.handler({});
-  assert.match(out.error, /notifications\.json has not been written yet/);
+  assert.match(out.error, /has not been written/);
+});
+
+test('incidents: a missing feed names the reason, not just the missing file', async () => {
+  // Mode A ships no core workflow that writes notifications.json, so this is
+  // the NORMAL answer on a stock Mode A deploy — not a fault. Reporting a bare
+  // "has not been written yet" sends an agent hunting for a broken watchdog
+  // that was never supposed to be running.
+  const out = await incidentsTool({ feeds: feedsWith({}) }).handler({});
+  assert.equal(out.open, 0);
+  assert.deepEqual(out.incidents, []);
+  assert.match(out.reason, /Mode A/, 'says which deployments legitimately lack the feed');
+  assert.match(out.reason, /watchdog|ALERTS_ENABLED/, 'and what writes it when they do');
 });
 
 test('incidents: a feed that parsed to an object answers, rather than throwing a bare -32603', async () => {
@@ -63,20 +76,39 @@ test('incidents: a feed that parsed to an object answers, rather than throwing a
   assert.deepEqual(out.incidents, []);
 });
 
-const AI_MAP = {
-  nodes: [
-    { id: 'wf:1', col: 1, kind: 'entry', name: 'HN tech news', sub: 'fetches stories' },
-    { id: 'wf:2', col: 2, kind: 'worker', name: 'HN notify', sub: 'writes notifications' },
-    { id: 'f:notifications.json', col: 3, kind: 'file', name: '/notifications.json' },
-  ],
-  edges: [{ from: 'wf:1', to: 'wf:2', kind: 'sub-workflow' },
-          { from: 'wf:2', to: 'f:notifications.json', kind: 'file' }],
-};
+// The ai-map fixture is PRODUCED, not hand-written. A hand-written one drifted
+// from the real feed for as long as these tools have existed: buildAiMap emits
+// edges as [from, to, kind] arrays, the fixture spelled them {from, to, kind},
+// and so every graph slice silently returned an empty edge list in production
+// while the suite stayed green. Feeding the real builder makes that class of
+// drift impossible — if the feed shape changes, these tests change with it.
+const AI_MAP = (await buildAiMap([
+  {
+    id: '1',
+    name: 'HN tech news',
+    nodes: [
+      { name: 'Every 30 min', type: 'n8n-nodes-base.scheduleTrigger',
+        parameters: { rule: { interval: [{ field: 'minutes', minutesInterval: 30 }] } } },
+      { name: 'Call notify', type: 'n8n-nodes-base.executeWorkflow',
+        parameters: { workflowId: { value: '2' } } },
+    ],
+  },
+  {
+    id: '2',
+    name: 'HN notify',
+    nodes: [
+      { name: 'When called', type: 'n8n-nodes-base.executeWorkflowTrigger', parameters: {} },
+      { name: 'Publish', type: 'n8n-nodes-base.code',
+        parameters: { jsCode: "// writes notifications\nfs.writeFileSync('/po11y-status/notifications.json', x);" } },
+    ],
+  },
+], { now: 0, aiConfigured: false, prev: null })).map;
 
 test('graph: whole-instance summary counts nodes and edges', async () => {
   const out = await graphTool({ feeds: feedsWith({ 'ai-map.json': AI_MAP }) }).handler({});
-  assert.equal(out.nodes, 3);
-  assert.equal(out.edges, 2);
+  assert.equal(out.nodes, AI_MAP.nodes.length);
+  assert.equal(out.edges, AI_MAP.edges.length);
+  assert.ok(out.edges >= 3, 'the fixture really does have a trigger, a call and a feed edge');
 });
 
 test('graph: a slice around one node returns its neighbours at the requested depth', async () => {
@@ -84,6 +116,24 @@ test('graph: a slice around one node returns its neighbours at the requested dep
   const out = await tool.handler({ node: 'HN notify', depth: 1 });
   const ids = out.slice.nodes.map((n) => n.id).sort();
   assert.deepEqual(ids, ['f:notifications.json', 'wf:1', 'wf:2']);
+});
+
+test('graph: the slice carries the edges between the nodes it kept', async () => {
+  // The whole point of the tool: an empty edge list makes the slice unreadable,
+  // and that is exactly what it returned before the shape fix.
+  const tool = graphTool({ feeds: feedsWith({ 'ai-map.json': AI_MAP }) });
+  const out = await tool.handler({ node: 'HN notify', depth: 1 });
+  assert.ok(out.slice.edges.length >= 2, 'wf:1->wf:2 and wf:2->f:notifications.json');
+  const pairs = out.slice.edges.map(([from, to]) => `${from}->${to}`);
+  assert.ok(pairs.includes('wf:1->wf:2'));
+  assert.ok(pairs.includes('wf:2->f:notifications.json'));
+});
+
+test('graph: depth 2 reaches the trigger behind the calling workflow', async () => {
+  const tool = graphTool({ feeds: feedsWith({ 'ai-map.json': AI_MAP }) });
+  const out = await tool.handler({ node: 'HN notify', depth: 2 });
+  const ids = out.slice.nodes.map((n) => n.id);
+  assert.ok(ids.some((id) => id.startsWith('t:1:')), 'the schedule trigger is two hops away');
 });
 
 test('graph: an unknown node lists what it could have matched', async () => {

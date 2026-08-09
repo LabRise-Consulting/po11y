@@ -28,10 +28,21 @@ export function unavailable(tool, varName) {
  *
  * @param {{statusDir: string}} opts
  */
+// The single home of the feed-name list. registry.mjs pairs these with
+// agent-facing descriptions; a registry test pins nginx.conf and the k8s
+// nginx copy to the same five.
+export const FEED_NAMES = ['status.json', 'notifications.json', 'map.json', 'ai-map.json', 'forms.json'];
+
 export function makeFeeds({ statusDir }) {
   const path = (name) => join(statusDir, name);
   return {
-    available: () => existsSync(statusDir),
+    // At least one actual feed file, not the directory: STATUS_DIR is a mount
+    // point (or a scope subdir mkdir'd by any collector at startup), so the
+    // directory exists even in a deployment where nothing publishes here —
+    // e.g. every collector writing scope subdirs while this process reads the
+    // flat default. Answering "available" then made every feed tool report a
+    // healthy-empty instance instead of saying no feeds exist.
+    available: () => FEED_NAMES.some((name) => existsSync(path(name))),
     read(name) { return JSON.parse(readFileSync(path(name), 'utf8')); },
     readSafe(name) { try { return this.read(name); } catch { return null; } },
     /** Seconds since the feed was last written, or null if it is not there. */
@@ -86,9 +97,11 @@ export function makeN8n({ url, apiKey, fetchFn = fetch }) {
  * The read-only gate for po11y_sql. Runs BEFORE any request is built, so a
  * rejected statement never reaches the network.
  *
- * This is belt-and-braces: Grafana's postgres datasource is itself configured
- * with n8n's credentials, so the guard is what makes "read-only" true, not the
- * database role. Keep it strict and boring.
+ * Defence-in-depth: what makes "read-only" true is the po11y_ro database role
+ * behind Grafana's datasource (SELECT-only, credentials_entity and
+ * execution_data denied — see bootstrap.sh). This guard exists so a rejected
+ * statement fails fast with a useful error instead of a datasource 500. Keep
+ * it strict and boring.
  *
  * @param {string} sql
  * @returns {string} the normalised statement
@@ -113,9 +126,10 @@ export function assertSelect(sql) {
  * Zero runtime dependencies rules out a Postgres client (wire protocol, SCRAM
  * auth). Mode A already provisions the datasource that the four Mode A alert
  * rules query (observability/grafana/provisioning/datasources/datasources.yml),
- * so SQL travels as plain HTTP JSON and no new database role or password
- * exists. Mode B has no such datasource, so the capability is off there by
- * construction rather than by configuration.
+ * so SQL travels as plain HTTP JSON. The datasource authenticates as the
+ * read-only po11y_ro role (bootstrap.sh), not as n8n's own DB user. Mode B
+ * has no such datasource, so the capability is off there by construction
+ * rather than by configuration.
  *
  * @param {{url: string, token?: string, datasourceUid: string, fetchFn?: typeof fetch}} opts
  */
