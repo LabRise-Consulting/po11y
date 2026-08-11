@@ -1,53 +1,37 @@
 # Security policy
 
-## Reporting a vulnerability
+## Reporting vulnerabilities
 
-Please **do not open a public issue** for a security problem.
+Do **not** open public issues for security vulnerabilities.
 
-Report it as a **confidential issue** on GitLab:
-[new issue](https://gitlab.com/labrise/po11y/-/issues/new) → tick
-*"This issue is confidential"* before submitting. Only project members can
-read it.
+Submit confidential reports using GitLab issues:
+[Create confidential issue](https://gitlab.com/labrise/po11y/-/issues/new) and select **"This issue is confidential"**.
 
-Include what you can: affected mode (A/bundled or B/collector), the version or
-commit, and a reproduction. You should get an acknowledgement within a week.
-Fixes land on `main` with the reporter credited in `CHANGELOG.md` unless you
-ask otherwise.
+Please include:
+- Affected deployment mode (Mode A or Mode B).
+- Version or commit hash.
+- Reproduction steps.
+
+We acknowledge reports within 7 days. Fixes land on `main`, crediting reporters in `CHANGELOG.md` unless requested otherwise.
 
 ## Supported versions
 
-Po11y has no release branches. `main` is the supported line; fixes are not
-backported to older commits.
+Security updates are applied to the `main` branch. Older commits are not backported.
 
-## Scope
+## Scope and design boundaries
 
-Po11y is a status dashboard for [n8n](https://n8n.io). It has no user
-database, no session store and no authorization model of its own — read
-`docs/security.md` for the full posture before reporting, because several
-sharp edges there are **documented, deliberate design**, not vulnerabilities:
+Po11y has no internal user directory or session database. The following documented behaviors are **intentional architectural decisions**, not vulnerabilities:
 
-- **No per-viewer read authorization.** Every feed is derived from one
-  privileged n8n export. Anyone who can load the dashboard sees all of it.
-  This is stated in `docs/security.md` ("Read authorization is out of scope");
-  the supported path for real read isolation is Mode B against an n8n with
-  projects/RBAC.
-- **Anyone with n8n editor access can run JavaScript** in a Code node. That is
-  inherent to n8n. Editor access is trusted by definition.
-- **Plain HTTP on the default `127.0.0.1` bind.** Put a TLS proxy in front
-  before exposing it. The `bootstrap.sh` exposure interlock already refuses a
-  non-loopback bind with no `DASHBOARD_BASIC_AUTH`.
-- **Mode A enables Execute Command instance-wide** (`NODES_EXCLUDE=[]`) so the
-  Maps workflow can run `n8n export:workflow`. Known and tracked; the host
-  Docker socket is not mounted into n8n, so it is confined to the container.
+- **No per-user read authorization**: All status feeds originate from single privileged n8n instance exports. Anyone with access to the dashboard can view all feeds. For read isolation, run Mode B against paid n8n instances using native RBAC.
+- **Code node JavaScript execution**: Users with n8n editor permissions can run JavaScript in Code nodes by design.
+- **Loopback binding by default**: Services bind to `127.0.0.1`. Use a TLS reverse proxy before exposing services to external networks. `bootstrap.sh` blocks non-loopback bindings if `DASHBOARD_BASIC_AUTH` is missing.
+- **Mode A Execute Command node**: Enabled instance-wide (`NODES_EXCLUDE=[]`) for workflow exports. Commands run inside the isolated n8n container.
 
-In scope, and worth reporting:
+### In-scope security issues
 
-- Anything that escapes the container boundary or reaches the host Docker
-  daemon.
-- A write path to n8n in **Mode B**, which is contractually GET-only.
-- Secrets leaking into a published feed, a log line, or anything the browser
-  can fetch — the AI-map key and the n8n API key especially.
-- Bypasses of `DASHBOARD_BASIC_AUTH`, of the forward-auth overlay's
-  `FORM_ALLOWED_GROUPS` gate, or of the `bootstrap.sh` exposure interlock.
-- Injection through feed content into the dashboard (the feeds are rendered
-  through `esc()`/`safeUrl()` in `html/app.js`; a way past either is a bug).
+Please report:
+- Container escape risks or unauthorized host Docker daemon access.
+- Non-GET write requests to n8n in **Mode B**.
+- Exposure of credentials or API keys (such as `N8N_API_KEY` or AI API keys) in published feeds, logs, or static web assets.
+- Authentication bypasses for `DASHBOARD_BASIC_AUTH`, `FORM_ALLOWED_GROUPS`, or `bootstrap.sh` bind guards.
+- Cross-Site Scripting (XSS) in the dashboard UI (`html/app.js`).

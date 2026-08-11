@@ -54,7 +54,7 @@ const POLL_INTERVAL = Number(process.env.POLL_INTERVAL || 600); // seconds
 // Recent-executions window per poll; collect.mjs clamps to n8n's API cap (250).
 // On a busy instance size this so window >= executions per POLL_INTERVAL, or
 // the failing-rate rule samples (the stale rule keys on last-success age and
-// is unaffected). See "Sizing the window" in README.md.
+// is unaffected). See "Sizing the executions window" in docs/configuration.md.
 const EXECUTIONS_LIMIT = Number(process.env.EXECUTIONS_LIMIT || 100);
 const STATUS_DIR = process.env.STATUS_DIR || '/po11y-status';
 const PORT = Number(process.env.PORT || 8081);

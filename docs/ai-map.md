@@ -1,54 +1,63 @@
-# The AI architecture map
+# AI architecture map
 
-The Architecture tab always renders: its structure comes from code, not from a
-model. An LLM is optional and improves the text. Two ways to enable that:
+The Architecture tab always works because code builds its structure. An LLM is optional and only generates the text descriptions. You can enable LLM descriptions in three ways:
 
-1. **Bundled OmniRoute gateway (default)**: the
-   `docker-compose.omniroute.yml` overlay runs an
-   [OmniRoute](https://github.com/diegosouzapw/OmniRoute) gateway — one
-   OpenAI-compatible endpoint with provider routing and fallback. Bootstrap
-   includes it unless `OMNIROUTE_ENABLED=false` and wires the map to it
-   automatically when `AI_MAP_BASE_URL` is empty, defaulting `AI_MAP_MODEL`
-   to `auto/best-free` — OmniRoute's keyless free-tier auto-route — so a
-   clean bootstrap gets LLM prose with zero configuration and zero cost. To
-   use a specific (paid) model instead: open `http://127.0.0.1:20128`, log in
-   (`OMNIROUTE_ADMIN_PASSWORD` in `.env`), connect a provider, set
-   `AI_MAP_MODEL` in `.env` (e.g. `anthropic/claude-haiku-4-5`) and re-run
-   `./bootstrap.sh`. In Mode B add the overlay by hand
-   (`docker compose -f docker-compose.readonly.yml -f docker-compose.omniroute.yml up -d`)
-   and set `AI_MAP_BASE_URL=http://omniroute:20128/v1` yourself (Mode B has
-   no bootstrap to auto-wire it).
-2. **Any other API endpoint**: set `AI_MAP_BASE_URL`, `AI_MAP_API_KEY` and
-   `AI_MAP_MODEL` in `.env` (any OpenAI-compatible chat endpoint works: your
-   own OmniRoute, Mistral, OpenAI, Anthropic, a local Ollama), then
-   `docker compose up -d n8n`. Explicit values always beat the bundled
-   auto-wiring; set `OMNIROUTE_ENABLED=false` to skip the bundled container
-   entirely. The Maps workflow refreshes the text daily, or immediately via
-   the "Build maps now" button.
-3. **Local AI CLI, no API key**: run `./ai-map-cli.sh` on the host. It pipes
-   the map through a local CLI (`claude -p` by default; set `AI_MAP_CLI` to
-   use `llm`, `ollama run <model>`, or anything that reads a prompt on stdin
-   and prints the answer).
+1. **Bundled OmniRoute gateway (default)**
+   The `docker-compose.omniroute.yml` overlay runs an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) gateway. Bootstrap includes OmniRoute by default unless `OMNIROUTE_ENABLED=false`. When `AI_MAP_BASE_URL` is empty, OmniRoute uses `AI_MAP_MODEL=auto/best-free` (a keyless free-tier route).
 
-**What the LLM sees.** Exactly the per-workflow digest built in
-`lib/build-ai-map.mjs` (`digestOf`): workflow id, name and active flag, and
-per node its name, its type, plus — only when the node has them — the schedule
-`rule`, webhook `path`, `url` (truncated to 120 chars), `command` (160 chars),
-the called sub-workflow id, and the `//` comment lines of Code nodes (300
-chars). n8n credential objects, execution data and node payloads are never
-part of it — but a secret hardcoded into a node's URL or command text is
-inside those truncated fields, so it WILL be sent. With the default bundled
-OmniRoute route that digest goes to a third-party free-tier provider; set
-`OMNIROUTE_ENABLED=false` for the heuristic map (nothing leaves the box), or
-point `AI_MAP_BASE_URL` at an endpoint you trust.
+   To use a custom model:
+   - Open `http://127.0.0.1:20128` and log in (`OMNIROUTE_ADMIN_PASSWORD` in `.env`).
+   - Connect a provider.
+   - Set `AI_MAP_MODEL` in `.env` (for example, `anthropic/claude-haiku-4-5`) and re-run `./bootstrap.sh`.
 
-**Cost is near zero.** The map's structure is free (built from code). The LLM
-is only called when a workflow actually changed, and the call is differential:
-per-node content signatures (`sigs` in the published map) let unchanged nodes
-keep their previous prose, so the prompt carries only the changed workflows'
-digest. An unchanged map skips the call entirely; the "Build maps now" form
-forces a full re-annotation — in Mode B, where there is no form, send the
-collector a SIGHUP instead (`docker kill -s HUP po11y-collector`): it polls
-immediately and re-annotates everything. A cheap model (e.g.
-`mistral-small-latest`) is plenty, and the keyless heuristic and local-Ollama
-paths cost nothing at all.
+   In Mode B, start the overlay manually:
+   ```sh
+   docker compose -f docker-compose.readonly.yml -f docker-compose.omniroute.yml up -d
+   ```
+   Then set `AI_MAP_BASE_URL=http://omniroute:20128/v1` in `.env`.
+
+2. **External API endpoint**
+   Set `AI_MAP_BASE_URL`, `AI_MAP_API_KEY`, and `AI_MAP_MODEL` in `.env`. Any OpenAI-compatible endpoint works (such as OpenAI, Anthropic, Mistral, or Ollama). Then run `docker compose up -d n8n`. Explicit settings override OmniRoute auto-wiring. Set `OMNIROUTE_ENABLED=false` to disable the OmniRoute container. The Maps workflow refreshes descriptions daily or when you click **Build maps now**.
+
+3. **Local AI CLI (no API key required)**
+   Run `./ai-map-cli.sh` on the host machine. By default, it uses `claude -p`. Set `AI_MAP_CLI` to use `llm`, `ollama run <model>`, or any command that reads standard input and returns text.
+
+## What data is sent to the LLM
+
+The LLM receives the workflow digest generated by `lib/build-ai-map.mjs`:
+- Workflow ID, name, and active status.
+- Node names and node types.
+- Node metadata when present: schedule `rule`, webhook `path`, `url` (truncated to 120 characters), `command` (truncated to 160 characters), sub-workflow ID, and `//` comments in Code nodes (truncated to 300 characters).
+
+n8n credentials, execution data, and node payloads are never sent. However, secrets hardcoded directly inside node URLs or command strings will be included in the sent text.
+
+By default, OmniRoute sends this digest to a free third-party provider. Set `OMNIROUTE_ENABLED=false` to use local heuristic descriptions (no data leaves your machine), or set `AI_MAP_BASE_URL` to a trusted provider.
+
+## Using OmniRoute beyond the map
+
+OmniRoute is a general OpenAI-compatible gateway, not a Po11y component. Once you connect providers in its dashboard (`http://127.0.0.1:20128`), anything that speaks the OpenAI API can route through it and inherit the same fallback and usage tracking:
+
+| Client | Base URL |
+|---|---|
+| n8n AI nodes (same Compose network) | `http://omniroute:20128/v1` |
+| Host tools — VS Code extensions, `llm`, `aider`, any OpenAI-compatible client | `http://127.0.0.1:20128/v1` |
+
+See the [OmniRoute documentation](https://github.com/diegosouzapw/OmniRoute) for provider setup, routing rules, and model aliases.
+
+**Keep this endpoint private.** The `/v1` proxy accepts requests without an API key, because `REQUIRE_API_KEY` defaults to `false`. The overlay therefore publishes the port on loopback only, and not on `BIND_ADDR`. Any person who can reach the port can spend the quota of your connected providers.
+
+To use the gateway from a different machine, do one of these:
+
+- **Make a tunnel.** Use SSH or a VPN, and keep `OMNIROUTE_BIND_ADDR` on loopback.
+- **Require a key, then bind wider.** Set `REQUIRE_API_KEY=true` on the `omniroute` service. Then set `OMNIROUTE_BIND_ADDR` to a private interface, such as a VPN address. Do not bind it to a public interface.
+
+If you require a key, you must also give that key to the map. Bootstrap writes the placeholder value `omniroute-local` into `config/ai-map.json`, and the gateway rejects a placeholder. Make an API key in the OmniRoute dashboard, set `AI_MAP_API_KEY` to that key, and run `./bootstrap.sh` again. If the map cannot authenticate, the Architecture tab keeps its structure but shows heuristic text.
+
+## Costs and caching
+
+- Map structure is generated locally for free.
+- The LLM is called only when a workflow changes.
+- Node content signatures (`sigs`) track changes per node. Unchanged nodes reuse existing descriptions, so requests contain only changed workflows.
+- If no workflows change, no LLM calls are made.
+- Clicking **Build maps now** forces a full refresh. In Mode B, send `SIGHUP` (`docker kill -s HUP po11y-collector`) to force a re-annotation.
+- Local Ollama and heuristic modes cost nothing.

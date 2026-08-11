@@ -1,97 +1,53 @@
-# Beyond docker compose
+# Deployment options
 
-The compose stack is one deployment, not the product — the product is the file
-contract (small JSON files on a shared volume) plus a static dashboard, which
-is deployment-agnostic.
+Po11y consists of static dashboard files and JSON feed files stored on a shared status volume. This design works across different deployment environments.
 
 ## Podman
 
-The compose file runs under `podman-compose`. Point the `docker-proxy`
-sidecar at the Podman socket (it speaks the Docker API); or drop the proxy and
-the containers section is simply empty.
+You can run the Compose stack using `podman-compose`.
+
+- Configure the `docker-proxy` sidecar to point to the Podman socket.
+- Alternatively, remove `docker-proxy` if container status monitoring is not needed.
 
 ## Kubernetes
 
-Plain manifests live in [`deploy/k8s/`](../deploy/k8s) — build and push the
-n8n image, create the static-file ConfigMaps, set the Secrets, then
-`kubectl apply -k deploy/k8s`. Community-supported: schema-checked in CI, never
-smoke-tested, and a **subset** of what compose gives you. What is missing:
+Plain manifests are available in [`deploy/k8s/`](../deploy/k8s). Build and push the n8n image, create ConfigMaps and Secrets, then deploy using:
 
-| | on compose | on k8s |
+```sh
+kubectl apply -k deploy/k8s
+```
+
+### Feature comparison: Compose vs Kubernetes
+
+| Feature | Docker Compose | Kubernetes (`deploy/k8s`) |
 |---|---|---|
-| Mode A (bundled n8n) | yes | yes |
-| Mode B (collector against a remote n8n) | yes | **no Deployment exists** |
-| Dashboard authentication | Basic Auth or forward-auth OIDC | **none** — the nginx ConfigMap has no auth include |
-| MCP server (`/mcp/`) | yes | no Deployment, no route |
-| Grafana alert rules | five, provisioned | **none** — no alerting ConfigMap or mount |
-| Form submit proxy (`/form/`) | yes | no |
-| List tabs (`/lib/list-rows.mjs`) | yes | no route — the tab fails to load |
-| Multi-team scopes, DataTable proxy | yes | no |
-| Container hardening | `read_only`, `user: node` | only `fsGroup`; no `readOnlyRootFilesystem`, `runAsNonRoot`, dropped capabilities or NetworkPolicy |
-| Containers feed | Docker socket | empty (no socket on a generic cluster) |
+| Mode A (Bundled n8n) | Yes | Yes |
+| Mode B (Collector against external n8n) | Yes | No deployment included |
+| Dashboard authentication | Basic Auth or OIDC forward-auth | None (must be handled by Ingress) |
+| MCP server (`/mcp/`) | Yes | No deployment or routing |
+| Grafana alert rules | 5 provisioned rules | Requires ConfigMap setup |
+| Form submission proxy (`/form/`) | Yes | No |
+| Data table list proxy (`/n8n-table/`) | Yes | No |
+| Multi-team scopes | Yes | No |
+| Container security context | `read_only`, `user: node` | Basic `fsGroup` only |
+| Container status feed | Docker socket | Empty (no host socket mounted) |
 
-The authentication gap is the one to plan around: put an authenticating Ingress
-in front of the dashboard Service, and treat the rest of this table as work to
-do rather than as choices already made for you.
+For complete instructions and setup details, see [`deploy/k8s/README.md`](../deploy/k8s/README.md).
 
-See [`deploy/k8s/README.md`](../deploy/k8s/README.md).
+## OpenTelemetry Tracing (Optional)
 
-## Tracing with OpenTelemetry (opt-in)
-
-n8n emits OpenTelemetry traces for workflow and node executions natively.
-Enable it with the bundled override, which also starts a Grafana Tempo backend
-so traces surface in the same Grafana as the metrics:
+n8n can emit OpenTelemetry traces for executions. Enable tracing and start Grafana Tempo using the OTEL override file:
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d
 ```
 
-It is opt-in on purpose: tracing is a newer n8n feature and heavier than the
-built-in Prometheus metrics, so the default stack leaves it off. n8n's own
-docs still describe it as under development, so expect it to keep moving.
+### Features provided by OpenTelemetry
 
-The override configures tracing with `N8N_OTEL_*` environment variables, which
-is what makes it reproducible from a clean checkout. Since n8n 2.27 there is
-also a *Settings > OpenTelemetry* screen that can turn it on without env vars;
-the pinned image is new enough for that, so it is an option if you would rather
-click than edit compose files.
+- **Execution breakdown**: Traces record execution spans (nodes, sub-workflows, outbound HTTP requests) with precise timing.
+- **Grafana dashboard**: Includes an **n8n Execution Traces** dashboard showing per-workflow error rates and node latency.
+- **Deep links**: Provides Grafana Explore TraceQL links (`{status=error}`, `{duration>2s}`) for root-cause analysis. Card links can be merged using [`deploy/otel/config-cards.json`](../deploy/otel/config-cards.json).
 
-**What tracing adds over the metrics.** The Prometheus dashboards are
-aggregates (counts, rates, average durations). Traces are per-execution: a
-single run split into spans (each node, sub-workflow call, outbound HTTP
-request) with timing and parent/child — the drill-down for *why was this run
-slow* or *which node failed in this execution*.
+## Comparisons with other tools
 
-**A dashboard for it.** Tempo's metrics-generator derives span metrics (and a
-service graph) from the trace stream and remote-writes them to Prometheus, so
-the override also ships an **n8n Execution Traces** Grafana dashboard:
-per-workflow execution/error counts and per-node p95 latency, broken down by
-n8n's own span attributes (`n8n_workflow_name`, `n8n_node_name`, …).
-
-**Deep links from the Po11y dashboard.** Grafana Explore takes a TraceQL query
-in the URL — *recent errors* (`{status=error}`), *slow runs*
-(`{duration>2s}`), *all recent traces* (`{}`). A ready-made card group is in
-[`deploy/otel/config-cards.json`](../deploy/otel/config-cards.json) — merge it
-into your `config.json` `cards`. The Explore links need a Grafana login
-(Explore is Editor-only); the Execution Traces dashboard link works
-anonymously.
-
-## How Po11y compares
-
-The comparison table — n8n-trace, n8n Manager, FlowPulse, n8n's own
-observability repo and the DIY Error Trigger route — lives in the
-[README](../README.md#how-po11y-compares), including where Po11y is behind.
-
-Two more that the table doesn't carry because they answer a different
-question:
-
-- **Workflow visualizers** (e.g. [n8nmermaid](https://github.com/jwa91/n8nmermaid))
-  — turn exported JSON into diagrams for pull-request review. Po11y does it
-  live from the running instance every 10 minutes.
-- **DIY (Retool / Appsmith + the n8n REST API)** — maximum control, more to
-  build and maintain. Po11y is the pre-packaged, one-command version.
-
-Note for this page specifically: the two Webhook/Form dashboards Po11y ships
-come from
-[n8n-io/n8n-observability](https://github.com/n8n-io/n8n-observability)
-(official, MIT); Grafana ships four in total.
+For detailed comparisons with tools like `n8n-trace`, `n8n Manager`, `FlowPulse`, and `n8n-observability`, see [README.md](../README.md#feature-comparison).

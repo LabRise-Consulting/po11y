@@ -14,7 +14,8 @@
 #                        degrade gracefully to an empty Grafana tab)
 #   POLL_INTERVAL        seconds between polls (default 600)
 #   EXECUTIONS_LIMIT     recent-executions window per poll (default 100, max
-#                        250 — n8n's API cap; see "Sizing the window" in README)
+#                        250 — n8n's API cap; see "Sizing the executions
+#                        window" in docs/configuration.md)
 #   BIND_ADDR / DASHBOARD_PORT / DASHBOARD_BASIC_AUTH / GRAFANA_ADMIN_PASSWORD
 #                        reused verbatim from Mode A (see .env.example)
 #   ENABLE_FORM_PROXY / FORM_PROXY_UPSTREAM   see the dashboard service + nginx

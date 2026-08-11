@@ -1,185 +1,116 @@
 # Alerting
 
-Po11y ships four alerting mechanisms. **They are alternatives, not layers.**
-Enabling two means every alert arrives twice.
+Po11y offers four alerting mechanisms. **Use only one mechanism at a time** to avoid duplicate alerts.
 
-Which one is available to you is mostly decided by which mode you run, because
-each mode can see different things.
+Availability depends on your operating mode (Mode A or Mode B) because each mode accesses different data sources.
 
-## The one-screen version
+## Overview
 
-| | Mechanism | Mode | Ships on by default | Delivers to |
-|---|---|---|---|---|
-| 1 | **Notifications feed** | A + B | B: yes (`ALERTS_ENABLED=false` opts out); A: no, nothing writes it | The dashboard's Notifications panel |
-| 2 | **Grafana alerting** | **A only** | **yes** | Webhook (`GRAFANA_ALERT_WEBHOOK_URL`) |
-| 3 | **Collector push** | **B only** | no | Slack / Discord / Telegram / raw |
-| 4 | **Prometheus + Alertmanager** | **B only** | no (opt-in overlay) | Webhook |
-
-Plus one thing that is *not* an alerting mechanism and does not conflict with
-any of them:
-
-| | | | |
+| Mechanism | Mode | Enabled by default | Target |
 |---|---|---|---|
-| 5 | **Heartbeat** (dead-man switch) | B only | `ALERT_HEARTBEAT_URL` |
+| **Notifications feed** | Mode A and B | Mode B: yes (`ALERTS_ENABLED=false` disables); Mode A: no default publisher | Dashboard Notifications panel |
+| **Grafana alerting** | **Mode A only** | **Yes** | Webhook (`GRAFANA_ALERT_WEBHOOK_URL`) |
+| **Collector push** | **Mode B only** | No | Slack, Discord, Telegram, or raw webhook |
+| **Prometheus + Alertmanager** | **Mode B only** | No (opt-in overlay) | Webhook |
 
-## Why the split exists
+You can also configure an external **Heartbeat monitoring** service:
 
-The two modes observe n8n from different places, and that decides what each can
-detect.
+| Feature | Mode | Variable | Description |
+|---|---|---|---|
+| **Heartbeat (dead-man switch)** | Mode B only | `ALERT_HEARTBEAT_URL` | External ping service (such as Healthchecks.io or Uptime Kuma) |
+
+## Data source differences
+
+Mode A and Mode B monitor n8n differently:
 
 ```
-MODE A  (po11y owns the stack)          MODE B  (someone else's n8n)
+MODE A (Bundled stack)                       MODE B (External n8n)
 
-  ┌────────┐                              ┌────────┐
-  │  n8n   │                              │  n8n   │   ← not yours
-  └───┬────┘                              └───┬────┘
-      │ writes                                │ public API (GET only)
-      ▼                                       ▼
-  ┌──────────┐   SQL     ┌─────────┐      ┌───────────┐   /metrics   ┌────────────┐
-  │ postgres │ ────────► │ Grafana │      │ collector │ ───────────► │ Prometheus │
-  └──────────┘           └────┬────┘      └─────┬─────┘              └──────┬─────┘
-                              │                 │                           │
-                              ▼                 ▼                           ▼
-                          webhook          push / feed              Alertmanager
+  ┌────────┐                                    ┌────────┐
+  │  n8n   │                                    │  n8n   │   (External)
+  └───┬────┘                                    └───┬────┘
+      │ database writes                             │ public API (GET requests)
+      ▼                                             ▼
+  ┌──────────┐   SQL     ┌─────────┐            ┌───────────┐   /metrics   ┌────────────┐
+  │ Postgres │ ────────► │ Grafana │            │ Collector │ ───────────► │ Prometheus │
+  └──────────┘           └────┬────┘            └─────┬─────┘              └──────┬─────┘
+                              │                       │                           │
+                              ▼                       ▼                           ▼
+                           Webhook                Push / feed               Alertmanager
 ```
 
-Mode A reads **the database n8n writes to**, so an in-flight execution is
-visible the moment its row lands. Mode B reads **the API**, only as often as it
-polls, and only what the API chooses to expose.
+- Mode A reads directly from n8n's **Postgres database**. In-flight executions appear immediately.
+- Mode B reads from n8n's **public API** during each poll cycle.
 
-That difference is not cosmetic:
-
-- **Stuck executions** are visible to *n8n's own metrics* only in Mode A: those
-  metrics record an execution when it *finishes*, so one that hangs forever
-  emits nothing at all, while a database row with `finished = false` and no
-  `stoppedAt` is unambiguous. Mode B closes the gap from the other side — the
-  collector derives `po11y_workflow_running_seconds` from the executions API
-  each poll, so **both modes alert on stuck workflows**; Mode B's granularity is
-  the poll interval rather than instant. The collector watchdog's `stuck` rule
-  and the Alertmanager overlay's `Po11yWorkflowStuck` both run off that gauge.
-- **Queue backlog** (`status = 'new'`) genuinely is Mode A only. The API has no
-  equivalent.
+### Key functional differences:
+- **Stuck executions**: Mode A detects stuck executions immediately via database queries (`finished = false` without `stoppedAt`). Mode B derives `po11y_workflow_running_seconds` from API responses during each poll cycle. Both modes alert on stuck workflows.
+- **Queue backlog**: Mode A can check queued executions (`status = 'new'`). Mode B cannot check queue depth because the n8n API does not expose it.
 
 ## 1. Notifications feed
 
-The dashboard's Notifications panel, fed by `notifications.json`.
+The Notifications panel displays entries from `notifications.json`.
 
-In **Mode B** the collector's watchdog writes it, on by default
-(`ALERTS_ENABLED=false` opts out) — and note that two of its three rules stay
-off until you give them a budget (`ALERT_STALE_AFTER_MIN` and
-`ALERT_STUCK_AFTER_MIN` both default to `0` = off), so the default gets you
-`failing` and `unreachable` only. In **Mode A**
-nothing writes it out of the box:
-`workflows/core/` contains only the maps and status-publish workflows. The
-example workflow `workflows/examples/hn-notify.json` demonstrates the shape.
+- **Mode B**: The collector watchdog writes to this file by default. Set `ALERTS_ENABLED=false` to disable. Budget settings `ALERT_STALE_AFTER_MIN` and `ALERT_STUCK_AFTER_MIN` default to `0` (off), so default alerts cover only `failing` and `unreachable` states.
+- **Mode A**: No default workflow writes to this file. See `workflows/examples/hn-notify.json` for an example implementation.
 
-No outbound delivery. You have to be looking at the dashboard.
+This feed is displayed only on the dashboard and does not send external notifications.
 
-## 2. Grafana alerting — Mode A
+## 2. Grafana alerting (Mode A)
 
-**On by default.** Five rules in `observability/grafana/alerting/rules.yml`,
-provisioned into the `Po11y` folder and evaluated every 60s:
+Grafana evaluates five rules in `observability/grafana/alerting/rules.yml` every 60 seconds:
 
-| Rule | Fires when | Severity |
+| Rule | Condition | Severity |
 |---|---|---|
-| `Po11yN8nUnreachable` | Prometheus cannot scrape `n8n:5678` for 10m | critical |
-| `Po11yWorkflowFailing` | ≥3 errored executions in 1h, per workflow | warning |
-| `Po11yWorkflowStale` | active workflow with no **success** in 6h | warning |
-| `Po11yWorkflowStuck` | an execution running >1h | warning |
-| `Po11yQueueBacklog` | executions queued >15m without starting | warning |
+| `Po11yN8nUnreachable` | Prometheus cannot scrape `n8n:5678` for 10 minutes | Critical |
+| `Po11yWorkflowFailing` | 3 or more failed executions in 1 hour for a workflow | Warning |
+| `Po11yWorkflowStale` | Active workflow with no successful execution in 6 hours | Warning |
+| `Po11yWorkflowStuck` | Execution running longer than 1 hour | Warning |
+| `Po11yQueueBacklog` | Executions queued longer than 15 minutes | Warning |
 
-Thresholds mirror `observability/alerts.yml` (Mode B) exactly, so both modes
-alert on the same conditions at the same limits. Change one, change the other.
+To send alerts externally, set `GRAFANA_ALERT_WEBHOOK_URL`. If unset, rules still evaluate and display in the Grafana UI.
 
-**Delivery is the only optional part.** Leave `GRAFANA_ALERT_WEBHOOK_URL` unset
-and the rules still evaluate and fire — they are visible under *Alerting* in
-Grafana with full history, they just go nowhere. Set it and each firing alert is
-POSTed there, grouped by alertname, with a resolved message when it clears.
+Notes:
+- Grafana webhooks send Grafana alert JSON. Point `GRAFANA_ALERT_WEBHOOK_URL` to an n8n webhook or configure native Slack, Discord, or Telegram contact points directly in Grafana.
+- Four rules query internal n8n database tables (`execution_entity`, `workflow_entity`). Check these rules after upgrading n8n.
 
-Two things worth knowing:
+## 3. Collector push (Mode B)
 
-- Grafana's webhook contact point sends **Grafana's own alert JSON**, not
-  Slack's or Discord's message shape. A Slack incoming-webhook URL will be
-  rejected. Point it at an n8n webhook node (n8n is right there in Mode A and
-  can fan out to anything), or add a native Slack/Discord/Telegram contact point
-  in Grafana's UI, which formats correctly.
-- Four of the five rules read n8n's internal tables (`execution_entity`,
-  `workflow_entity`). That schema can change across n8n versions. A broken
-  dashboard is cosmetic; a broken alert is a missed outage — re-check these
-  after a major n8n upgrade.
+Configured using `ALERT_WEBHOOK_URL` and `ALERT_WEBHOOK_FORMAT` (`slack`, `discord`, `telegram`, or `raw`).
 
-Not provisioned in Mode B: `docker-compose.readonly.yml` shares the Grafana
-*provisioning* directory, so the rules live in a sibling directory mounted only
-by Mode A. Mode B has no postgres.
+The collector batches alerts into a single message per poll cycle and re-notifies based on `ALERT_RENOTIFY_MIN` (default `360` minutes). Webhook delivery errors are logged without interrupting collector execution.
 
-## 3. Collector push — Mode B
+## 4. Prometheus + Alertmanager (Mode B)
 
-`collector/notify.mjs`, configured with `ALERT_WEBHOOK_URL` plus
-`ALERT_WEBHOOK_FORMAT` (`slack` | `discord` | `telegram` | `raw`). Off unless
-you set a URL.
-
-The cheapest option in the stack: no extra container, one environment variable,
-and four sinks with per-platform formatting (Slack `mrkdwn` links, Discord bare
-URLs, Telegram without `parse_mode`). Alerts are batched into one message per
-poll, and repeated no more often than `ALERT_RENOTIFY_MIN` (default 360m).
-
-Failure is always reported, never thrown — a broken webhook does not stop the
-collector publishing feeds.
-
-## 4. Prometheus + Alertmanager — Mode B
-
-The opt-in overlay:
+Enable this optional overlay using:
 
 ```sh
 docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml up -d
 ```
 
-Requires `ALERTMANAGER_WEBHOOK_URL`. Rules in `observability/alerts.yml` read
-the `po11y_*` series the collector exports on `:8081`.
+Requires `ALERTMANAGER_WEBHOOK_URL`. Rules in `observability/alerts.yml` query metrics exposed at `collector:8081`.
 
-**An alternative to option 3, not a companion.** Running both delivers every
-alert twice.
+This overlay provides **inhibition**: if an n8n outage occurs, Alertmanager sends a single unreachable notification instead of alerting on every stale or stuck workflow.
 
-What it adds over the collector's own push is **inhibition**. In Mode B an n8n
-outage makes every workflow look stale and stuck at once, because the collector
-keeps serving its last-known series while `po11y_n8n_up` is 0. Alertmanager
-collapses that into one message. This is a Mode B problem specifically — it is
-an artifact of polling a remote n8n — which is part of why Mode A does not ship
-Alertmanager.
+Do not combine this overlay with Collector Push (`ALERT_WEBHOOK_URL`), as that will produce duplicate notifications.
 
-## 5. Heartbeat — the one that is not an alternative
+## 5. Heartbeat monitoring
 
-`ALERT_HEARTBEAT_URL` (Mode B). A plain GET on every *successful* poll, aimed at
-Healthchecks.io, Uptime Kuma, Better Stack or similar.
+Set `ALERT_HEARTBEAT_URL` in Mode B to send an HTTP GET request to an external service (such as Healthchecks.io, Uptime Kuma, or Better Stack) after every successful poll.
 
-Every other mechanism on this page runs on the box it is watching, and therefore
-dies with it. A dead process cannot send a message. The heartbeat inverts that:
-it fails **by stopping**, so a service that is not on your box notices.
+If the host machine or collector process fails, the external monitoring service detects the missing ping and sends an alert. This can be combined with any alerting mechanism.
 
-It composes with any of options 1–4, and nothing replaces it — not Alertmanager,
-not Grafana alerting.
+## Choosing an alerting setup
 
-## Choosing
-
-- **Mode A**: you already have it. Set `GRAFANA_ALERT_WEBHOOK_URL` when you want
-  the alerts to leave the box.
-- **Mode B, simplest**: set `ALERT_WEBHOOK_URL` and pick a format. Done.
-- **Mode B, several teams or noisy outages**: run the Alertmanager overlay for
-  routing and inhibition, and leave the collector's push unset.
-- **Any mode, if the box going down matters**: add a heartbeat as well.
+- **Mode A**: Set `GRAFANA_ALERT_WEBHOOK_URL` to receive external alerts.
+- **Mode B (simple)**: Set `ALERT_WEBHOOK_URL` and `ALERT_WEBHOOK_FORMAT`.
+- **Mode B (advanced)**: Use the Alertmanager overlay for alert deduplication and routing. Leave `ALERT_WEBHOOK_URL` unset.
+- **Host failure monitoring**: Add a heartbeat URL (`ALERT_HEARTBEAT_URL`).
 
 ## Security
 
-Every URL on this page is a credential — for Slack and Telegram the secret *is*
-the URL path.
+Webhook and heartbeat URLs contain authentication tokens:
+- The collector logs URLs using scheme and host only, redacting sensitive query parameters and paths.
+- Alertmanager reads its webhook URL from a file (`url_file`).
+- Grafana embeds `GRAFANA_ALERT_WEBHOOK_URL` at startup without saving it to tracked repository files.
 
-- The collector logs webhook and heartbeat URLs as scheme + host only, scrubs
-  them out of transport errors, and never writes them to a feed.
-- Alertmanager reads its URL via `url_file` rather than having it templated in,
-  so the config stays read-only and uncorrupted by `&` in query strings.
-- Grafana interpolates `GRAFANA_ALERT_WEBHOOK_URL` from the environment at
-  provisioning time, so it is never written into a tracked file. Grafana admins
-  can read it back from the contact point UI; anonymous Viewers (enabled by
-  default for dashboard embedding) cannot.
-
-See [security.md](security.md) for the wider posture.
+For complete details, see [security.md](security.md).

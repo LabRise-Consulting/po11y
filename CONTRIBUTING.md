@@ -1,68 +1,60 @@
 # Contributing to Po11y
 
-Issues, merge requests and "this broke on my setup" reports are all welcome.
-Security problems go through [SECURITY.md](SECURITY.md) instead — confidential
-issue, not a public one.
+We welcome issues, bug reports, and merge requests. Please report security vulnerabilities confidentially according to [SECURITY.md](SECURITY.md).
 
-## Getting the checks to pass
+## Running checks locally
 
-Everything CI runs is runnable locally, and none of it needs the stack up:
+You can run all CI checks locally without starting the Docker stack:
 
 ```sh
+# Unit tests
 node --test "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" \
-  "collector/**/*.test.mjs" "mcp/**/*.test.mjs"                          # unit tests
-node tools/sync-workflows.mjs --check                   # workflow/lib sync gate
+  "collector/**/*.test.mjs" "mcp/**/*.test.mjs"
+
+# Workflow sync check
+node tools/sync-workflows.mjs --check
+
+# Shell script linting
 shellcheck bootstrap.sh ai-map-cli.sh ci/smoke.sh ci/check-expired-markers.sh \
   observability/grafana/entrypoint.sh
-docker compose -f docker-compose.yml config -q          # compose syntax
+
+# Compose config validation
+docker compose -f docker-compose.yml config -q
+
+# Kubernetes manifest validation
 kustomize build deploy/k8s | kubeconform -strict -summary
 ```
 
-There is also a pre-commit config:
+You can also install and run pre-commit hooks:
 
 ```sh
 pre-commit install
 pre-commit run --files <changed files>
 ```
 
-The `smoke` job (full docker-in-docker bring-up, run twice for idempotency)
-only runs on the canonical project, because it needs a privileged runner that
-forks don't have. Everything else runs on stock GitLab shared runners, so a
-merge request from a fork gets a real pipeline. The full pipeline schematic —
-stages, triggers, what each job gates — is in [docs/ci.md](docs/ci.md).
+See [docs/ci.md](docs/ci.md) for details on the full CI pipeline structure.
 
-## The one non-obvious rule: `lib/` is the source of truth
+## Code generation rule: `lib/` is the source of truth
 
-`workflows/core/maps.json` embeds three n8n Code nodes whose bodies are
-**generated** from the modules in `lib/`. Editing the JSON by hand will pass
-review and then fail `sync-check`. The loop is:
+`workflows/core/maps.json` embeds Code nodes generated from files in `lib/`. When editing builder logic, update `lib/` and regenerate `maps.json`:
 
-1. edit `lib/build-map.mjs` / `lib/build-ai-map.mjs` / `lib/build-forms.mjs`
-2. add or update the matching `*.test.mjs` next to it
-3. `node tools/sync-workflows.mjs --write`
-4. commit `lib/` **and** the regenerated `maps.json` together
+1. Edit files in `lib/` (e.g. `lib/build-map.mjs`).
+2. Update unit tests in matching `*.test.mjs` files.
+3. Run `node tools/sync-workflows.mjs --write`.
+4. Commit both `lib/` and `workflows/core/maps.json`.
 
-## Conventions
+## Development conventions
 
-- **Commits**: Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`) with
-  an optional scope, e.g. `fix(list): …`. The body explains *why*.
-- **No build step.** `html/` is three static files served by nginx, and it
-  stays that way — no bundler, no framework, no npm dependency at runtime.
-  `html/vendor/` is the only exception and each file there is documented in
-  [`html/vendor/README.md`](html/vendor/README.md).
-- **Feed contracts are public API.** `status.json`, `notifications.json`,
-  `map.json` and `forms.json` are consumed by both modes and by third-party
-  publishers; changing a shape is a breaking change. See
-  [`docs/configuration.md`](docs/configuration.md).
-- **Mode B stays read-only.** `collector/collect.mjs`'s `apiGet` is the single
-  choke point for n8n calls and hard-codes `method: 'GET'`; a test asserts a
-  full poll cycle issues only GETs. Don't route around it.
-- Anything rendered from feed data goes through `esc()` and, for URLs,
-  `safeUrl()` in `html/app.js`.
+- **Commit messages**: Follow Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`) with optional scope syntax (e.g. `fix(list): ...`).
+- **No build steps**: `html/` contains static HTML, CSS, and JS files served directly by Nginx. Do not add runtime frameworks or npm dependencies.
+- **Feed contract stability**: `status.json`, `notifications.json`, `map.json`, and `forms.json` define public schemas. Avoid breaking changes.
+- **Mode B read-only rule**: The collector (`collector/collect.mjs`) must send HTTP `GET` requests only to n8n.
+- **XSS prevention**: Sanitize data rendered in `html/app.js` using `esc()` and `safeUrl()`.
 
-## Testing changes against a real stack
+## Testing against a local stack
 
-`./bootstrap.sh` brings up the whole thing on `127.0.0.1`. It publishes
-n8n on 5678, the dashboard on 8080, Grafana on 3000 and Prometheus on 9090 —
-override with `DASHBOARD_PORT` and friends in `.env` if something already owns
-those ports on your machine.
+Run `./bootstrap.sh` to start the full stack on `127.0.0.1`:
+- Dashboard: `http://127.0.0.1:8080`
+- n8n Editor: `http://127.0.0.1:5678`
+- Grafana: `http://127.0.0.1:3000`
+- Prometheus: `http://127.0.0.1:9090`
