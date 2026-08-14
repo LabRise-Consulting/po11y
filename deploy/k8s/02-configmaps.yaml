@@ -13,9 +13,10 @@
 #   kubectl -n po11y create configmap grafana-dashboards-json \
 #     --from-file=observability/grafana/provisioning/dashboards/json/
 #
-#   # Grafana entrypoint + Mode A alert rules — created from the canonical repo
-#   # files rather than inlined here, so the k8s copy cannot drift from what
-#   # compose runs (the same reason the entrypoint is one shared script at all):
+#   # Grafana entrypoint + the bundled stack's alert rules — created from the
+#   # canonical repo files rather than inlined here, so the k8s copy cannot
+#   # drift from what compose runs (the same reason the entrypoint is one
+#   # shared script at all):
 #   kubectl -n po11y create configmap grafana-entrypoint \
 #     --from-file=observability/grafana/entrypoint.sh
 #   kubectl -n po11y create configmap grafana-alerting \
@@ -55,6 +56,12 @@ data:
   #   - /n8n-table/ (the DataTable read proxy)
   #   - the identity-header scrubs the forward-auth path relies on
   #
+  # Status feeds: the compose path proxies every feed to the po11y `server`
+  # process (deploy/nginx/feeds-server.conf). There is no server Deployment on
+  # this k8s path, and the block that used to alias a shared status volume
+  # directly is gone too — see deploy/k8s/README.md's "Status feeds do not
+  # work" section for what that means and what porting it over would take.
+  #
   # Keep this list current when you edit ./nginx.conf.
   default.conf: |
     server {
@@ -71,29 +78,11 @@ data:
         add_header Cache-Control "no-store";
       }
 
-      location = /status.json {
-        alias /po11y-status/status.json;
-        add_header Cache-Control "no-store";
-      }
-      location = /notifications.json {
-        alias /po11y-status/notifications.json;
-        add_header Cache-Control "no-store";
-      }
-
-      location = /map.json {
-        alias /po11y-status/map.json;
-        add_header Cache-Control "no-store";
-      }
-
-      location = /ai-map.json {
-        alias /po11y-status/ai-map.json;
-        add_header Cache-Control "no-store";
-      }
-
-      location = /forms.json {
-        alias /po11y-status/forms.json;
-        add_header Cache-Control "no-store";
-      }
+      # status.json, notifications.json, map.json, ai-map.json and forms.json
+      # are NOT served here. They used to alias a shared volume that n8n
+      # workflows wrote; those workflows are gone, and there is no server
+      # Deployment on this k8s path to proxy them to instead. Every feed
+      # request 404s until that gap is closed — see deploy/k8s/README.md.
 
       location /site/ {
         alias /usr/share/nginx/site/;
@@ -144,7 +133,7 @@ data:
     {
       "title": "Po11y",
       "eyebrow": "po11y · status",
-      "lede": "Live view of this stack: containers and notifications refresh every 30 s from status.json (published by the n8n workflows); the Map tab is generated from the n8n instance itself.",
+      "lede": "Live view of this stack. Status feeds do not work on this k8s path yet — see deploy/k8s/README.md — but the Map tab is generated from the n8n instance itself.",
       "footer": [
         { "text": "po11y", "href": "https://gitlab.com/labrise/po11y" }
       ],
@@ -164,7 +153,7 @@ data:
         { "id": "arch", "label": "Architecture", "src": "/site/ai-map.html" }
       ],
       "sections": {
-        "containers": "Running containers",
+        "executions": "Workflow executions",
         "notifications": "Notifications"
       },
       "metrics": {
@@ -183,7 +172,7 @@ data:
       },
       "refreshSec": 30,
       "staleAfterMin": 5,
-      "statusHint": "status.json missing — first schedule tick lands within ~2 min of bootstrap"
+      "statusHint": "status.json missing — expected: this k8s path does not serve feeds yet, see deploy/k8s/README.md"
     }
 ---
 apiVersion: v1

@@ -30,7 +30,7 @@ services:
     # This block deliberately does NOT re-declare `entrypoint`. Compose replaces
     # an entrypoint instead of merging it, so the copy that used to live here
     # dropped the base file's alerting branch: `-f docker-compose.yml -f
-    # docker-compose.otel.yml` booted with all five Mode A alert rules missing,
+    # docker-compose.otel.yml` booted with all five Grafana alert rules missing,
     # with the alerting volume still mounted and unread. Volumes DO merge, which
     # is why the extras mechanism works and an inline entrypoint does not.
     volumes:

@@ -1,6 +1,6 @@
 # Configuration and feed contracts
 
-The dashboard reads configuration from `/config.json` and status feeds from the shared status volume. This page defines the format and requirements for each file.
+The dashboard reads configuration from `/config.json` and status feeds proxied from the po11y `server`'s own store. This page defines the format and requirements for each file.
 
 ## `/config.json`
 
@@ -11,7 +11,7 @@ See [`config.example.json`](../config.example.json). All fields are optional.
 | `title`, `lede`, `footer` | UI branding text. `lede` appears in the sidebar below the title. `footer` is an array of `[{text, href?}]` rendered at the bottom of the sidebar. |
 | `cards` | Defined as `{ "Group heading": [{name, sub, href \| action, tip?, up?, mem?}] }`. Defines ordered card groups. `tip` sets hover tooltips. `up` (and optional `mem`) accept Prometheus queries to show live status indicators (UP/DOWN, RSS memory). `action` sets a form trigger path that sends POST requests through the `/form/` proxy. Cards declared here override auto-discovered form cards. |
 | `tabs` | Defined as `[{id, label, src, group?}]`. Configures iframe views in the sidebar. `src` specifies the page path (e.g. `/site/page.html`). Entries with matching `group` labels group together into a tabbed sidebar item. |
-| `sections` | Controls visible status sections and headings: `{containers, executions, notifications}`. `notifications` opens a dedicated sidebar view with an unread badge. `containers` and `executions` render in the Overview view. |
+| `sections` | Controls visible status sections and headings: `{executions, notifications}`. `notifications` opens a dedicated sidebar view with an unread badge. `executions` renders in the Overview view. (`containers` is still accepted for backward compatibility, but `status.json` never carries a `containers` list any more — see [docs/server.md](server.md#accepted-regressions) — so a configured `containers` section always renders empty.) |
 | `metrics` | Configures Grafana and Prometheus metrics panels: `{heading, grafana: {embed, base, dashboard, panels: [{id, title?, span?, h?, wide?}], range}, promBase, stats: [{label, up, mem?}]}`. `span` sets column width (1–4, default 2). `h` sets height in pixels (120–800). |
 | `refreshSec` | Poll interval for `status.json` and `notifications.json` in seconds (default `30`). |
 | `metricsRefreshSec` | Refresh interval for metrics in seconds (default `60`, `0` disables). Grafana embeds update automatically; Prometheus stat cards re-poll. |
@@ -19,7 +19,7 @@ See [`config.example.json`](../config.example.json). All fields are optional.
 | `statusHint` | Text displayed while `status.json` is loading or missing. |
 | `baseUrl` | Hostname substituted for `{host}` in links. See details below. |
 | `n8nUrl` | n8n instance URL for workflow and form links (default `http://{host}:5678`). |
-| `formProxy` | Enables the `/form/` proxy endpoint (default `true`; set `false` in Mode B unless forward-auth is enabled). When `false`, fieldless form triggers link directly to n8n form pages. |
+| `formProxy` | Enables the `/form/` proxy endpoint (default `true`; set `false` on the read-only stack unless forward-auth is enabled). When `false`, fieldless form triggers link directly to n8n form pages. |
 | `scopes` | Enables multi-team scope selectors: `{ "<scope>": "Display name" }`. Keys must match `[a-z0-9-]+`. |
 
 ### Hostname substitution (`{host}` and `baseUrl`)
@@ -28,10 +28,10 @@ Occurrences of `{host}` in `href` and `src` fields are replaced with the browser
 
 ### Multi-team views (`scopes`)
 
-When multiple collectors or sources publish to a single dashboard, assign a scope to each source.
+When several publishers feed a single dashboard, assign a scope to each source.
 
 - The canonical scope (`default`) reads directly from `/status.json`, `/map.json`, etc.
-- Named scopes (`<scope>`) read from `/status/<scope>/<feed>.json` on the same volume.
+- Named scopes (`<scope>`) read from `/status/<scope>/<feed>.json`, proxied by nginx.
 
 Define scopes in `config.json`:
 ```json
@@ -45,24 +45,34 @@ Define scopes in `config.json`:
 
 When multiple scopes are defined, a scope selector dropdown appears in the header. Switching scopes updates feed requests for status, notifications, forms, and maps.
 
-To publish to a scope in Mode B, set `STATUS_DIR=/po11y-status/<scope>`. Form proxying (`/form/`), list proxying (`/n8n-table/`), and Kubernetes manifests do not use scope paths.
+**One `server` process answers for exactly one `PO11Y_SCOPE`.** A multi-scope
+dashboard needs one `server` service per scope — each with its own store and
+its own `PO11Y_SCOPE` — all behind the same nginx; see
+[docs/server.md](server.md#multi-scope-deployments) for the full picture. Form
+proxying (`/form/`), list proxying (`/n8n-table/`), and Kubernetes manifests
+do not use scope paths.
 
 ## Status Feed Contracts
 
 ### `/status.json`
 
-Written by Mode A workflows or the Mode B collector. Must be written atomically (write to a temporary file, then rename).
+Written by the po11y `server`, from its own store, on every deployment.
 
 ```json
 {
   "generated_at": "2026-07-10T12:00:00Z",
-  "containers": [
-    { "name": "n8n", "status": "Up 2 hours", "image": "n8nio/n8n:2.29.8" }
-  ]
+  "executions": {
+    "recent": 42,
+    "errors": 1,
+    "byWorkflow": [
+      { "name": "Sync Job", "id": "42", "count": 10, "errors": 0, "lastAt": "2026-07-10T11:58:00Z" }
+    ]
+  }
 }
 ```
 
-In Mode B, `status.json` includes an `executions` object with run metrics instead of a container list.
+`status.json` always carries this `executions` object with run metrics. It
+never carries a container list — see [docs/server.md](server.md#accepted-regressions).
 
 ### `/notifications.json`
 
@@ -82,21 +92,21 @@ Array of notifications sorted newest-first.
 
 `status` values: `success`, `failure`, `info`.
 
-#### Mode B Watchdog Rules
+#### Watchdog Rules
 
-The Mode B collector watchdog evaluates rules against recent executions (`EXECUTIONS_LIMIT`, default `100`):
+The watchdog evaluates these rules against recent executions (`EXECUTIONS_LIMIT`, default `100`). The po11y server runs them against its own store, from the same variables, on every deployment.
 
 | Rule | Description | Default Budget |
 |------|-------------|----------------|
 | `failing` | Triggers when error count and error rate exceed thresholds | `ALERT_MIN_ERRORS=3`, `ALERT_ERROR_RATE=0.5` |
 | `stale` | Triggers when a workflow has no successful executions within the budget | `ALERT_STALE_AFTER_MIN=0` (disabled by default) |
 | `stuck` | Triggers when an execution remains in `running` status past the budget | `ALERT_STUCK_AFTER_MIN=0` (disabled by default) |
-| `unreachable` | Triggers when the collector cannot reach the n8n API | Always enabled when watchdog is active |
+| `unreachable` | Triggers when n8n's API cannot be reached | Always enabled when watchdog is active |
 
 Notes:
 - `unreachable` alerts trigger when n8n cannot be reached. When n8n is offline, existing workflow alerts remain unchanged until connectivity returns.
 - Staleness is calculated from the last successful run, not the last execution attempt.
-- When an alert condition clears, the collector appends a `success` notification ("recovered").
+- When an alert condition clears, a `success` notification ("recovered") is appended.
 
 #### Webhook Push Notifications
 
@@ -109,37 +119,37 @@ Set `ALERT_WEBHOOK_URL` to push notifications to external webhooks. Set `ALERT_W
 | `telegram` | `{chat_id, text}` | Telegram Bot API (requires `ALERT_TELEGRAM_CHAT_ID`) |
 | `raw` | `{text, alerts:[…]}` | Generic JSON payload for webhooks or n8n endpoints |
 
-The collector redacts authentication tokens from webhook URLs in logs and limits HTTP request duration using `ALERT_WEBHOOK_TIMEOUT_MS` (default `10000`).
+The server sends these — see [docs/alerting.md](alerting.md) for the full picture. It redacts authentication tokens from webhook URLs in logs and limits HTTP request duration using `ALERT_WEBHOOK_TIMEOUT_MS` (default `10000`).
 
 #### External Heartbeat Monitoring
 
-Set `ALERT_HEARTBEAT_URL` in Mode B to send an HTTP GET request to an external monitoring service after each successful poll. The request timeout is controlled by `ALERT_HEARTBEAT_TIMEOUT_MS` (default `10000`).
+Set `ALERT_HEARTBEAT_URL` on the server service, on either compose file, to send an HTTP GET request to an external monitoring service after each successful sync — the server's reachability probe against n8n. The request timeout is controlled by `ALERT_HEARTBEAT_TIMEOUT_MS` (default `10000`).
 
-### Prometheus Metrics (Mode B)
+### Prometheus Metrics
 
-The Mode B collector exposes Prometheus metrics at `collector:8081/metrics`.
+The po11y server exposes Prometheus metrics at `server:8081/metrics`, on every deployment. Both compose files scrape it as the `po11y-server` job, so these series are available to Grafana on either stack. `observability/alerts.yml` reads the same series, but neither Prometheus config loads it on its own — add the `docker-compose.alerts.yml` overlay, which supplies the `rule_files` entry and Alertmanager. See [docs/alerting.md](alerting.md).
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
 | `po11y_n8n_up` | Gauge | None | `1` if n8n API is reachable, else `0`. |
 | `po11y_poll_last_success_timestamp_seconds` | Gauge | None | Unix timestamp of the last successful poll. |
-| `po11y_workflow_errors_total` | Counter | `workflow_id`, `workflow_name` | Total failed executions observed since collector start. |
+| `po11y_workflow_errors_total` | Counter | `workflow_id`, `workflow_name` | Total failed executions recorded for a workflow, persisted in the store. |
 | `po11y_workflow_last_success_timestamp_seconds` | Gauge | `workflow_id`, `workflow_name` | Unix timestamp of the last successful run for a workflow. Omitted if a workflow has no recorded success. |
 | `po11y_workflow_running_seconds` | Gauge | `workflow_id`, `workflow_name` | Duration in seconds of the current longest-running execution (`0` if none). |
 
 Before writing rules against these:
 
-- **`po11y_workflow_errors_total` accumulates; it is not the window count.** The collector reads a sliding window whose error count drops as it moves, so exporting that count directly would make `increase()` read every slide as a counter reset. The series resets only when the collector restarts, which is a genuine counter reset.
+- **`po11y_workflow_errors_total` is persisted and monotonic.** The count lives in a SQLite table, incremented once per failed execution and never decremented, so it survives process restarts and retention pruning. This replaced an in-memory accumulator that reset to zero on every restart — a reset Prometheus believed, several times a week. Expect one discontinuity the first time a deployment runs on the new counter (the table starts empty), then a flatter, more honest line than before. **A store restored from an older backup rewinds the counter** — that is a genuine counter reset, and Prometheus handles it correctly. Do not paper over it with a `max()` guard.
 - **A workflow that has never succeeded exports no `last_success` series.** Zero-filling would mean 1970, so every staleness rule would fire on workflows that simply have not run yet. Use the `failing` rule for that case, or `absent()` to alert on it explicitly.
-- **During an n8n outage the collector keeps serving the last known per-workflow series** and only sets `po11y_n8n_up` to `0`. Clearing them would restart every Prometheus `for:` duration and turn one outage into flapping alerts on recovery. The cost is that an outage also trips the staleness and stuck rules, which is what the shipped Alertmanager inhibit rule collapses.
+- **During an n8n outage the server keeps serving the last known per-workflow series** and only sets `po11y_n8n_up` to `0`. Clearing them would restart every Prometheus `for:` duration and turn one outage into flapping alerts on recovery. The cost is that an outage also trips the staleness and stuck rules, which is what the shipped Alertmanager inhibit rule collapses.
 
-### Sizing the Execution Window (Mode B)
+### Sizing the Execution Window
 
-The collector retrieves up to `EXECUTIONS_LIMIT` executions per poll (default `100`, maximum `250`). Ensure `EXECUTIONS_LIMIT` is greater than or equal to the expected number of executions completed during one `POLL_INTERVAL`. If execution volume exceeds `EXECUTIONS_LIMIT`, increase `EXECUTIONS_LIMIT` or decrease `POLL_INTERVAL`.
+The server retrieves up to `EXECUTIONS_LIMIT` executions per poll (default `100`, maximum `250`). Ensure `EXECUTIONS_LIMIT` is greater than or equal to the expected number of executions completed during one `SERVER_POLL_INTERVAL`. If execution volume exceeds `EXECUTIONS_LIMIT`, increase `EXECUTIONS_LIMIT` or decrease `SERVER_POLL_INTERVAL`.
 
-### Collector Internal State (`alert-state.json`)
+### Watchdog Internal State
 
-The watchdog stores alert state in `alert-state.json` inside the status directory. This prevents repeating notifications on every poll cycle. `ALERT_RENOTIFY_MIN` sets the re-notification interval (default `360` minutes; `0` disables re-notification). This file is used internally by the collector and is not served by Nginx.
+The server keeps alert-dedupe state in its own SQLite store, not on disk as a separate file. This prevents repeating notifications on every cycle. `ALERT_RENOTIFY_MIN` sets the re-notification interval (default `360` minutes; `0` disables re-notification). It is not served by Nginx.
 
 ### `/map.json`
 
@@ -190,7 +200,7 @@ Rendered by [`site/ai-map.html`](../site/ai-map.html). Contains structured diagr
 
 ## n8n DataTable Read Proxy (`/n8n-table/`)
 
-The Nginx proxy `/n8n-table/` routes GET requests to n8n's public API using a read-only API key stored in `N8N_READ_API_KEY`.
+The `/n8n-table/` proxy routes GET requests to n8n's public API using a read-only API key stored in `N8N_READ_API_KEY`. The po11y server enforces the proxy's allowlist and injects the key (nginx only forwards); the key is configured on the `server` service.
 
 ### Setup
 

@@ -1,6 +1,6 @@
 {
   "title": "Po11y",
-  "lede": "Read-only view of an existing n8n: feeds are published by the collector, which only ever GETs from the n8n public API. Set baseUrl to the remote n8n's host so the {host} links below resolve.",
+  "lede": "Read-only view of an existing n8n: feeds are published by the po11y server, which only ever GETs from the n8n public API. Set baseUrl to the remote n8n's host so the {host} links below resolve.",
   "baseUrl": "",
   "n8nUrl": "http://{host}:5678",
   "formProxy": false,
@@ -47,5 +47,5 @@
   },
   "refreshSec": 30,
   "staleAfterMin": 20,
-  "statusHint": "status.json missing — the first collector poll runs at startup, then every POLL_INTERVAL (default 600 s)"
+  "statusHint": "status.json missing — the first server poll runs at startup, then every SERVER_POLL_INTERVAL (default 60 s)"
 }

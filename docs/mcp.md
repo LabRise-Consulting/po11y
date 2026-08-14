@@ -1,8 +1,8 @@
 # MCP server
 
-Po11y includes a read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server. It allows AI agents to query instance status, workflow structures, and data feeds without exposing execution payload data.
+Po11y includes a read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io) endpoint. It allows AI agents to query instance status, workflow structures, and data feeds without exposing execution payload data.
 
-The MCP server runs at `/mcp/` on the same host as the dashboard and uses the dashboard's authentication setup (Basic Auth or OIDC forward-auth).
+The MCP endpoint is a route (`/mcp`) served by the po11y `server` process — the same process that runs the store, feeds, and the `/n8n-table` proxy — not a separate container. It answers at `/mcp/` on the same host as the dashboard and uses the dashboard's authentication setup (Basic Auth or OIDC forward-auth), so nothing changes for clients.
 
 ## Available tools
 
@@ -12,11 +12,11 @@ The MCP server runs at `/mcp/` on the same host as the dashboard and uses the da
 |---|---|---|
 | `po11y_incidents` | Lists active issues: failing, stale, stuck, and unreachable workflows. | Status feeds |
 | `po11y_graph` | Returns the workflow dependency graph or a subtree around a specific node. | Status feeds |
-| `po11y_executions` | Returns recent execution history, filterable by workflow and status. | n8n API |
+| `po11y_executions` | Returns recent execution history, filterable by workflow and status. | po11y store |
 | `po11y_failure` | Returns failure details for an execution: failing node, error message, and payload data shapes. | n8n API |
-| `po11y_workflow` | Returns a workflow's health summary: active state, recent error rate, and graph neighbors. | n8n API & feeds |
+| `po11y_workflow` | Returns a workflow's health summary: active state, recent error rate, and graph neighbors. | po11y store & feeds |
 | `po11y_promql` | Runs raw PromQL queries against Prometheus. | Prometheus |
-| `po11y_sql` | Runs a read-only `SELECT` query against n8n's Postgres database (Mode A only). | Grafana datasource |
+| `po11y_sql` | Runs a read-only `SELECT` query against n8n's Postgres database (bundled stack only). | Grafana datasource |
 | `po11y_datasets` | Lists available content datasets and field definitions from `config.json`. | `config.json` |
 | `po11y_rows` | Returns filtered, sorted rows from a dataset. | Data Tables proxy |
 | `po11y_row` | Returns a single dataset row with detailed fields. | Data Tables proxy |
@@ -28,15 +28,18 @@ Five MCP resources expose dashboard feed files:
 - `po11y://feeds/ai-map.json`
 - `po11y://feeds/forms.json`
 
-## Source support by mode
+## Source support
 
-| Data Source | Mode A | Mode B | Configuration Requirement |
-|---|---|---|---|
-| **feeds** | Always | Always | Requires `STATUS_DIR` (defaults to `/po11y-status`). Reports unavailable if feed files do not exist. |
-| **prometheus** | Always | Always | Uses internal `PROMETHEUS_URL` (defaults to `http://prometheus:9090`). |
-| **n8n** | Opt-in | Always | Requires `MCP_N8N_API_KEY` in Mode A. Mode B reuses `N8N_API_KEY`. |
-| **grafana** | Enabled | Unavailable | Mode A uses `GRAFANA_URL`. Set `MCP_GRAFANA_URL=` to disable. Unavailable in Mode B. |
-| **datatables** | Opt-in | Opt-in | Requires `N8N_READ_API_KEY`. |
+| Data Source | Availability | Configuration Requirement |
+|---|---|---|
+| **feeds** | Always | No configuration: the server publishes the feeds itself, from its own store. Reports unavailable until the first feed build completes (the stamp survives a restart, so a warm store counts as built). |
+| **po11y store** | Depends on the ops key | Filled by the server's sync and poll loops, so it needs the same key the **n8n** row does. Always set on the read-only stack (`N8N_API_KEY` is required there); on the bundled stack `bootstrap.sh` mints one, so it is on unless you clear it. |
+| **prometheus** | Always | Uses internal `PROMETHEUS_URL` (defaults to `http://prometheus:9090`). |
+| **n8n** | Depends on the ops key | The bundled stack maps `MCP_N8N_API_KEY` onto the server's `N8N_API_KEY`, and bootstrap mints one when it is empty; the read-only stack requires `N8N_API_KEY` directly, so this source is always on there. |
+| **grafana** | Bundled stack only | Uses `GRAFANA_URL`. Set `MCP_GRAFANA_URL=` to disable. Unavailable on the read-only stack, which provisions no Postgres datasource. |
+| **datatables** | Opt-in | Requires `N8N_READ_API_KEY`. |
+
+Without `MCP_N8N_API_KEY` — you cleared it, or bootstrap could not mint one — the server runs serving-only: it arms no sync or poll timer, so nothing fills the store and no feed build ever runs. The ops tools then answer `unavailable` and the feed tools answer not-built. Neither ever answers with an empty result — an empty execution list or a `0 open incidents` count would read as a healthy instance.
 
 If a data source is missing, calling its associated tool returns a structured `unavailable` message naming the required configuration variable.
 
@@ -64,7 +67,7 @@ Omit `headers` if `DASHBOARD_BASIC_AUTH` is not set.
 - Execution payload contents are excluded from tool responses to prevent sensitive data from entering LLM context.
 - **Exceptions**: `po11y_row` returns full row data for specified content datasets. `po11y_sql` returns row results for explicit `SELECT` queries against non-sensitive tables.
 
-## `po11y_sql` details (Mode A only)
+## `po11y_sql` details (bundled stack only)
 
 `po11y_sql` queries n8n's Postgres database using Grafana's `n8n-postgres` datasource (`/api/ds/query`).
 

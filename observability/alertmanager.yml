@@ -1,4 +1,4 @@
-# Alertmanager for po11y (Mode B, opt-in overlay).
+# Alertmanager for po11y (opt-in overlay for the read-only stack).
 #
 # The receiver URL is NOT in this file. It is written to /alertmanager/webhook_url
 # from ALERTMANAGER_WEBHOOK_URL by the container entrypoint and read back via
@@ -9,19 +9,19 @@
 route:
   receiver: default
   # Alerts are grouped so one outage is one message, for the same reason the
-  # collector's own push batches: a dozen separate pings is how a channel gets
+  # server's own push batches: a dozen separate pings is how a channel gets
   # muted.
   group_by: ['alertname']
   group_wait: 30s
   group_interval: 5m
-  # The in-collector equivalent is ALERT_RENOTIFY_MIN, default 360 minutes.
+  # The equivalent on the server is ALERT_RENOTIFY_MIN, default 360 minutes.
   repeat_interval: 6h
 
-# An outage makes every workflow look stale and stuck, because the collector
+# An outage makes every workflow look stale and stuck, because the server
 # keeps serving its last-known series while po11y_n8n_up is 0 (clearing them
 # would flap every `for:` duration instead). Inhibition is how that turns into
 # one message rather than one per workflow -- and is the main thing Alertmanager
-# provides that the collector's own push cannot.
+# provides that the server's own push cannot.
 inhibit_rules:
   - source_matchers:
       - severity = "critical"

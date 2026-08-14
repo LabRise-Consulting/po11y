@@ -1,19 +1,21 @@
-# Grafana unified alerting rules for po11y Mode A.
+# Grafana unified alerting rules for the bundled po11y stack.
 #
-# Mode A ONLY. This directory is mounted by docker-compose.yml and deliberately
-# NOT by docker-compose.readonly.yml: four of the five rules read n8n's own
-# Postgres, and Mode B has no postgres (its n8n belongs to someone else and the
-# collector never gets database credentials). Provisioning these in Mode B would
-# leave rules permanently erroring against an inert datasource AND double up
-# with the collector's own watchdog.
+# Bundled stack (docker-compose.yml) ONLY. This directory is mounted there and
+# deliberately NOT by docker-compose.readonly.yml: four of the five rules read
+# n8n's own Postgres, and the read-only stack has no postgres — its n8n belongs
+# to someone else, and the server never gets database credentials for it.
+# Provisioning these against the read-only stack would leave rules permanently
+# erroring against an inert datasource AND double up with the server's own
+# watchdog.
 #
 # Why SQL rather than Prometheus: n8n's own /metrics records an execution only
 # when it FINISHES, so a hung execution emits nothing at all — "stuck" is not
 # expressible there. Reading execution_entity sees the row the moment it lands.
 # The same vantage point gives queue depth, which no metrics path has.
 #
-# Thresholds mirror observability/alerts.yml exactly, so Mode A and Mode B alert
-# on the same conditions at the same limits. Change one, change the other.
+# Thresholds mirror observability/alerts.yml exactly, so these Grafana rules
+# and the server's Prometheus alerts fire on the same conditions at the same
+# limits. Change one, change the other.
 #
 # These rules are ALWAYS active. Delivery is what is optional: the contact point
 # and notification policy are provisioned only when GRAFANA_ALERT_WEBHOOK_URL is set
@@ -32,11 +34,12 @@ groups:
     interval: 60s
     rules:
       # ---------------------------------------------------------------------
-      # Mode A's equivalent of Po11yN8nUnreachable. This is the one rule that
-      # does not read the database: if n8n is down, Postgres usually is not, so
-      # a SQL query would happily return "nothing wrong" during an outage.
-      # Prometheus scrapes n8n:5678 directly in Mode A (N8N_METRICS=true), so
-      # `up` is a real liveness signal here in a way it is not in Mode B.
+      # The Grafana-side counterpart of alerts.yml's Po11yN8nUnreachable
+      # Prometheus alert. This is the one rule that does not read the database:
+      # if n8n is down, Postgres usually is not, so a SQL query would happily
+      # return "nothing wrong" during an outage. Prometheus scrapes n8n:5678
+      # directly on the bundled stack (N8N_METRICS=true), so `up` is a real
+      # liveness signal here in a way it is not for a remote n8n.
       #
       # Condition is `up < 1` rather than `up == 0`: PromQL comparison filters
       # rather than rewrites, so `up == 0` yields a series whose VALUE is 0 and
@@ -162,7 +165,7 @@ groups:
       # so a run-based rule stays silent on exactly the workflow that needs
       # attention. The JOIN is on status='success', so a workflow that has NEVER
       # succeeded returns no row here and is covered by Po11yWorkflowFailing
-      # instead — the same split the collector makes deliberately.
+      # instead — the same split the server's watchdog makes deliberately.
       #
       # Restricted to active workflows: a deactivated workflow is stale by
       # definition and alerting on it is pure noise.
@@ -229,9 +232,13 @@ groups:
                   type: query
 
       # ---------------------------------------------------------------------
-      # The rule that only Mode A can express. An execution row with
-      # finished=false and no stoppedAt is in flight right now; n8n's Prometheus
-      # histogram is written on completion, so a hang produces no metric ever.
+      # A row this database read can see immediately: finished=false and no
+      # stoppedAt means the execution is in flight right now; n8n's Prometheus
+      # histogram is written on completion, so a hang produces no metric ever
+      # there. The server's own API-polling equivalent
+      # (po11y_workflow_running_seconds, Po11yWorkflowStuck in alerts.yml) sees
+      # the same condition once its executions list refreshes — this rule
+      # differs in latency, not in what it can see.
       #
       # status <> 'new' excludes executions that are queued but not yet started
       # — those are a backlog, not a hang, and get their own rule below.
@@ -300,8 +307,9 @@ groups:
 
       # ---------------------------------------------------------------------
       # Executions accepted but never started. Distinct from "stuck": nothing is
-      # running, work is piling up in front of the queue. There is no Mode B
-      # counterpart — the collector polls the API, which does not expose this.
+      # running, work is piling up in front of the queue. There is no
+      # Prometheus counterpart — the server's API poll cannot see this; n8n's
+      # public API does not expose queue depth.
       #
       # Not grouped per workflow: a backlog is a property of the instance, and
       # one alert saying "the queue is 40 deep" beats 40 saying "I am waiting".

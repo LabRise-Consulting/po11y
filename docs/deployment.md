@@ -1,13 +1,12 @@
 # Deployment options
 
-Po11y consists of static dashboard files and JSON feed files stored on a shared status volume. This design works across different deployment environments.
+Po11y consists of static dashboard files, plus the JSON feeds the po11y `server` process builds from its SQLite store and serves over HTTP. This design works across different deployment environments.
 
 ## Podman
 
 You can run the Compose stack using `podman-compose`.
 
-- Configure the `docker-proxy` sidecar to point to the Podman socket.
-- Alternatively, remove `docker-proxy` if container status monitoring is not needed.
+No socket configuration is needed: the stack mounts no container runtime socket.
 
 ## Kubernetes
 
@@ -21,8 +20,9 @@ kubectl apply -k deploy/k8s
 
 | Feature | Docker Compose | Kubernetes (`deploy/k8s`) |
 |---|---|---|
-| Mode A (Bundled n8n) | Yes | Yes |
-| Mode B (Collector against external n8n) | Yes | No deployment included |
+| Bundled n8n | Yes | Yes (n8n Deployment only) |
+| Read-only, against an external n8n | Yes | No manifests included |
+| Status feeds (status/map/forms/ai-map/notifications) | Yes, from the `server` process | **No — see [`deploy/k8s/README.md`](../deploy/k8s/README.md#status-feeds-do-not-work)** |
 | Dashboard authentication | Basic Auth or OIDC forward-auth | None (must be handled by Ingress) |
 | MCP server (`/mcp/`) | Yes | No deployment or routing |
 | Grafana alert rules | 5 provisioned rules | Requires ConfigMap setup |
@@ -30,7 +30,7 @@ kubectl apply -k deploy/k8s
 | Data table list proxy (`/n8n-table/`) | Yes | No |
 | Multi-team scopes | Yes | No |
 | Container security context | `read_only`, `user: node` | Basic `fsGroup` only |
-| Container status feed | Docker socket | Empty (no host socket mounted) |
+| Container status card | Gone permanently, every deployment — see [docs/server.md](server.md#accepted-regressions) | Same |
 
 For complete instructions and setup details, see [`deploy/k8s/README.md`](../deploy/k8s/README.md).
 

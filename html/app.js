@@ -19,7 +19,7 @@
 // "{host}" in any href/src is replaced with the browser's current hostname,
 // so one config works from every device that can reach the box. Set
 // config.json's "baseUrl" (a bare host, not a URL prefix) to substitute a
-// different host instead — e.g. a remote n8n in Mode B.
+// different host instead — e.g. a remote n8n on the read-only stack.
 
 // Pure helpers (escaping, url policy, scope routing, range labels, …) live in
 // app.lib.js so they can be unit-tested (node --test "html/**/*.test.mjs");
@@ -67,8 +67,10 @@ let cfg = {
   sections: {
     containers: 'Running containers',
     notifications: 'Notifications',
-    // executions is Mode B-only (n8n executions API) — add
-    // "executions": "Workflow executions" to config.json sections to enable it.
+    // executions always comes from status.json's own `executions` object —
+    // add "executions": "Workflow executions" to config.json sections to
+    // enable it. (containers above never populates any more — see
+    // docs/server.md's Accepted regressions.)
   },
   metrics: null,
   // Base URL for n8n workflow deep links; consumed by the site pages
@@ -452,9 +454,9 @@ function renderContainers() {
     : `<p class="empty">${f ? 'no match' : 'none running'}</p>`;
 }
 
-// ---- executions (Mode B only) -----------------------------------------------------
+// ---- executions -------------------------------------------------------------
 // { executions: { recent, errors, byWorkflow: [{ name, id, count, errors, lastAt }] } }
-// — see collector/collect.mjs. Filter box narrows byWorkflow by name, same
+// — see server/n8n.mjs. Filter box narrows byWorkflow by name, same
 // mechanism as renderContainers.
 function renderExecutions() {
   const el = $('sec-executions');
@@ -464,9 +466,9 @@ function renderExecutions() {
   const rows = (ex.byWorkflow || []).filter((w) =>
     !f || String(w.name ?? '').toLowerCase().includes(f));
   if (!rows.length) { el.innerHTML = `<p class="empty">${f ? 'no match' : 'no executions yet'}</p>`; return; }
-  // status.json is user-writable in Mode A (a Code node publishes it), so these
+  // status.json is written by a separate process (the po11y server), so these
   // counters are external data like every other field here — esc() them even
-  // though the collector only ever writes numbers.
+  // though the server only ever writes numbers.
   const summary = `<p class="updated">${esc(ex.recent ?? 0)} recent · ${esc(ex.errors ?? 0)} errors</p>`;
   el.innerHTML = summary + rows.map((w) => {
     const dot = w.errors ? 'fail' : 'ok';
@@ -567,9 +569,10 @@ function renderNotifications() {
     // dashboard — the worst outcome for a tool whose job is telling you what
     // is broken. Both compose files bind-mount ./config.json, so when it was
     // never created docker makes a *directory* of that name and nginx serves
-    // nothing; that is the standard Mode B first-run mistake (Mode A's
-    // bootstrap.sh copies the example for you, Mode B has no bootstrap). Say
-    // so in the lede, which is empty by default and always visible.
+    // nothing; that is the standard read-only-stack first-run mistake (the
+    // bundled stack's bootstrap.sh copies the example for you, the read-only
+    // stack has no bootstrap). Say so in the lede, which is empty by default
+    // and always visible.
     console.warn('po11y: /config.json unreadable — using built-in defaults');
     cfg.lede = 'config.json not readable — run: cp config.example.json config.json';
     // Without a config the poll interval is the built-in 30 s, so a 5-minute
@@ -579,8 +582,8 @@ function renderNotifications() {
     cfg.staleAfterMin = Infinity;
   }
   initScope();
-  // Auto-discovered form triggers (forms.json, published by the maps workflow
-  // or the Mode B collector) become Actions cards; config-declared cards win on
+  // Auto-discovered form triggers (forms.json, published by the po11y server)
+  // become Actions cards; config-declared cards win on
   // collisions. Card shape depends on the /form/ proxy and cfg.n8nUrl — see
   // formCards in app.lib.js.
   try {

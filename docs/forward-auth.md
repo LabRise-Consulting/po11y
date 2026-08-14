@@ -9,10 +9,10 @@ This overlay runs an [`oauth2-proxy`](https://oauth2-proxy.github.io/oauth2-prox
 Run the overlay on top of your base compose configuration:
 
 ```sh
-# Mode A (Bundled)
+# Bundled stack
 docker compose -f docker-compose.yml -f docker-compose.auth.yml up -d
 
-# Mode B (Collector)
+# Read-only stack
 docker compose -f docker-compose.readonly.yml -f docker-compose.auth.yml up -d
 ```
 

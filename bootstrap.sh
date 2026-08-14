@@ -4,7 +4,7 @@
 #
 #   ./bootstrap.sh [--no-examples] [--pack <dir-or-git-url>]...
 #
-#   --no-examples   skip workflows/examples/ (demo feeds like HN news)
+#   --no-examples   skip workflows/examples/ (the HN news demo workflow)
 #   --pack X        import an n8n workflows repo/dir (standard n8n export
 #                   format: one JSON per workflow). Git URLs are cloned into
 #                   packs/<name>. NOTE: on a re-run against an already-claimed
@@ -25,9 +25,26 @@ PACKS=""
 # Retired core workflows, by id. Each entry is a dated liability: n8n owns this
 # schema, so this raw delete is coupled to it. Drop entries once no supported
 # upgrade path still carries them.
+#
+# This list is the ONLY thing that removes a retired workflow from a live n8n.
+# A fresh install never imports them, but the cutover that actually happens is
+# an upgrade of an existing deployment, and bootstrap is re-runnable by design.
+# Left off this list, maps kept making scheduled LLM calls alongside the
+# server's own ai-map builder, and status-publish kept writing status.json into
+# a volume that is no longer mounted.
+#
+# Deleting an EXAMPLE workflow counts too, and is easier to forget because
+# examples are optional: hn-notify's Code node used to fail silently (the image
+# pre-created /po11y-status and `fs` was an allowed builtin), and now throws
+# outright. A leftover copy on a live instance is still called by hn-tech-news
+# every 30 minutes, so it turns into a red workflow, a `failing` alert and a
+# webhook push rather than a no-op.
 #   po11yaimap000000  retired 2026-07 (ai-map + workflow-map merged into maps.json)
+#   po11yworkflowmap  retired 2026-08 (maps.json — the server builds the map now)
+#   po11ystatuspub00  retired 2026-08 (status-publish — the server owns the feeds)
+#   po11yhnnotify000  retired 2026-08 (HN notify example — wrote the removed feed volume)
 # REMOVE AFTER 2026-12
-RETIRED_IDS="po11yaimap000000"
+RETIRED_IDS="po11yaimap000000 po11yworkflowmap po11ystatuspub00 po11yhnnotify000"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -59,6 +76,11 @@ get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/[[:space:]
 [ -n "$(get_env PO11Y_RO_PASSWORD)" ]      || set_env PO11Y_RO_PASSWORD "$(openssl rand -hex 24)"
 [ -n "$(get_env GRAFANA_ADMIN_PASSWORD)" ] || set_env GRAFANA_ADMIN_PASSWORD "$(openssl rand -hex 16)"
 [ -n "$(get_env N8N_OWNER_PASSWORD)" ]     || set_env N8N_OWNER_PASSWORD "A1$(openssl rand -hex 16)"
+# Not a secret, but seeded on the same terms: .env.example carries it, and an
+# .env written by hand (or by CI) need not. Owner setup POSTs whatever this
+# returns, and n8n rejects an empty email with the same 400 it uses for "owner
+# already exists" — which used to be read as success. Default it instead.
+[ -n "$(get_env N8N_OWNER_EMAIL)" ]        || set_env N8N_OWNER_EMAIL "admin@example.com"
 
 # Bundled OmniRoute gateway overlay — included unless OMNIROUTE_ENABLED=false.
 # Its secrets (session signing, at-rest key encryption, first-boot dashboard
@@ -75,33 +97,61 @@ fi
 # shellcheck disable=SC2086  # COMPOSE_FILES word-splits into -f arguments
 compose() { docker compose --env-file "$ENV_FILE" $COMPOSE_FILES "$@"; }
 
-# The read-only docker-socket-proxy (not n8n) mounts the host socket; without
-# it the dashboard's containers section is simply empty.
-[ -S /var/run/docker.sock ] || echo "bootstrap: warning — /var/run/docker.sock not found; containers section will be empty"
-
 # Instance config: live copy is git-ignored, seeded from the example.
 [ -f config.json ] || { cp config.example.json config.json; echo "bootstrap: created config.json from config.example.json — edit it to taste"; }
 mkdir -p packs site secrets
 
-# Optional AI-map config → a non-served file the ai-map workflow reads (env
-# access is blocked inside n8n Code nodes, so config cannot come from the
-# container environment). Empty values just mean the heuristic (no-LLM) map.
-# Rendered before 'compose up' so the bind mount is a file, not a directory.
+# Optional AI-map config. The server builds the AI map now, and it reads
+# AI_MAP_* straight from its environment (docker-compose.yml passes the three
+# through from .env), so the auto-wired values are written back into .env
+# rather than rendered into secrets/ai-map.json. That file was read only by
+# the retired maps workflow — an n8n Code node, which could not read the
+# container environment — and nothing reads it any more. Empty values still
+# just mean the heuristic (no-LLM) map.
+#
+# The three values the auto-wire writes, named once so the write-back below and
+# the clear-back after it cannot drift onto different literals. Recognising
+# them again is what makes OMNIROUTE_ENABLED=false a real off-switch.
+OMNIROUTE_AI_BASE="http://omniroute:20128/v1"
+OMNIROUTE_AI_KEY="omniroute-local"
+OMNIROUTE_AI_MODEL="auto/best-free"
+
 AI_BASE="$(get_env AI_MAP_BASE_URL)"; AI_KEY="$(get_env AI_MAP_API_KEY)"
 AI_MODEL="$(get_env AI_MAP_MODEL)"
 if [ "$OMNIROUTE" != "false" ] && [ -z "$AI_BASE" ]; then
   # Auto-wire to the bundled gateway. The key is a placeholder: OmniRoute's
-  # /v1 needs none by default (REQUIRE_API_KEY=false), but the ai-map
-  # workflow reads an empty key as "LLM off". The default model is
-  # OmniRoute's free-tier auto-route, so a clean bootstrap gets LLM prose
-  # with zero provider keys. Explicit AI_MAP_* always wins; set
-  # OMNIROUTE_ENABLED=false (or any AI_MAP_BASE_URL) to opt out entirely.
-  AI_BASE="http://omniroute:20128/v1"
-  [ -n "$AI_KEY" ]   || AI_KEY="omniroute-local"
-  [ -n "$AI_MODEL" ] || AI_MODEL="auto/best-free"
+  # /v1 needs none by default (REQUIRE_API_KEY=false), but the server reads an
+  # empty key as "LLM off". The default model is OmniRoute's free-tier
+  # auto-route, so a clean bootstrap gets LLM prose with zero provider keys.
+  # Explicit AI_MAP_* always wins; set OMNIROUTE_ENABLED=false (or any
+  # AI_MAP_BASE_URL) to opt out entirely.
+  AI_BASE="$OMNIROUTE_AI_BASE"
+  [ -n "$AI_KEY" ]   || AI_KEY="$OMNIROUTE_AI_KEY"
+  [ -n "$AI_MODEL" ] || AI_MODEL="$OMNIROUTE_AI_MODEL"
+  set_env AI_MAP_BASE_URL "$AI_BASE"
+  set_env AI_MAP_API_KEY  "$AI_KEY"
+  set_env AI_MAP_MODEL    "$AI_MODEL"
+elif [ "$OMNIROUTE" = "false" ] && [ "$AI_BASE" = "$OMNIROUTE_AI_BASE" ]; then
+  # OMNIROUTE_ENABLED=false is documented as THE privacy off-switch (.env.example,
+  # docs/security.md, docs/ai-map.md): heuristic map, no digest leaves the box.
+  # Since the auto-wire persists into .env, dropping the overlay alone no longer
+  # achieves that — the values survive, aiConfigured stays true, and the server
+  # keeps POSTing workflow digests to a gateway that is not even running. So the
+  # off-switch has to undo the auto-wire, not just skip it.
+  #
+  # Keyed on the base URL, because that is the one value only this auto-wire
+  # writes on the bundled stack: it is the overlay's compose-internal address,
+  # unreachable once the overlay is gone, so clearing it is right whether
+  # bootstrap or a human put it there. The key and model are cleared only while
+  # they still hold the placeholders, so an operator who pinned their own model
+  # or set a real gateway key keeps it — clearing the base is already enough to
+  # turn the LLM off (the server needs all three; see server/index.mjs).
+  AI_BASE=""
+  set_env AI_MAP_BASE_URL ""
+  if [ "$AI_KEY" = "$OMNIROUTE_AI_KEY" ]; then AI_KEY=""; set_env AI_MAP_API_KEY ""; fi
+  if [ "$AI_MODEL" = "$OMNIROUTE_AI_MODEL" ]; then AI_MODEL=""; set_env AI_MAP_MODEL ""; fi
+  echo "bootstrap: OMNIROUTE_ENABLED=false — cleared the auto-wired AI_MAP_* gateway settings; the map stays heuristic"
 fi
-python3 -c 'import json,sys; json.dump({"base_url":sys.argv[1],"api_key":sys.argv[2],"model":sys.argv[3]}, open("secrets/ai-map.json","w"))' \
-  "$AI_BASE" "$AI_KEY" "$AI_MODEL"
 
 BIND="$(get_env BIND_ADDR)"; BIND="${BIND:-127.0.0.1}"
 # Exposure interlock: a non-loopback bind with no auth gate means the anonymous
@@ -157,8 +207,8 @@ echo " up"
 # workflows into the Personal project. n8n's CLI import does NOT assign
 # ownership to an already-existing owner — owner-first leaves the workflows
 # active but invisible in the UI list.
-IMPORT_DIRS="/workflows/core"
-[ "$EXAMPLES" = "yes" ] && IMPORT_DIRS="$IMPORT_DIRS /workflows/examples"
+IMPORT_DIRS=""
+[ "$EXAMPLES" = "yes" ] && IMPORT_DIRS="/workflows/examples"
 for p in $PACKS; do
   case "$p" in
     http*://*|git@*)
@@ -175,23 +225,27 @@ for p in $PACKS; do
   esac
 done
 
-IDS=""
-for d in $IMPORT_DIRS; do
-  compose exec -T n8n n8n import:workflow --separate --input="$d"
-  # host path of the container dir (both live in this repo checkout)
-  hostdir=".$d"
-  IDS="$IDS $(python3 -c '
+if [ -z "$IMPORT_DIRS" ]; then
+  echo "bootstrap: no --pack given and examples skipped — nothing to import"
+else
+  IDS=""
+  for d in $IMPORT_DIRS; do
+    compose exec -T n8n n8n import:workflow --separate --input="$d"
+    # host path of the container dir (both live in this repo checkout)
+    hostdir=".$d"
+    IDS="$IDS $(python3 -c '
 import json, glob, sys
 for f in sorted(glob.glob(sys.argv[1] + "/*.json")):
     print(json.load(open(f)).get("id", ""))' "$hostdir")"
-done
-n=0
-for id in $IDS; do
-  [ -n "$id" ] || continue
-  compose exec -T n8n n8n publish:workflow --id="$id" >/dev/null
-  n=$((n+1))
-done
-echo "bootstrap: imported + published $n workflows"
+  done
+  n=0
+  for id in $IDS; do
+    [ -n "$id" ] || continue
+    compose exec -T n8n n8n publish:workflow --id="$id" >/dev/null
+    n=$((n+1))
+  done
+  echo "bootstrap: imported + published $n workflows"
+fi
 
 # Retired core workflows (merged into others) — drop leftovers from earlier
 # installs. See RETIRED_IDS at the top for the dated inventory.
@@ -256,25 +310,91 @@ while [ $i -lt 15 ]; do
 done
 if [ "$NEEDS_SETUP" = "true" ]; then
   EMAIL="$(get_env N8N_OWNER_EMAIL)"; PASS="$(get_env N8N_OWNER_PASSWORD)"
-  CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/rest/owner/setup" \
+  # Body as well as status: n8n answers 400 both for "owner already exists" and
+  # for a request it could not validate, and only the message tells them apart.
+  # Reading every 400 as "already exists" reported a silent failure as success —
+  # a bootstrap with an empty N8N_OWNER_EMAIL said the owner was configured and
+  # left the instance with no owner at all.
+  SETUP_BODY="$(curl -s -w '\n%{http_code}' -X POST "$BASE/rest/owner/setup" \
     -H 'Content-Type: application/json' \
-    -d "$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"firstName":"Po11y","lastName":"Owner","password":sys.argv[2]}))' "$EMAIL" "$PASS")")"
+    -d "$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"firstName":"Po11y","lastName":"Owner","password":sys.argv[2]}))' "$EMAIL" "$PASS")" || true)"
+  CODE="$(printf '%s' "$SETUP_BODY" | tail -n1)"
   if [ "$CODE" = "200" ]; then
     echo "bootstrap: n8n owner created ($EMAIL) — password in $ENV_FILE"
-  elif [ "$CODE" = "400" ]; then
-    # 400 = owner already exists. On an idempotent re-run /rest/settings can
-    # still report showSetupOnFirstLoad=true for a window; the POST is the
-    # authority. Not a failure — say so instead of the manual-setup warning.
+  elif [ "$CODE" = "400" ] && printf '%s' "$SETUP_BODY" | grep -qi 'already setup\|already set up'; then
+    # On an idempotent re-run /rest/settings can still report
+    # showSetupOnFirstLoad=true for a window; the POST is the authority. Not a
+    # failure — say so instead of the manual-setup warning.
     echo "bootstrap: n8n owner already configured — nothing to do"
   else
-    # Internal REST API, no semver guarantee — degrade, don't fail.
+    # Internal REST API, no semver guarantee — degrade, don't fail. Carry n8n's
+    # own message: on a validation failure it names the field it rejected, which
+    # is the whole difference between "n8n changed" and "your .env is wrong".
     echo "bootstrap: headless owner setup failed (HTTP $CODE) — open $BASE and finish setup manually"
+    echo "  n8n said: $(printf '%s' "$SETUP_BODY" | sed '$d' | head -c 300)"
   fi
+  unset SETUP_BODY
 elif [ "$NEEDS_SETUP" = "false" ]; then
   echo "bootstrap: n8n owner already set up"
   [ -z "$PACKS" ] || echo "bootstrap: NOTE — packs imported after the first run are not claimed by the owner; if they don't show in the UI, re-import them there"
 else
   echo "bootstrap: could not read $BASE/rest/settings — open $BASE and check manually"
+fi
+
+# ---- 4b. ops API key -----------------------------------------------------------
+# The server reads n8n over the public API, and that API accepts nothing but a
+# key. The dashboard's feeds used to be published by n8n workflows using
+# their own internal credentials, so a default bootstrap produced a populated
+# dashboard with no key anywhere. The server owns every feed now, so without a
+# key a default stack comes up correct but empty: serving-only, no sync, no
+# build, `status.json` reporting generated_at null forever. Minting the key here
+# is what keeps "run bootstrap, get a dashboard" true.
+#
+# Only when MCP_N8N_API_KEY is empty: an operator's own key — including a key
+# for a DIFFERENT n8n — always wins, and a re-run never rotates a working one.
+#
+# Read-only scopes only. workflow:* and execution:* are what sync and poll-fill
+# need; the dataTable ones are for the opt-in PO11Y_DATATABLES sampler and the
+# /n8n-table proxy, granted now because they are still read-only and because a
+# key that silently 403s the day an operator enables a documented feature is
+# worse than a key with three unused read scopes.
+#
+# Internal REST API, no semver guarantee — degrade, never fail, exactly as the
+# owner setup above does. A stack without a key still starts and still says so.
+if [ -z "$(get_env MCP_N8N_API_KEY)" ]; then
+  KEY_EMAIL="$(get_env N8N_OWNER_EMAIL)"; KEY_PASS="$(get_env N8N_OWNER_PASSWORD)"
+  KEY_JAR="$(mktemp)"
+  # shellcheck disable=SC2064  # expand KEY_JAR now: the trap must survive the unset below.
+  trap "rm -f '$KEY_JAR'" EXIT
+  # `|| echo 000`: set -e would abort the whole run on a transient curl failure,
+  # and this step is explicitly allowed to fail without taking the stack with it.
+  KEY_CODE="$(curl -s -o /dev/null -w '%{http_code}' -c "$KEY_JAR" -X POST "$BASE/rest/login" \
+    -H 'Content-Type: application/json' \
+    -d "$(python3 -c 'import json,sys; print(json.dumps({"emailOrLdapLoginId":sys.argv[1],"password":sys.argv[2]}))' "$KEY_EMAIL" "$KEY_PASS")" || echo 000)"
+  if [ "$KEY_CODE" = "200" ]; then
+    # rawApiKey is the only field carrying the usable token; `apiKey` is masked.
+    NEW_KEY="$(curl -s -b "$KEY_JAR" -X POST "$BASE/rest/api-keys" \
+      -H 'Content-Type: application/json' \
+      -d '{"label":"po11y server (read-only)","scopes":["workflow:read","workflow:list","execution:read","execution:list","dataTable:read","dataTable:list","dataTableRow:read"],"expiresAt":null}' \
+      | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["rawApiKey"])' 2>/dev/null || true)"
+    if [ -n "$NEW_KEY" ]; then
+      set_env MCP_N8N_API_KEY "$NEW_KEY"
+      # The server read its environment at `compose up` above, before this key
+      # existed. `restart` would replay the old environment; only a recreate
+      # picks up the new .env, and compose re-reads --env-file per invocation.
+      compose up -d server >/dev/null 2>&1 || true
+      echo "bootstrap: minted a read-only n8n API key for the server (MCP_N8N_API_KEY in $ENV_FILE)"
+    else
+      echo "bootstrap: could not mint an n8n API key — the dashboard will be empty until you"
+      echo "  create one in $BASE (Settings > n8n API) and set MCP_N8N_API_KEY in $ENV_FILE"
+    fi
+  else
+    echo "bootstrap: could not sign in to n8n to mint an API key (HTTP $KEY_CODE) — the dashboard"
+    echo "  will be empty until you create one in $BASE (Settings > n8n API) and set"
+    echo "  MCP_N8N_API_KEY in $ENV_FILE"
+  fi
+  rm -f "$KEY_JAR"; trap - EXIT
+  unset KEY_EMAIL KEY_PASS KEY_JAR KEY_CODE NEW_KEY
 fi
 
 # ---- 5. report -----------------------------------------------------------------
@@ -284,4 +404,4 @@ echo "== po11y =="
 echo "  dashboard:  http://$BIND:$DP/"
 echo "  n8n editor: $BASE/   (login: N8N_OWNER_EMAIL / N8N_OWNER_PASSWORD in $ENV_FILE)"
 echo "  grafana:    http://$BIND:$DP/grafana/ (admin password in $ENV_FILE)"
-echo "  status.json appears within ~2 min (first schedule tick)"
+echo "  the server builds the feeds on its first sync, moments after it starts"

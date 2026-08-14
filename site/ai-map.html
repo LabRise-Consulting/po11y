@@ -121,25 +121,19 @@
     <header>
       <p class="eyebrow">architecture</p>
       <h1>No architecture map yet</h1>
-      <p class="lede">The maps workflow publishes this tab automatically within ~10 minutes
-        of bootstrap (structure is computed from the live workflow export). An LLM can
-        enrich it with curated one-liners and insight cards — two ways:</p>
+      <p class="lede">The po11y server publishes this tab automatically on its first
+        workflow sync, then refreshes it every <code>SYNC_INTERVAL</code> (structure is
+        computed from the live workflows it reads over the n8n API). An LLM can
+        enrich it with curated one-liners and insight cards:</p>
     </header>
     <div class="notes">
       <div class="card">
-        <h3>A · API endpoint</h3>
+        <h3>API endpoint</h3>
         <p>Set <code>AI_MAP_BASE_URL</code>, <code>AI_MAP_API_KEY</code> and
           <code>AI_MAP_MODEL</code> in <code>.env</code> — any OpenAI-compatible
           chat-completions endpoint (Mistral, OpenAI, Anthropic, local Ollama) —
-          then <code>docker compose up -d n8n</code>. The maps workflow rebuilds
+          then <code>docker compose up -d server</code>. The server rebuilds
           it daily — or use the "Build maps now" action for an immediate result.</p>
-      </div>
-      <div class="card">
-        <h3>B · Local AI CLI — no API key</h3>
-        <p>Run <code>./ai-map-cli.sh</code> on the host. It pipes the workflow
-          export through a local CLI — <code>claude -p</code> by default; set
-          <code>AI_MAP_CLI</code> for <code>llm</code>, <code>ollama run …</code>
-          or anything that reads a prompt on stdin — and publishes the map here.</p>
       </div>
     </div>
   </div>

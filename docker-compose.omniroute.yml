@@ -1,7 +1,7 @@
 # Bundled OmniRoute LLM gateway (https://github.com/diegosouzapw/OmniRoute):
 # one OpenAI-compatible endpoint with provider routing/fallback, so the AI map
 # prose works without a per-provider key in po11y. Overlay — bootstrap includes
-# it unless OMNIROUTE_ENABLED=false in .env. Mode B adds it by hand:
+# it unless OMNIROUTE_ENABLED=false in .env. On the read-only stack, add it by hand:
 #   docker compose -f docker-compose.readonly.yml -f docker-compose.omniroute.yml up -d
 # Providers (keys / OAuth) are configured once in the dashboard at
 # http://127.0.0.1:20128 (password: OMNIROUTE_ADMIN_PASSWORD in .env).

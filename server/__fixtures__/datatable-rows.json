@@ -1,0 +1,22 @@
+{
+    "data": [
+        {
+            "sku": "WIDGET-001",
+            "name": "Example widget",
+            "url": "https://example.invalid/catalogue/widget-001",
+            "supplier": "Example Supply GmbH",
+            "country": "Deutschland",
+            "inStock": true,
+            "quantity": 42,
+            "unitPriceCents": 1999,
+            "tags": "[\"example\", \"fixture\"]",
+            "note": "Columns are user-defined and arbitrary: the sampler stores a row COUNT and never reads them.",
+            "firstSeen": "2026-07-21T15:44:56.316Z",
+            "checkedAt": "2026-07-21T15:59:46.849Z",
+            "id": 1,
+            "createdAt": "2026-07-28T16:41:09.851Z",
+            "updatedAt": "2026-07-28T16:41:09.851Z"
+        }
+    ],
+    "nextCursor": "eyJsaW1pdCI6MSwib2Zmc2V0IjoxfQ=="
+}

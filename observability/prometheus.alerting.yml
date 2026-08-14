@@ -1,7 +1,7 @@
 # Appended verbatim to the rendered prometheus config by the alerting overlay's
 # entrypoint (see docker-compose.alerts.yml). Kept as a separate fragment rather
-# than living in prometheus.readonly.yml so the default Mode B stack does not
-# point at an alertmanager that is not running -- Prometheus tolerates an
+# than living in prometheus.readonly.yml so the default read-only stack does
+# not point at an alertmanager that is not running -- Prometheus tolerates an
 # unresolvable alertmanager, but logs a DNS failure on every evaluation cycle.
 #
 # These are top-level keys, so a plain append is a valid merge.

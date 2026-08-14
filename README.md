@@ -2,7 +2,7 @@
 
 Po11y is a status dashboard and observability stack for [n8n](https://n8n.io), the workflow automation tool. It provides real-time visibility into running workflows, system health, and inter-workflow dependencies.
 
-The dashboard requires no build step: it runs on an Nginx container serving static files. Live status data is written to a shared volume as JSON files by n8n workflows in Mode A or by the collector daemon in Mode B. Grafana handles metrics visualization.
+The dashboard requires no build step: it runs on an Nginx container serving static files. A single `server` process polls n8n into a SQLite store and serves the dashboard's feeds over HTTP. n8n needs no po11y workflows installed. Grafana handles metrics visualization.
 
 Po11y is open-source (MIT licensed) and self-hosted. n8n's own diagnostics are switched off. One default does send data off your server: the AI architecture map routes workflow digests to a keyless free-tier third-party provider. Set `OMNIROUTE_ENABLED=false` for local heuristic descriptions, or point `AI_MAP_BASE_URL` at a local model. See [docs/ai-map.md](docs/ai-map.md).
 
@@ -10,11 +10,11 @@ Po11y is open-source (MIT licensed) and self-hosted. n8n's own diagnostics are s
 
 ▶ **[Watch the video overview](https://gitlab.com/labrise/po11y/uploads/3a36c55ec373989dfb8bc2fee89f4a31/intro.mp4)**
 
-The intro video demonstrates the complete stack: dashboard views, architecture maps, Grafana panels, alerting rules, MCP endpoints, and the read-only Mode B collector.
+The intro video demonstrates the complete stack: dashboard views, architecture maps, Grafana panels, alerting rules, MCP endpoints, and read-only monitoring of an existing n8n instance.
 
 ### Dashboard Views
 
-- **Overview**: Displays active trigger buttons, service monitoring links, container status, notification feeds, and embedded Grafana panels.
+- **Overview**: Displays active trigger buttons, service monitoring links, an execution summary, notification feeds, and embedded Grafana panels.
 
   ![Dashboard overview](docs/img/dashboard.png)
 
@@ -28,46 +28,51 @@ The intro video demonstrates the complete stack: dashboard views, architecture m
 
 - **Interactive Workflow Map**: Pan and zoomable workflow diagram with dark/light mode toggles and custom sidebar pages.
 
-- **Alerting Options**: Mode A uses pre-configured Grafana alert rules against n8n's database. Mode B uses an integrated watchdog process or an optional Prometheus + Alertmanager overlay. See [docs/alerting.md](docs/alerting.md).
+- **Alerting Options**: The server's own watchdog runs by default in every deployment. The bundled stack also ships pre-configured Grafana alert rules against n8n's database, and any deployment can add an optional Prometheus + Alertmanager overlay. See [docs/alerting.md](docs/alerting.md).
 
 - **MCP Server**: Includes a read-only Model Context Protocol server at `/mcp/` for AI assistant integration. See [docs/mcp.md](docs/mcp.md).
 
-- **Bundled LLM gateway**: Mode A ships an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) gateway that exposes one OpenAI-compatible endpoint with provider routing and fallback. Po11y uses it for architecture map descriptions, but it is a general gateway: connect your providers once at `http://127.0.0.1:20128`, then point n8n AI nodes at `http://omniroute:20128/v1` and host tools such as VS Code at `http://127.0.0.1:20128/v1`. It binds to loopback only and its proxy takes no API key by default, so keep it off shared networks. See [docs/ai-map.md](docs/ai-map.md#using-omniroute-beyond-the-map).
+- **Bundled LLM gateway**: `bootstrap.sh` includes an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) gateway by default, exposing one OpenAI-compatible endpoint with provider routing and fallback. Po11y uses it for architecture map descriptions, but it is a general gateway: connect your providers once at `http://127.0.0.1:20128`, then point n8n AI nodes at `http://omniroute:20128/v1` and host tools such as VS Code at `http://127.0.0.1:20128/v1`. It binds to loopback only and its proxy takes no API key by default, so keep it off shared networks. See [docs/ai-map.md](docs/ai-map.md#using-omniroute-beyond-the-map).
 
-## Operation Modes
+## Deployment Topologies
 
-| Feature | Mode A (Bundled) | Mode B (Collector) |
+Po11y runs one process, `server`, in every deployment. It polls n8n into a
+SQLite store and serves the dashboard's five feeds, the MCP endpoint (`/mcp/`),
+the data-table read proxy (`/n8n-table/`), `/metrics`, and the alert push
+(`ALERT_WEBHOOK_URL`) and heartbeat (`ALERT_HEARTBEAT_URL`). It is not
+optional: stopping it takes all of those down. n8n needs no po11y workflows
+installed — the server talks to n8n's public REST API read-only. See
+[docs/server.md](docs/server.md).
+
+Two compose files start that same server against different n8n instances:
+
+| | Bundled (`docker-compose.yml`) | Read-only (`docker-compose.readonly.yml`) |
 |---|---|---|
 | n8n Instance | Installed and managed by Po11y | Existing external n8n instance |
 | Setup | `./bootstrap.sh` | Environment variables + `docker compose -f docker-compose.readonly.yml up -d` |
-| n8n Writes | Yes | **None** (GET-only API queries) |
-| Docker Socket | Read-only proxy | Not required |
-| Execute Command Node | Enabled instance-wide | Disabled / Not required |
+| n8n Writes | None — the server is GET-only either way | None (GET-only API queries) |
+| Docker Socket | Not required | Not required |
+| Execute Command Node | Disabled (n8n default) | Disabled / Not required |
 | User Access | Single shared owner login | Preserves existing n8n logins |
 | Best For | Single users, homelabs, new setups | Existing n8n deployments, production teams |
 
-### Mode Comparison
-
-- **Mode A** manages its own n8n instance. It automatically imports monitoring workflows and enables command execution capabilities for workflow exports.
-- **Mode B** runs side-by-side with an existing n8n instance without modifying it. It queries n8n's REST API using read-only HTTP GET requests.
-
 ### Project status
 
-Both modes work, but they do not have equal mileage.
+Both topologies work, but they do not have equal mileage.
 
-| | Mode A | Mode B |
+| | Bundled | Read-only |
 |---|---|---|
-| CI coverage | End-to-end smoke test: `bootstrap.sh`, live assertions against the running stack, then a repeat run to check idempotency | Collector unit tests, including a GET-only invariant test, plus Compose config validation. No end-to-end bring-up |
+| CI coverage | End-to-end smoke test: `bootstrap.sh`, live assertions against the running stack, then a repeat run to check idempotency | Server unit tests, including a GET-only invariant test, plus Compose config validation. No end-to-end bring-up |
 | Real-world use | The path Po11y is developed against day to day | Fewer instances, and more varied ones |
 
-Rough edges are likelier in Mode B. Please [open an issue](https://gitlab.com/labrise/po11y/-/issues) if you hit one.
+Rough edges are likelier on the read-only topology. Please [open an issue](https://gitlab.com/labrise/po11y/-/issues) if you hit one.
 
-## Quickstart: Mode A (Bundled)
+## Quickstart: Bundled (with n8n)
 
 ```sh
 git clone https://gitlab.com/labrise/po11y && cd po11y
 ./bootstrap.sh                # Full stack: n8n, Postgres, Prometheus, Grafana, Dashboard
-./bootstrap.sh --no-examples  # Skip demo workflows
+./bootstrap.sh --no-examples  # Skip the demo workflow
 ```
 
 Access services at:
@@ -78,14 +83,13 @@ By default, services bind to `127.0.0.1`. To expose services on a local network 
 
 ### Bundled Workflows
 
-Bootstrap installs four initial workflows:
+The dashboard's own feeds (map, forms, status, `/metrics`) come from the
+`server` process, not from n8n workflows. Bootstrap installs one optional demo
+workflow (skip it with `--no-examples`):
 
 | Workflow | Description |
 |---|---|
-| Po11y - Status publish | Runs every 2 minutes. Collects container status and updates `status.json`. |
-| Po11y - Maps | Runs every 10 minutes. Exports workflow structures and rebuilds map feeds. |
-| Po11y example - HN tech news | Runs every 30 minutes. Fetches Hacker News top stories. |
-| Po11y example - HN notify | Sub-workflow. Formats and updates `notifications.json`. |
+| Po11y example - HN tech news | Runs every 30 minutes, and on demand from the Actions tab. Fetches Hacker News top stories, so a fresh install has real executions, a workflow-map node and a form button to look at. |
 
 ### Importing Existing Workflows
 
@@ -96,9 +100,9 @@ Import workflow JSON directories using:
 ./bootstrap.sh --pack ./my-local-dir
 ```
 
-## Quickstart: Mode B (Read-only Collector)
+## Quickstart: Read-only (against an existing n8n)
 
-Mode B monitors an external n8n instance without altering its configuration.
+This topology monitors an external n8n instance without altering its configuration.
 
 ### Prerequisites
 
@@ -110,7 +114,7 @@ Mode B monitors an external n8n instance without altering its configuration.
 ```sh
 git clone https://gitlab.com/labrise/po11y && cd po11y
 cp .env.example .env                         # Configure N8N_API_URL, N8N_API_KEY, N8N_METRICS_TARGET, GRAFANA_ADMIN_PASSWORD
-cp config.readonly.example.json config.json   # Mode B configuration template
+cp config.readonly.example.json config.json   # Read-only configuration template
 docker compose -f docker-compose.readonly.yml up -d
 ```
 
@@ -122,14 +126,14 @@ docker compose -f docker-compose.readonly.yml up -d
 | `N8N_API_KEY` | Yes | Read-only API key |
 | `N8N_METRICS_TARGET` | Yes | `host:port` for n8n `/metrics` endpoint |
 | `GRAFANA_ADMIN_PASSWORD` | Yes | Grafana admin password |
-| `POLL_INTERVAL` | No | API polling interval in seconds (default: `600`) |
+| `SERVER_POLL_INTERVAL` | No | Server poll interval in seconds (default: `60`) |
 | `EXECUTIONS_LIMIT` | No | Recent execution window size (default: `100`, max: `250`) |
 
 ## Feature Comparison
 
 | Solution | Type | License | n8n Access | Alerting | Per-node Detail | Architecture Map |
 |---|---|---|---|---|---|---|
-| **Po11y** | Status page, workflow maps, Grafana, MCP | MIT | Mode A: manages n8n<br>Mode B: GET-only | 5 Grafana rules (Mode A)<br>Watchdog + Webhook (Mode B) | No | **Yes** |
+| **Po11y** | Status page, workflow maps, Grafana, MCP | MIT | GET-only always; bundled topology also manages n8n | Watchdog + Webhook (always)<br>5 Grafana rules (bundled topology) | No | **Yes** |
 | **n8n-trace** | Analytics dashboard | MIT | Requires collector workflows | Optional | **Yes** | No |
 | **n8n Manager** | Administration toolkit | Unstated | Installs and manages instance | Yes (Grafana rules) | No | No |
 | **FlowPulse** | SaaS monitoring | Commercial | Undisclosed | Yes | Undisclosed | No |
@@ -146,6 +150,7 @@ docker compose -f docker-compose.readonly.yml up -d
 - [docs/ai-map.md](docs/ai-map.md): AI architecture map configuration options.
 - [docs/integration.md](docs/integration.md): Integrating Po11y into existing Compose stacks.
 - [docs/deployment.md](docs/deployment.md): Podman, Kubernetes, and OpenTelemetry setup guides.
+- [docs/server.md](docs/server.md): po11y's architecture — the `server` process, its environment, multi-scope deployments, backup.
 
 ## Contributing
 

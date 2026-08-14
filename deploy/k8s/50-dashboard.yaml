@@ -17,16 +17,6 @@ spec:
       labels:
         app: dashboard
     spec:
-      # Co-schedule onto the n8n pod's node so both can mount the RWO
-      # po11y-status PVC (n8n writes, dashboard reads). Drop this block if you
-      # switch po11y-status to ReadWriteMany (see 03-pvcs.yaml).
-      affinity:
-        podAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app: n8n
-              topologyKey: kubernetes.io/hostname
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -71,10 +61,6 @@ spec:
             - name: site
               mountPath: /usr/share/nginx/site
               readOnly: true
-            # Shared status feeds, read-only (n8n is the writer).
-            - name: status
-              mountPath: /po11y-status
-              readOnly: true
             # Optional list-tab module (po11y-lib ConfigMap, see 02-configmaps
             # header). Missing ConfigMap => empty dir => /lib/list-rows.mjs 404s,
             # which only a config with a list tab would ever notice.
@@ -97,9 +83,6 @@ spec:
         - name: site
           configMap:
             name: po11y-site
-        - name: status
-          persistentVolumeClaim:
-            claimName: po11y-status
         - name: lib
           configMap:
             name: po11y-lib

@@ -83,10 +83,11 @@ export const actionKey = (card) => card?.action
  * Two things decide the card shape:
  *
  *  - `formProxy` — whether nginx serves the same-origin `/form/` proxy
- *    (ENABLE_FORM_PROXY; true in Mode A, false in Mode B by default). Only with
- *    the proxy can a field-less form fire in place; without it the POST answers
- *    404 and the button can do nothing but report the failure, so the card
- *    becomes a link to n8n's own form page instead.
+ *    (ENABLE_FORM_PROXY; true on the bundled stack, false on the read-only
+ *    stack by default). Only with the proxy can a field-less form fire in
+ *    place; without it the POST answers 404 and the button can do nothing
+ *    but report the failure, so the card becomes a link to n8n's own form
+ *    page instead.
  *  - `cfg.n8nUrl` — where that form page lives. app.js used to hardcode
  *    `http://{host}:5678`, so with a remote n8n the Map tab's dialogs (which do
  *    read n8nUrl) and these cards disagreed about the same instance.

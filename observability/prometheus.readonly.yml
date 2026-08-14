@@ -1,12 +1,14 @@
-# Mode B prometheus config (docker-compose.readonly.yml). Scrapes the REMOTE
-# n8n's /metrics instead of the compose-local `n8n:5678`. The target is a
-# placeholder the prometheus entrypoint renders from N8N_METRICS_TARGET
-# (host:port) at container start via sed — compose cannot parse a URL into a
-# host:port, and the prometheus (busybox) image has no envsubst.
+# Prometheus config for the read-only stack (docker-compose.readonly.yml).
+# Scrapes the REMOTE n8n's /metrics instead of the compose-local `n8n:5678`.
+# The target is a placeholder the prometheus entrypoint renders from
+# N8N_METRICS_TARGET (host:port) at container start via sed — compose cannot
+# parse a URL into a host:port, and the prometheus (busybox) image has no
+# envsubst.
 #
-# The remote n8n must run with N8N_METRICS=true (plus the *_INCLUDE_* flags Mode
-# A sets) for these scrapes to return data; without it the Grafana tab is simply
-# empty — the same graceful degradation as a missing AI-map key.
+# The remote n8n must run with N8N_METRICS=true (plus the *_INCLUDE_* flags
+# the bundled stack sets) for these scrapes to return data; without it the
+# Grafana tab is simply empty — the same graceful degradation as a missing
+# AI-map key.
 global:
   scrape_interval: 30s
 
@@ -16,14 +18,14 @@ scrape_configs:
     static_configs:
       - targets: ["__N8N_METRICS_TARGET__"]
 
-  # The collector's own view of n8n. Distinct from the `n8n` job above and not a
-  # duplicate of it: that one needs N8N_METRICS=true on the remote and reports
-  # only that a port answers, whereas this one is produced by the same API calls
-  # and API key the dashboard depends on. An expired key leaves the `n8n` job
-  # green and this one reporting po11y_n8n_up 0 — which is the failure that
-  # actually breaks po11y. Port 8081 is unpublished; this is compose-network
-  # only.
-  - job_name: po11y-collector
+  # The po11y server's own view of n8n. Distinct from the `n8n` job above and
+  # not a duplicate of it: that one needs N8N_METRICS=true on the remote and
+  # reports only that a port answers, whereas this one is produced by the same
+  # API calls and API key the dashboard depends on. An expired key leaves the
+  # `n8n` job green and this one reporting po11y_n8n_up 0 — which is the
+  # failure that actually breaks po11y. Port 8081 is unpublished; this is
+  # compose-network only.
+  - job_name: po11y-server
     metrics_path: /metrics
     static_configs:
-      - targets: ["collector:8081"]
+      - targets: ["server:8081"]

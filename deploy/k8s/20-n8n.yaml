@@ -1,9 +1,11 @@
-# n8n — the workflow engine that publishes status.json / map.json etc.
+# n8n — the workflow engine po11y monitors. On this k8s path there is no
+# server Deployment to poll it (see deploy/k8s/README.md), so nothing
+# publishes the dashboard's status feeds yet.
 #
 # IMAGE: this is a LOCAL BUILD from the repo Dockerfile (FROM n8nio/n8n:2.29.8
-# plus the static docker CLI and a pre-created /po11y-status owned by node).
-# There is no public image — you MUST build and push it, then set the image
-# below to your registry ref. Placeholder used here: po11y-n8n:latest
+# plus the static docker CLI). There is no public image — you MUST build and
+# push it, then set the image below to your registry ref. Placeholder used
+# here: po11y-n8n:latest
 #   docker build -t <registry>/po11y-n8n:latest .
 #   docker push  <registry>/po11y-n8n:latest
 apiVersion: apps/v1
@@ -15,7 +17,7 @@ metadata:
     app: n8n
 spec:
   replicas: 1
-  # Recreate: n8n-data (and the RWO po11y-status) must not double-attach.
+  # Recreate: the RWO n8n-data PVC must not double-attach.
   strategy:
     type: Recreate
   selector:
@@ -27,8 +29,8 @@ spec:
         app: n8n
     spec:
       # The n8n image runs as the node user (uid/gid 1000); fsGroup makes the
-      # two PVCs (n8n-data, po11y-status) writable by it regardless of what the
-      # storage provisioner chowns fresh volumes to.
+      # n8n-data PVC writable by it regardless of what the storage provisioner
+      # chowns fresh volumes to.
       securityContext:
         fsGroup: 1000
         runAsUser: 1000
@@ -104,15 +106,13 @@ spec:
           volumeMounts:
             - name: n8n-data
               mountPath: /home/node/.n8n
-            # Optional AI-map config (Secret), read-only, NOT on the web-served
-            # status volume. Empty JSON = heuristic map (no LLM).
+            # Optional AI-map config (Secret), read-only. Empty JSON = heuristic
+            # map (no LLM). Unused by n8n itself on this path — see the note
+            # in deploy/k8s/README.md.
             - name: ai-map
               mountPath: /run/po11y/ai-map.json
               subPath: ai-map.json
               readOnly: true
-            # Shared status volume: n8n writes *.json here; dashboard serves them.
-            - name: status
-              mountPath: /po11y-status
             # --- workflows / packs (compose bind-mounts ./workflows, ./packs) ---
             # These are nested directories, which a ConfigMap cannot represent.
             # RECOMMENDED: bake them into the image (COPY workflows /workflows,
@@ -132,9 +132,6 @@ spec:
         - name: ai-map
           secret:
             secretName: po11y-ai-map
-        - name: status
-          persistentVolumeClaim:
-            claimName: po11y-status
         # - name: workflows
         #   configMap:
         #     name: n8n-workflows

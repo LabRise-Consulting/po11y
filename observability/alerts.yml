@@ -1,4 +1,4 @@
-# Prometheus alerting rules for po11y (Mode B). Loaded only when the alerting
+# Prometheus alerting rules for po11y. Loaded only when the alerting
 # overlay is in play — see docker-compose.alerts.yml.
 #
 # These are NOT the watchdog's defaults restated. They are the thresholds that
@@ -21,19 +21,19 @@ groups:
   - name: po11y
     interval: 60s
     rules:
-      # Nothing else in this file can fire if the collector itself is gone --
-      # every other rule reads a series the collector produces. This is the one
+      # Nothing else in this file can fire if the server itself is gone --
+      # every other rule reads a series the server produces. This is the one
       # rule that does not depend on po11y being alive.
-      - alert: Po11yCollectorDown
-        expr: up{job="po11y-collector"} == 0
+      - alert: Po11yServerDown
+        expr: up{job="po11y-server"} == 0
         for: 10m
         labels:
           severity: critical
         annotations:
-          summary: "po11y collector is not being scraped"
-          description: "Prometheus cannot scrape collector:8081. The dashboard feeds are almost certainly stale too."
+          summary: "po11y server is not being scraped"
+          description: "Prometheus cannot scrape server:8081. The dashboard feeds are almost certainly stale too."
 
-      # The collector is alive and telling us it cannot reach n8n: down, hung,
+      # The server is alive and telling us it cannot reach n8n: down, hung,
       # or the API key stopped working.
       - alert: Po11yN8nUnreachable
         expr: po11y_n8n_up == 0
@@ -41,11 +41,15 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "n8n is unreachable from the po11y collector"
-          description: "The collector has failed to reach the n8n API for over 10 minutes."
+          summary: "n8n is unreachable from the po11y server"
+          description: "The server has failed to reach the n8n API for over 10 minutes."
 
-      # Belt-and-braces for a poll loop that wedged without throwing: the gauge
-      # says up, but nothing has completed. 1800s is 3x the default 600s poll.
+      # Belt-and-braces for a poll loop that wedged, or that keeps running
+      # without ever reaching n8n: the gauge says up, but no poll has
+      # completed. The series is stamped by the executions poll-fill tick,
+      # and only on a fetch that actually answered (server/sync.mjs pollFill)
+      # — so 1800s is 30 missed ticks at the default POLL_INTERVAL of 60s.
+      # Deliberately generous: a single slow tick must not page anyone.
       - alert: Po11yPollStalled
         expr: time() - po11y_poll_last_success_timestamp_seconds > 1800
         for: 5m

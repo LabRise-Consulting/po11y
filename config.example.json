@@ -1,6 +1,6 @@
 {
   "title": "Po11y",
-  "lede": "Live view of this stack: containers and notifications refresh every 30 s from status.json (published by the n8n workflows); the Map tab is generated from the n8n instance itself.",
+  "lede": "Live view of this stack: executions and notifications refresh every 30 s from status.json (published by the po11y server); the Map tab is generated from the n8n instance itself.",
   "footer": [
     { "text": "po11y", "href": "https://gitlab.com/labrise/po11y" }
   ],
@@ -21,7 +21,7 @@
     { "id": "arch", "label": "Architecture", "src": "/site/ai-map.html" }
   ],
   "sections": {
-    "containers": "Running containers",
+    "executions": "Workflow executions",
     "notifications": "Notifications"
   },
   "metrics": {

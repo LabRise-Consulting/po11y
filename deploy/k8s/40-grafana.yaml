@@ -86,7 +86,7 @@ spec:
             - name: GF_SECURITY_ALLOW_EMBEDDING
               value: "true"
             # Optional alert delivery. Empty/unset => the entrypoint drops the
-            # contact-points + policies files, so the five Mode A rules stay
+            # contact-points + policies files, so the five alert rules stay
             # visible and firing in the UI but deliver nowhere (same default as
             # compose). Set a webhook URL to enable delivery.
             # - name: GRAFANA_ALERT_WEBHOOK_URL
@@ -114,7 +114,7 @@ spec:
             - name: dashboards-json
               mountPath: /etc/grafana/provisioning-src/dashboards/json
               readOnly: true
-            # Mode A alert rules (create imperatively, see README). The volume
+            # The alert rules (create imperatively, see README). The volume
             # is optional: without the ConfigMap the directory mounts empty and
             # the entrypoint provisions no rules — the pre-alerting behavior.
             - name: alerting

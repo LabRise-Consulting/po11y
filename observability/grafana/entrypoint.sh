@@ -13,11 +13,12 @@
 # docker-compose.otel.yml` — the command docs/deployment.md gives — booted with
 # zero alert rules while the alerting volume sat mounted and unused.
 #
-# Everything mode-specific is driven by what is mounted, not by which file
+# Everything stack-specific is driven by what is mounted, not by which file
 # spelled the entrypoint:
-#   /etc/grafana/provisioning-src     required, shared by both modes
-#   /etc/grafana/alerting-src         Mode A only (four of the five rules query
-#                                     a postgres Mode B does not have)
+#   /etc/grafana/provisioning-src     required, shared by every compose file
+#   /etc/grafana/alerting-src         bundled stack only (four of the five
+#                                     rules query a postgres the read-only
+#                                     stack does not have)
 #   /etc/po11y-grafana-extras/        overlays drop extra datasources/dashboards
 set -eu
 
@@ -43,8 +44,8 @@ fi
 sed -i "s|__WEB_BIND_ADDR__|${BIND_ADDR:-127.0.0.1}|g" "$DST"/dashboards/json/*.json
 sed -i "s|/etc/grafana/provisioning/|$DST/|g" "$DST/dashboards/dashboards.yml"
 
-# Alerting rules are Mode A only, so they are mounted from a directory OUTSIDE
-# provisioning-src — docker-compose.readonly.yml shares provisioning-src.
+# Alerting rules are bundled-stack only, so they are mounted from a directory
+# OUTSIDE provisioning-src — docker-compose.readonly.yml shares provisioning-src.
 if [ -d /etc/grafana/alerting-src ]; then
   cp -r /etc/grafana/alerting-src "$DST/alerting"
   # Grafana refuses to start on a webhook contact point with an empty url, and

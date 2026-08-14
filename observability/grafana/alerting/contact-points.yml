@@ -1,4 +1,4 @@
-# Where Mode A alerts are delivered.
+# Where the bundled stack's Grafana alerts are delivered.
 #
 # This file is provisioned ONLY when GRAFANA_ALERT_WEBHOOK_URL is set — the grafana
 # entrypoint in docker-compose.yml deletes it from the rendered copy otherwise,
@@ -8,18 +8,17 @@
 #
 # SECURITY: the URL IS the credential. A Slack incoming webhook and a Telegram
 # bot endpoint both carry their secret in the path — the same property that
-# makes collector/notify.mjs redact it from every log line. Grafana interpolates
+# makes server/notify.mjs redact it from every log line. Grafana interpolates
 # ${GRAFANA_ALERT_WEBHOOK_URL} from the environment at provisioning time, so the secret
 # is never written into a tracked file. Anyone with Grafana admin can read it
 # back from the contact point UI; anonymous Viewers (on by default for dashboard
 # embedding) cannot.
 #
-# Same variable name the Mode B collector uses, so both modes configure the same
-# way. A generic webhook is the only receiver shipped, matching
-# observability/alertmanager.yml. Grafana supports native Slack, Discord and
-# Telegram contact points too — add them in the UI, they are not provisioned
-# here because four templated permutations is a lot of surface for a sink most
-# people point at n8n anyway.
+# A generic webhook is the only receiver type provisioned here, matching
+# observability/alertmanager.yml's approach. Grafana supports native Slack,
+# Discord and Telegram contact points too — add them in the UI, they are not
+# provisioned here because four templated permutations is a lot of surface
+# for a sink most people point at n8n anyway.
 apiVersion: 1
 
 contactPoints:

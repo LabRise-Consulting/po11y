@@ -1,0 +1,31 @@
+{
+  "expectations": [
+    {
+      "name": "an execution landed in the last 26 hours",
+      "kind": "max-age-minutes",
+      "maxAgeMinutes": 1560,
+      "sql": "SELECT MAX(started_at) FROM executions"
+    },
+    {
+      "name": "at least one successful execution in the last 26 hours",
+      "kind": "min-count",
+      "min": 1,
+      "windowMinutes": 1560,
+      "sql": "SELECT COUNT(*) FROM executions WHERE status = 'success' AND started_at >= ?"
+    },
+    {
+      "name": "fewer than half the last-26h executions failed",
+      "kind": "min-count",
+      "min": 1,
+      "windowMinutes": 1560,
+      "sql": "SELECT CASE WHEN COUNT(*) = 0 THEN 0 WHEN SUM(CASE WHEN status IN ('error','crashed') THEN 1 ELSE 0 END) * 2 < COUNT(*) THEN 1 ELSE 0 END FROM executions WHERE started_at >= ?"
+    },
+    {
+      "name": "orders grew in the last 26 hours",
+      "kind": "min-count",
+      "min": 1,
+      "windowMinutes": 1560,
+      "sql": "SELECT (SELECT rows FROM datatable_counts WHERE key = 'orders' ORDER BY sampled_at DESC LIMIT 1) - (SELECT rows FROM datatable_counts WHERE key = 'orders' AND sampled_at <= ? ORDER BY sampled_at DESC LIMIT 1)"
+    }
+  ]
+}

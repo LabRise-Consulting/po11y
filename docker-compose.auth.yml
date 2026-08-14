@@ -7,8 +7,8 @@
 # builds on (see docs/forward-auth.md).
 #
 # Bring up ON TOP OF either base stack (the -f order matters — this file second):
-#   Mode A:  docker compose -f docker-compose.yml          -f docker-compose.auth.yml up -d
-#   Mode B:  docker compose -f docker-compose.readonly.yml -f docker-compose.auth.yml up -d
+#   Bundled:    docker compose -f docker-compose.yml          -f docker-compose.auth.yml up -d
+#   Read-only:  docker compose -f docker-compose.readonly.yml -f docker-compose.auth.yml up -d
 #
 # It adds one service (oauth2-proxy) and flips FORWARD_AUTH=true on the existing
 # dashboard, which makes the dashboard entrypoint render the nginx auth_request

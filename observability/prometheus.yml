@@ -1,3 +1,4 @@
+# Prometheus config for the bundled stack (docker-compose.yml).
 global:
   scrape_interval: 30s
 
@@ -6,3 +7,19 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["n8n:5678"]
+
+  # The po11y server's own view of n8n. Distinct from the `n8n` job above and
+  # not a duplicate of it: that one reports only that n8n's port answers,
+  # whereas this one is produced by the same API calls and API key the
+  # dashboard depends on. A revoked key leaves the `n8n` job green and this one
+  # reporting po11y_n8n_up 0 — which is the failure that actually breaks po11y.
+  #
+  # This job is also what observability/alerts.yml assumes: every rule in it
+  # except Po11yServerDown reads a series only the server produces, and
+  # Po11yServerDown itself is `up{job="po11y-server"} == 0`. Without this
+  # scrape those five series do not exist on this stack at all. Port 8081 is
+  # unpublished; this is compose-network only.
+  - job_name: po11y-server
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["server:8081"]

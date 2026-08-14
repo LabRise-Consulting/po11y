@@ -1,14 +1,14 @@
 # Po11y CI — the first pipeline for the stack. Jobs:
-#   test           node's built-in test runner over the html/, site/, lib/,
-#                  collector/ and mcp/ unit tests
+#   test           node's built-in test runner over the html/, site/, lib/
+#                  and server/ unit tests
 #   lint           shellcheck over every shell script
 #   compose-config daemonless `docker compose config` of both compose files,
 #                  plus each merged with the forward-auth overlay
 #   manifests      kustomize build + kubeconform schema validation of deploy/k8s
 #   smoke          full docker-in-docker bring-up via bootstrap.sh + HTTP smoke,
 #                  run twice to also prove bootstrap idempotency
-#   publish-images on git tags only: multi-arch build + push of the collector
-#                  and mcp images to this project's container registry
+#   publish-images on git tags only: multi-arch build + push of the server
+#                  image to this project's container registry
 #
 # All image tags are pinned. test/lint/manifests are skipped on scheduled
 # pipelines (the nightly schedule only cares about the smoke build against a
@@ -49,35 +49,25 @@ workflow:
 
 test:
   stage: validate
-  image: node:22-alpine
+  image: node:24-alpine
   extends: .not-on-schedule
   script:
     # Directory-scoped node test runner. Node expands the ** glob itself (it is
     # quoted so the shell leaves it alone).
-    - node --test "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" "collector/**/*.test.mjs" "mcp/**/*.test.mjs"
-
-sync-check:
-  # Enforces that the three builder Code nodes in workflows/core/maps.json are
-  # byte-identical to what tools/sync-workflows.mjs generates from lib/. If a
-  # lib module changed without re-running `--write`, this fails: edit lib/, run
-  # `node tools/sync-workflows.mjs --write`, commit the regenerated maps.json.
-  stage: validate
-  image: node:22-alpine
-  extends: .not-on-schedule
-  script:
-    - node tools/sync-workflows.mjs --check
+    - node --test "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" "server/**/*.test.mjs"
 
 lint:
   stage: validate
   image: koalaman/shellcheck-alpine:v0.10.0
   extends: .not-on-schedule
   script:
-    - shellcheck bootstrap.sh ai-map-cli.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh
+    - shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh deploy/nginx/dashboard-entrypoint.sh
     # Fail if any dated '# REMOVE AFTER YYYY-MM' liability in bootstrap.sh is past.
     - sh ci/check-expired-markers.sh bootstrap.sh
     # Guard the A3 bug class: an overlay re-inlining grafana's entrypoint
     # silently drops the alert rules (compose replaces, never merges).
     - sh ci/check-grafana-entrypoint.sh
+    - sh ci/check-dashboard-entrypoint.sh
 
 interlock:
   # Proves the exposure interlock stays wired: bootstrap.sh with a non-loopback
@@ -88,8 +78,9 @@ interlock:
   extends: .not-on-schedule
   before_script:
     # Packages the bootstrap lines that run before the interlock need: python3
-    # (ai-map render) + openssl (secret generation), and docker-cli only so the
-    # `command -v docker` prerequisite check passes (no daemon is contacted).
+    # and openssl (its two prerequisite checks, plus secret generation), and
+    # docker-cli only so the `command -v docker` check passes (no daemon is
+    # contacted).
     - apk add --no-cache python3 openssl docker-cli
   script:
     - printf 'BIND_ADDR=192.0.2.1\n' > .env
@@ -110,17 +101,17 @@ compose-config:
   # needs no dind service and no privileged runner, unlike smoke. Dummy values
   # satisfy the required (:?) vars; the rendered output is discarded with -q.
   # --project-name isolates the check from any real project state. This is the
-  # only syntax gate on docker-compose.yml (previously ungated) and the Mode B
-  # docker-compose.readonly.yml.
+  # only syntax gate on docker-compose.yml (previously ungated) and the
+  # read-only docker-compose.readonly.yml.
   stage: validate
   image: docker:27
   extends: .not-on-schedule
   variables:
-    # Mode A required (:?) vars.
+    # Bundled-stack required (:?) vars.
     DB_POSTGRESDB_PASSWORD: dummy
     PO11Y_RO_PASSWORD: dummy
     GRAFANA_ADMIN_PASSWORD: dummy
-    # Mode B required (:?) vars.
+    # Read-only-stack required (:?) vars.
     N8N_API_URL: http://example:5678
     N8N_API_KEY: dummy
     N8N_METRICS_TARGET: example:5678
@@ -138,24 +129,19 @@ compose-config:
   script:
     - docker compose -f docker-compose.yml --project-name po11y-ci-check config -q
     - docker compose -f docker-compose.readonly.yml --project-name po11y-ci-check config -q
-    # Both base modes must also merge cleanly with the forward-auth overlay.
+    # Both base compose files must also merge cleanly with the forward-auth overlay.
     - docker compose -f docker-compose.yml -f docker-compose.auth.yml --project-name po11y-ci-check config -q
     - docker compose -f docker-compose.readonly.yml -f docker-compose.auth.yml --project-name po11y-ci-check config -q
-    # The alerting overlay must merge cleanly onto Mode B, alone and stacked
-    # with forward-auth.
+    # The alerting overlay must merge cleanly onto the read-only stack, alone
+    # and stacked with forward-auth.
     - docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml --project-name po11y-ci-check config -q
     - docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml -f docker-compose.auth.yml --project-name po11y-ci-check config -q
-    # The two dashboard entrypoints carry the security-sensitive auth/form
-    # rendering matrix and must stay byte-identical across modes (same
-    # invariant style as sync-check for the workflow nodes).
     - apk add --no-cache jq
-    - docker compose -f docker-compose.yml --project-name po11y-ci-check config --format json | jq -r '.services.dashboard.entrypoint | join(" ")' > /tmp/ep-a
-    - docker compose -f docker-compose.readonly.yml --project-name po11y-ci-check config --format json | jq -r '.services.dashboard.entrypoint | join(" ")' > /tmp/ep-b
-    - diff -q /tmp/ep-a /tmp/ep-b || { echo "dashboard entrypoints have drifted between compose files"; exit 1; }
-    # The otel overlay must merge cleanly onto Mode A, and must NOT take the
-    # grafana provisioning render with it. Compose replaces an entrypoint rather
-    # than merging it, and an inline copy in the overlay is how all five Mode A
-    # alert rules once vanished from the exact command docs/deployment.md gives.
+    # The otel overlay must merge cleanly onto the bundled stack, and must NOT
+    # take the grafana provisioning render with it. Compose replaces an
+    # entrypoint rather than merging it, and an inline copy in the overlay is
+    # how all five Grafana alert rules once vanished from the exact command
+    # docs/deployment.md gives.
     # Both halves of that failure are asserted: the shared entrypoint survives
     # the merge, and alerting-src is still mounted for it to find.
     - docker compose -f docker-compose.yml -f docker-compose.otel.yml --project-name po11y-ci-check config -q
@@ -168,7 +154,7 @@ compose-config:
         exit 1
       fi
       printf '%s' "$merged" | jq -e '.services.grafana.volumes | map(.target) | index("/etc/grafana/alerting-src")' > /dev/null \
-        || { echo "otel overlay lost the Mode A alerting mount"; exit 1; }
+        || { echo "otel overlay lost the alerting mount"; exit 1; }
     # Prometheus's command is likewise replaced, not merged: the otel overlay
     # restates the base flags to add the remote-write receiver Tempo needs.
     - |
@@ -223,6 +209,10 @@ smoke:
     # bootstrap exposure interlock. Safe here: the stack lives on a throwaway
     # per-build dind network, not a routable host. Allow the open bind.
     PO11Y_ALLOW_OPEN_BIND: "1"
+    # Opts into the in-network compose-exec assertions in ci/smoke.sh (server
+    # /healthz and /metrics), which otherwise stay off because they don't
+    # work against a remote/non-compose BASE_URL.
+    SMOKE_COMPOSE_FILES: '-f docker-compose.yml'
   timeout: 30m
   before_script:
     # curl+jq for smoke.sh; python3+openssl+compose plugin are what bootstrap.sh
@@ -234,18 +224,26 @@ smoke:
     # so the published ports are reachable from this job at the dind alias.
     # AI_MAP_BASE_URL is set explicitly so bootstrap skips its OmniRoute
     # auto-wire (which defaults the api key and model): the key stays empty,
-    # the ai-map workflow reads an empty key as "LLM off", and the smoke
-    # ai-map assertion tests the deterministic heuristic map instead of a
-    # live auto/best-free call whose latency has blown the 90 s budget.
+    # the server reads an empty key as "LLM off", and the smoke ai-map
+    # assertion tests the deterministic heuristic map instead of a live
+    # auto/best-free call whose latency has blown the 90 s budget.
     # OmniRoute itself still boots — the overlay bring-up stays covered.
     - printf 'BIND_ADDR=0.0.0.0\nAI_MAP_BASE_URL=http://omniroute:20128/v1\n' > .env
+    # Examples ARE imported here, unlike every other job. They used to be
+    # redundant: workflows/core/ held the two publisher workflows and bootstrap
+    # imported them unconditionally, so n8n always had something in it. Both are
+    # deleted, workflows/core/ is gone, and --no-examples now leaves n8n
+    # completely empty — which makes the feeds correct but blank, and the
+    # ai-map/forms assertions test nothing. hn-tech-news imports inactive, so it
+    # costs one import and makes no outbound call.
+    #
     # Bring up, smoke, then bring up again (idempotency) and re-smoke. On any
     # failure capture compose logs for the artifact before failing the job.
     - |
       if ! (
-        ./bootstrap.sh --no-examples &&
+        ./bootstrap.sh &&
         BASE_URL=http://docker:8080 ci/smoke.sh &&
-        ./bootstrap.sh --no-examples &&
+        ./bootstrap.sh &&
         BASE_URL=http://docker:8080 ci/smoke.sh
       ); then
         docker compose -f docker-compose.yml -f docker-compose.omniroute.yml logs --tail 200 > compose-logs.txt 2>&1 || true
@@ -259,15 +257,15 @@ smoke:
 publish-images:
   # Prebuilt images so `docker compose up` (or any k8s manifest) can pull
   # instead of building from a clone. Only po11y's OWN code is published —
-  # collector/ and mcp/ — never the root Dockerfile: that one derives from
-  # n8n's image (Sustainable Use License), and Mode A needs the clone for
-  # bootstrap.sh regardless. Both Dockerfiles are dependency-free COPYs of the
-  # repo source, so a "build" here is a file copy: multi-arch via qemu is cheap
-  # (the collector's single RUN is a mkdir+chown).
+  # server/ (the MCP surface ships inside the server image) — never the root
+  # Dockerfile: that one derives from n8n's image (Sustainable Use License),
+  # and the bundled stack needs the clone for bootstrap.sh regardless. The Dockerfile is
+  # a dependency-free COPY of the repo source, so a "build" here is a file
+  # copy: multi-arch via qemu is cheap (one RUN, a mkdir+chown).
   #
-  # Publishes, for each of collector and mcp:
-  #   registry.gitlab.com/labrise/po11y/<name>:<git tag>   (immutable)
-  #   registry.gitlab.com/labrise/po11y/<name>:latest      (moving alias)
+  # Publishes:
+  #   registry.gitlab.com/labrise/po11y/server:<git tag>   (immutable)
+  #   registry.gitlab.com/labrise/po11y/server:latest      (moving alias)
   stage: publish
   image: docker:27
   # Same runner policy as smoke: buildx + qemu need a privileged dind host.
@@ -299,7 +297,7 @@ publish-images:
     # list; the default attestation manifests render as an extra unknown/unknown
     # "architecture" in the GitLab registry UI.
     - |
-      for name in collector mcp; do
+      for name in server; do
         docker buildx build \
           --platform linux/amd64,linux/arm64 \
           --file "$name/Dockerfile" \

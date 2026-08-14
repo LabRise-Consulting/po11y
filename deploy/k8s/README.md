@@ -71,11 +71,35 @@ Access the dashboard using port forwarding:
 kubectl -n po11y port-forward svc/dashboard 8080:80
 ```
 
-## Differences between Kubernetes and Docker Compose
+## Status feeds do not work
+
+**This is the biggest gap on this path, and it is not cosmetic: the dashboard's `status.json`, `map.json`, `forms.json`, `ai-map.json` and `notifications.json` all 404.**
+
+Historically these manifests served feeds the same way the old bundled Docker
+Compose stack did: an n8n Code node wrote them to a shared `po11y-status`
+volume, and nginx aliased the files directly. Compose has since moved to a
+`server` process that polls n8n and serves the feeds itself — see
+[docs/server.md](../../docs/server.md) — and the n8n workflows that used to
+write the old volume are gone from the repository entirely. Nobody ported
+either side of that change to Kubernetes:
+
+- There is no `server` Deployment, Service, or PVC here.
+- The `po11y-status` PVC, its volume mounts on `n8n` and `dashboard`, and the
+  nginx `location` blocks that aliased it have been removed from these
+  manifests — leaving them in would have looked like a working feature that
+  quietly serves nothing, which is worse than an honest 404.
+
+**What full parity would take:** a `server` Deployment (image: `server/Dockerfile`,
+same environment as `docker-compose.yml`'s `server` service), a PVC for its
+SQLite store, a ClusterIP Service, and an nginx ConfigMap rework that proxies
+`/status*.json`, `/map.json`, `/forms.json`, `/ai-map.json`,
+`/notifications.json`, `/mcp/` and `/n8n-table/` to it — mirroring
+`deploy/nginx/feeds-server.conf`. None of that exists yet. Until it does, the
+dashboard's Grafana and Prometheus panels work; the status feeds do not.
+
+## Other differences between Kubernetes and Docker Compose
 
 - **No default authentication**: The Kubernetes Nginx ConfigMap does not include authentication. Protect the dashboard service using an authenticating Ingress.
-- **Mode B unavailable**: No Deployment exists for the standalone collector.
-- **MCP server unavailable**: No Deployment or `/mcp/` route is configured.
-- **Container status panel is empty**: Kubernetes pods do not mount host Docker sockets, so container status cards remain empty.
-- **Persistent storage affinity**: The shared volume `po11y-status` uses `ReadWriteOnce`. Pod affinity pins the `dashboard` pod to the same node as `n8n`.
+- **MCP server unavailable**: No Deployment or `/mcp/` route is configured (see above — this is the same underlying gap as the missing `server` Deployment).
+- **Container status panel is permanently gone**: this is not a Kubernetes-specific gap — see [docs/server.md](../../docs/server.md#accepted-regressions), which applies here too, once feeds work at all.
 - **Replica constraints**: Deployments use `Recreate` update strategies and must run with `replicas: 1`.

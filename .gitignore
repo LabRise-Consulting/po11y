@@ -8,7 +8,7 @@ packs/*
 !packs/.gitkeep
 secrets/
 
-# Dashboard payloads the collector publishes at runtime. They carry the
+# Dashboard payloads the po11y server publishes at runtime. They carry the
 # workflow names of whoever ran the stack, so they must never be committed.
 # Anything under html/ that genuinely belongs in the repo needs a negation
 # below (see packs/.gitkeep for the same pattern).

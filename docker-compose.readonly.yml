@@ -1,96 +1,31 @@
-# Po11y Mode B — read-only collector stack against an EXISTING n8n.
+# Po11y read-only stack — against an EXISTING n8n.
 #
-# Unlike Mode A (docker-compose.yml) this brings up NO n8n, NO postgres and NO
-# docker-socket-proxy, and there is NO bootstrap.sh: the collector polls a
-# remote n8n's public API read-only and publishes the four dashboard feeds
-# (map/forms/ai-map/status) into the shared po11y_status volume, which the
-# dashboard serves. There is no owner account to create and no secrets to
-# generate on disk — everything comes from a handful of env vars:
+# Unlike the bundled stack (docker-compose.yml) this brings up NO n8n and NO
+# postgres, and there is NO bootstrap.sh: the
+# server polls a remote n8n's public API read-only and publishes the
+# dashboard feeds (map/forms/ai-map/status) that the dashboard serves. There
+# is no owner account to create and no secrets to generate on disk —
+# everything comes from a handful of env vars:
 #
 #   N8N_API_URL          https URL of the remote n8n  (required)
 #   N8N_API_KEY          a public-API key on that n8n (required; GET-only use)
 #   N8N_METRICS_TARGET   host:port of the remote n8n /metrics (required; the
 #                        remote must run with N8N_METRICS=true — absent metrics
 #                        degrade gracefully to an empty Grafana tab)
-#   POLL_INTERVAL        seconds between polls (default 600)
+#   SERVER_POLL_INTERVAL seconds between polls (default 60)
 #   EXECUTIONS_LIMIT     recent-executions window per poll (default 100, max
 #                        250 — n8n's API cap; see "Sizing the executions
 #                        window" in docs/configuration.md)
 #   BIND_ADDR / DASHBOARD_PORT / DASHBOARD_BASIC_AUTH / GRAFANA_ADMIN_PASSWORD
-#                        reused verbatim from Mode A (see .env.example)
+#                        reused verbatim from the bundled stack (see .env.example)
 #   ENABLE_FORM_PROXY / FORM_PROXY_UPSTREAM   see the dashboard service + nginx
 #
 # Bring-up (no bootstrap):
 #   docker compose -f docker-compose.readonly.yml up -d
 #
-# See the "Mode B" section of .env.example for the full variable list.
+# See the "Read-only stack" section of .env.example for the full variable list.
 
 services:
-  # Read-only poller. Runs as non-root `node` under a read_only rootfs; the only
-  # writable path is the po11y_status volume (feeds are written tmp+rename inside
-  # it). The n8n API key lives ONLY in this process env — never logged, never
-  # written into a feed, never served. Health on :8081/healthz (counters only).
-  collector:
-    # Repo root is the build context, not collector/: the Dockerfile COPYs both
-    # lib/ and collector/ because collect.mjs imports the shared ../lib builders.
-    build:
-      context: .
-      dockerfile: collector/Dockerfile
-    container_name: po11y-collector
-    restart: unless-stopped
-    environment:
-      - N8N_API_URL=${N8N_API_URL:?set N8N_API_URL to the remote n8n base URL}
-      - N8N_API_KEY=${N8N_API_KEY:?set N8N_API_KEY to a public-API key on that n8n}
-      - POLL_INTERVAL=${POLL_INTERVAL:-600}
-      - EXECUTIONS_LIMIT=${EXECUTIONS_LIMIT:-100}
-      - STATUS_DIR=/po11y-status
-      # Empty = bind every interface, which here is the compose network only
-      # (the health/metrics port is deliberately not published). See .env.example.
-      - BIND_HOST=${BIND_HOST:-}
-      # Optional AI architecture-map prose (OpenAI-compatible endpoint). Empty =
-      # free heuristic map. Never logged; only makeLlm sees the key.
-      - AI_MAP_BASE_URL=${AI_MAP_BASE_URL:-}
-      - AI_MAP_API_KEY=${AI_MAP_API_KEY:-}
-      - AI_MAP_MODEL=${AI_MAP_MODEL:-}
-      # Watchdog, ON by default (ALERTS_ENABLED=false opts out). It reuses the
-      # execution window already fetched for status.json (no extra n8n calls,
-      # still GET-only) and prepends to notifications.json. Nothing is pushed
-      # anywhere unless ALERT_WEBHOOK_URL is set.
-      - ALERTS_ENABLED=${ALERTS_ENABLED:-true}
-      - ALERT_MIN_ERRORS=${ALERT_MIN_ERRORS:-3}
-      - ALERT_ERROR_RATE=${ALERT_ERROR_RATE:-0.5}
-      - ALERT_STALE_AFTER_MIN=${ALERT_STALE_AFTER_MIN:-0}
-      - ALERT_STUCK_AFTER_MIN=${ALERT_STUCK_AFTER_MIN:-0}
-      - ALERT_RENOTIFY_MIN=${ALERT_RENOTIFY_MIN:-360}
-      - ALERT_IGNORE=${ALERT_IGNORE:-}
-      - ALERT_RULES_FILE=${ALERT_RULES_FILE:-}
-      - ALERT_FEED_MAX=${ALERT_FEED_MAX:-50}
-      # Optional outbound push. The URL is a credential for slack/telegram —
-      # it stays in this process env, is never logged in full and never written
-      # into a feed. Empty = alerts stay in notifications.json only.
-      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
-      - ALERT_WEBHOOK_FORMAT=${ALERT_WEBHOOK_FORMAT:-slack}
-      - ALERT_TELEGRAM_CHAT_ID=${ALERT_TELEGRAM_CHAT_ID:-}
-      - ALERT_WEBHOOK_TIMEOUT_MS=${ALERT_WEBHOOK_TIMEOUT_MS:-10000}
-      # Optional off-box dead-man switch, GETed after every successful poll.
-      # Independent of ALERTS_ENABLED: it answers "is po11y alive at all",
-      # which nothing running inside this container can answer for itself.
-      # Also a credential (monitor id in the path) — same redaction rules.
-      - ALERT_HEARTBEAT_URL=${ALERT_HEARTBEAT_URL:-}
-      - ALERT_HEARTBEAT_TIMEOUT_MS=${ALERT_HEARTBEAT_TIMEOUT_MS:-10000}
-    read_only: true
-    user: node
-    volumes:
-      - po11y_status:/po11y-status
-    healthcheck:
-      # node-only probe (the alpine node image has no wget/curl). 503 after three
-      # consecutive failed polls -> unhealthy -> orchestrator restart.
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: po11y-prometheus
@@ -103,7 +38,7 @@ services:
     # envsubst, so — mirroring the grafana service's sed entrypoint rather than the
     # dashboard's envsubst one — we sed the remote target into a rendered copy of
     # the config on the writable tsdb volume, then exec prometheus against it. The
-    # retention flag is interpolated by compose (same as Mode A's `command`).
+    # retention flag is interpolated by compose (same as the bundled stack's `command`).
     entrypoint:
       - /bin/sh
       - -euc
@@ -128,11 +63,11 @@ services:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
-      # There is no postgres in Mode B: the n8n-postgres datasource provisioned
-      # from observability/grafana/provisioning is inert here (and any dashboard
-      # panel backed by it stays empty) — the prometheus datasource is what feeds
-      # the Mode B tabs. These are passed only so provisioning interpolation has
-      # values; they wire up to nothing.
+      # There is no postgres here: the n8n-postgres datasource provisioned
+      # from observability/grafana/provisioning is inert (and any dashboard
+      # panel backed by it stays empty) — the prometheus datasource is what
+      # feeds these tabs instead. These are passed only so provisioning
+      # interpolation has values; they wire up to nothing.
       - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE:-n8n}
       - PO11Y_RO_USER=po11y_ro
       - PO11Y_RO_PASSWORD=${PO11Y_RO_PASSWORD:-}
@@ -148,10 +83,10 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=${DASHBOARD_GRAFANA_EMBED:-true}
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       - GF_SECURITY_ALLOW_EMBEDDING=${DASHBOARD_GRAFANA_EMBED:-true}
-    # The same script Mode A uses. Mode B mounts no alerting-src, so the script's
-    # alerting branch is skipped: four of the five Mode A rules query a postgres
-    # that does not exist here. Mode B's alerting is the collector watchdog and
-    # the optional docker-compose.alerts.yml overlay.
+    # The same script the bundled stack uses. This file mounts no alerting-src,
+    # so the script's alerting branch is skipped: four of the five Grafana
+    # rules query a postgres that does not exist here. Alerting here is the
+    # server's watchdog and the optional docker-compose.alerts.yml overlay.
     entrypoint: ["sh", "/etc/po11y-grafana-entrypoint.sh"]
     volumes:
       - ./observability/grafana/entrypoint.sh:/etc/po11y-grafana-entrypoint.sh:ro
@@ -160,8 +95,8 @@ services:
     depends_on:
       - prometheus
 
-  # Same nginx image and config as Mode A. The only web-served writer of
-  # po11y_status is the collector; the dashboard mounts it read-only.
+  # Same nginx image and config as the bundled stack. Feeds are proxied to the
+  # server service (below) — see nginx.conf's feed-routing include.
   dashboard:
     image: nginx:1.27-alpine
     container_name: po11y-dashboard
@@ -169,15 +104,13 @@ services:
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${DASHBOARD_PORT:-8080}:80"
     environment:
-      # Read-only n8n DataTable proxy key (optional; see docs/configuration.md).
-      - N8N_READ_API_KEY=${N8N_READ_API_KEY:-}
       # Optional "user:password" gate for the whole dashboard (see .env.example).
       - DASHBOARD_BASIC_AUTH=${DASHBOARD_BASIC_AUTH:-}
-      # Form-trigger submit proxy. OFF by default in Mode B: on a shared team box
+      # Form-trigger submit proxy. OFF by default here: on a shared team box
       # the dashboard's single Basic-Auth password would otherwise let anyone
       # fire n8n form-triggers, bypassing n8n's own auth (see nginx.conf's /form/
       # note). If you deliberately enable it, point FORM_PROXY_UPSTREAM at the
-      # remote n8n — there is no `n8n` DNS name in Mode B.
+      # remote n8n — there is no `n8n` DNS name on this stack.
       - ENABLE_FORM_PROXY=${ENABLE_FORM_PROXY:-false}
       - FORM_PROXY_UPSTREAM=${FORM_PROXY_UPSTREAM:-http://n8n:5678}
       # Comma-separated OIDC group names allowed to fire forms. ENFORCED ONLY
@@ -189,136 +122,16 @@ services:
       # docker-compose.auth.yml overlay flips it on; when on, the entrypoint
       # renders the nginx auth_request include and disables Basic Auth.
       - FORWARD_AUTH=${FORWARD_AUTH:-false}
-    entrypoint:
-      - sh
-      - -euc
-      - |
-        # Explicit variable list: only the key is substituted; every other
-        # dollar-variable in the template stays an nginx runtime variable.
-        # The key is whitelisted to the n8n API-key (JWT) charset first, so
-        # no value can break out of the quoted header directive into nginx
-        # syntax.
-        N8N_READ_API_KEY="$$(printf %s "$$N8N_READ_API_KEY" | tr -cd 'A-Za-z0-9._~+/=-')" \
-          envsubst '$${N8N_READ_API_KEY}' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf
-        # Forward auth (oauth2-proxy overlay). FORWARD_AUTH=true renders the
-        # nginx auth_request include; else an empty file. Identity is lifted from
-        # oauth2-proxy's /oauth2/auth subrequest RESPONSE via auth_request_set
-        # ($$upstream_http_*) — NEVER from client-supplied request headers, which
-        # are forgeable (see nginx.conf). The include is always written before
-        # `exec nginx`, so nginx never references a missing file.
-        if [ "$$FORWARD_AUTH" = "true" ]; then
-          {
-            printf '%s\n' 'auth_request /oauth2/auth;'
-            printf '%s\n' 'error_page 401 = /oauth2/sign_in;'
-            printf '%s\n' 'auth_request_set $$auth_email $$upstream_http_x_auth_request_email;'
-            printf '%s\n' 'auth_request_set $$auth_groups $$upstream_http_x_auth_request_groups;'
-          } > /etc/nginx/forward-auth.conf
-        else
-          : > /etc/nginx/forward-auth.conf
-        fi
-        # Basic Auth gate. Forward-auth WINS when both are set: a Basic prompt on
-        # top of the OIDC redirect is double auth / broken UX, so log a one-line
-        # notice and write an empty auth.conf (forward-auth is the identity source).
-        if [ "$$FORWARD_AUTH" = "true" ] && [ -n "$$DASHBOARD_BASIC_AUTH" ]; then
-          echo "po11y: FORWARD_AUTH=true overrides DASHBOARD_BASIC_AUTH — Basic Auth disabled (identity via oauth2-proxy)." >&2
-          : > /etc/nginx/auth.conf
-        elif [ -n "$$DASHBOARD_BASIC_AUTH" ]; then
-          user="$${DASHBOARD_BASIC_AUTH%%:*}"
-          pass="$${DASHBOARD_BASIC_AUTH#*:}"
-          printf '%s:%s\n' "$$user" "$$(cryptpw -m sha512 "$$pass")" > /etc/nginx/.htpasswd
-          printf 'auth_basic "po11y";\nauth_basic_user_file /etc/nginx/.htpasswd;\n' > /etc/nginx/auth.conf
-        else
-          : > /etc/nginx/auth.conf
-        fi
-        # --- /form/ submit proxy + per-group authorization -------------------
-        # Rendering matrix (ENABLE_FORM_PROXY x FORWARD_AUTH x FORM_ALLOWED_GROUPS).
-        # ENABLE_FORM_PROXY default: true in Mode A, false in Mode B.
-        #   1) ENABLE_FORM_PROXY!=true             -> empty include, no /form/.
-        #   2) enabled, FORWARD_AUTH!=true         -> open proxy past the shared
-        #      gate (legacy). No verified identity exists to authorize against, so
-        #      FORM_ALLOWED_GROUPS cannot be enforced; if it is set we log a
-        #      fail-loud notice rather than imply an authz that isn't there.
-        #   3) enabled, FORWARD_AUTH=true, no groups -> DENY ALL (return 403):
-        #      deny by default; an authed user with no allowlisted group can't fire.
-        #   4) enabled, FORWARD_AUTH=true, groups set -> allow only when the
-        #      verified $$auth_groups (set by auth_request_set from oauth2-proxy's
-        #      subrequest RESPONSE, NEVER the client-forgeable
-        #      $$http_x_forwarded_groups) contains an allowlisted group.
-        # oauth2-proxy emits one X-Auth-Request-Groups response header per group
-        # (header.Add), which nginx joins into $$auth_groups as ", "-separated, so
-        # the map matches each name as a whole comma-delimited token (a bare space
-        # is NOT a separator, so a multi-word group name can't match a shorter one).
-        # The `map` lives in its own http-scope conf.d file (map is invalid in the
-        # server-scope form-proxy.conf); always (re)written so a stale allowlist
-        # never survives a config change across a container restart.
-        scrub_hdrs='X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Groups X-Forwarded-User X-Forwarded-Email X-Forwarded-Groups'
-        : > /etc/nginx/conf.d/form-authz.conf
-        if [ "$$ENABLE_FORM_PROXY" = "true" ]; then
-          # Whitelist to scheme://host[:port] so no value escapes the directive;
-          # the nginx runtime variable ($$form_upstream) + resolver defer DNS.
-          upstream="$$(printf %s "$$FORM_PROXY_UPSTREAM" | tr -cd 'A-Za-z0-9.:/-')"
-          : "$${upstream:=http://n8n:5678}"
-          if [ "$$FORWARD_AUTH" = "true" ]; then
-            # Split on comma, whitelist each name to [A-Za-z0-9_-] (drops spaces,
-            # semicolons, braces -> nothing escapes the generated regex), drop
-            # empties, join with '|'. Empty after filtering == unset -> deny.
-            alt="$$(printf %s "$$FORM_ALLOWED_GROUPS" | tr ',' '\n' | tr -cd 'A-Za-z0-9_\n-' | grep -v '^$$' | paste -sd '|' -)"
-            if [ -n "$$alt" ]; then
-              {
-                printf 'map $$auth_groups $$form_allowed {\n'
-                printf '  default 0;\n'
-                # Comma-anchored matcher. oauth2-proxy joins the per-group
-                # headers with ", ", so comma is the ONLY group separator; \s*
-                # merely trims whitespace adjacent to a comma. A bare space is NOT
-                # a separator, so a multi-word group ("x admins") can never match
-                # an allowlisted "admins". The regex is passed as the printf
-                # ARGUMENT (not the format) so busybox printf can't mangle the \s;
-                # quoted in the map so it stays one field despite the metachars.
-                printf '  %s 1;\n' '"~(^|,)\s*('"$$alt"')\s*(,|$$)"'
-                printf '}\n'
-              } > /etc/nginx/conf.d/form-authz.conf
-              {
-                printf '%s\n' 'location /form/ {'
-                printf '%s\n' '  limit_except POST { deny all; }'
-                # `if` here is the sanctioned return-only form (no side effects).
-                printf '%s\n' '  if ($$form_allowed = 0) { return 403; }'
-                printf '  set $$form_upstream %s;\n' "$$upstream"
-                printf '%s\n' '  proxy_pass $$form_upstream;'
-                # Scrub client-supplied identity headers so a forged
-                # X-Auth-Request-* / X-Forwarded-* can never reach n8n.
-                for h in $$scrub_hdrs; do
-                  printf '  proxy_set_header %s "";\n' "$$h"
-                done
-                printf '%s\n' '}'
-              } > /etc/nginx/form-proxy.conf
-            else
-              {
-                printf '%s\n' 'location /form/ {'
-                printf '%s\n' '  # deny by default: FORWARD_AUTH on, FORM_ALLOWED_GROUPS empty.'
-                printf '%s\n' '  return 403;'
-                printf '%s\n' '}'
-              } > /etc/nginx/form-proxy.conf
-            fi
-          else
-            if [ -n "$$FORM_ALLOWED_GROUPS" ]; then
-              echo "po11y: FORM_ALLOWED_GROUPS is set but FORWARD_AUTH is off - group authorization has no enforcement point (no verified identity); the /form/ proxy stays open past the shared gate." >&2
-            fi
-            {
-              printf '%s\n' 'location /form/ {'
-              printf '%s\n' '  limit_except POST { deny all; }'
-              printf '  set $$form_upstream %s;\n' "$$upstream"
-              printf '%s\n' '  proxy_pass $$form_upstream;'
-              for h in $$scrub_hdrs; do
-                printf '  proxy_set_header %s "";\n' "$$h"
-              done
-              printf '%s\n' '}'
-            } > /etc/nginx/form-proxy.conf
-          fi
-        else
-          : > /etc/nginx/form-proxy.conf
-        fi
-        exec nginx -g 'daemon off;'
+      # Upstream for the feeds proxied to the po11y server (below). See
+      # nginx.conf's feed-routing include and deploy/nginx/feeds-server.conf.
+      - FEED_UPSTREAM=${FEED_UPSTREAM:-http://server:8081}
+    # Shared by every compose file that runs the dashboard. Do NOT inline this
+    # again: compose replaces an entrypoint rather than merging it (the same
+    # A3 bug class the grafana entrypoint had) — ci/check-dashboard-entrypoint.sh
+    # enforces the canonical form.
+    entrypoint: ["sh", "/etc/po11y-dashboard-entrypoint.sh"]
     volumes:
+      - ./deploy/nginx/dashboard-entrypoint.sh:/etc/po11y-dashboard-entrypoint.sh:ro
       - ./html:/usr/share/nginx/html:ro
       - ./site:/usr/share/nginx/site:ro
       # Read-only; only the one file exposed by nginx's exact-match location is
@@ -326,36 +139,58 @@ services:
       - ./lib:/usr/share/nginx/lib:ro
       - ./nginx.conf:/etc/nginx/nginx.conf.template:ro
       - ./config.json:/run/po11y/config.json:ro
-      - po11y_status:/po11y-status:ro
+      - ./deploy/nginx:/etc/nginx/po11y-feeds:ro
     depends_on:
       - grafana
 
-  mcp:
+  # The po11y server (see docker-compose.yml's comment). This stack reuses
+  # the same GET-only N8N_API_KEY. No GRAFANA_URL here: this stack provisions
+  # no postgres datasource, so po11y_sql is off by construction.
+  server:
     build:
       context: .
-      dockerfile: mcp/Dockerfile
-    container_name: po11y-mcp
+      dockerfile: server/Dockerfile
+    container_name: po11y-server
     restart: unless-stopped
     read_only: true
     environment:
-      - PORT=8082
-      - STATUS_DIR=/po11y-status
-      - PROMETHEUS_URL=http://prometheus:9090
-      # Mode B already holds a GET-only key for the remote n8n; reuse it.
-      - N8N_API_URL=${N8N_API_URL:?set N8N_API_URL in .env}
-      - N8N_API_KEY=${N8N_API_KEY:?set N8N_API_KEY in .env}
-      - N8N_READ_API_KEY=${N8N_READ_API_KEY:-}
-      # No GRAFANA_URL here: Mode B provisions no postgres datasource, so
-      # po11y_sql reports itself unavailable by construction rather than by
-      # configuration.
-      - CONFIG_PATH=/app/config.json
+      N8N_API_URL: ${N8N_API_URL:?set N8N_API_URL to the remote n8n base URL}
+      N8N_API_KEY: ${N8N_API_KEY:?set N8N_API_KEY to a public-API key on that n8n}
+      SYNC_INTERVAL: ${SERVER_SYNC_INTERVAL:-600}
+      POLL_INTERVAL: ${SERVER_POLL_INTERVAL:-60}
+      N8N_TIMEOUT_MS: ${N8N_TIMEOUT_MS:-30000}
+      EXECUTIONS_LIMIT: ${EXECUTIONS_LIMIT:-100}
+      PO11Y_RETENTION_DAYS: ${PO11Y_RETENTION_DAYS:-30}
+      PO11Y_PACK: ${PO11Y_PACK:-}
+      PO11Y_SCOPE: ${PO11Y_SCOPE:-default}
+      PO11Y_INGEST_TOKEN: ${PO11Y_INGEST_TOKEN:-}
+      PO11Y_DATATABLES: ${PO11Y_DATATABLES:-}
+      PO11Y_MAX_BODY_BYTES: ${PO11Y_MAX_BODY_BYTES:-1000000}
+      AI_MAP_BASE_URL: ${AI_MAP_BASE_URL:-}
+      AI_MAP_API_KEY: ${AI_MAP_API_KEY:-}
+      AI_MAP_MODEL: ${AI_MAP_MODEL:-}
+      ALERTS_ENABLED: ${ALERTS_ENABLED:-true}
+      ALERT_MIN_ERRORS: ${ALERT_MIN_ERRORS:-}
+      ALERT_ERROR_RATE: ${ALERT_ERROR_RATE:-}
+      ALERT_STALE_AFTER_MIN: ${ALERT_STALE_AFTER_MIN:-}
+      ALERT_STUCK_AFTER_MIN: ${ALERT_STUCK_AFTER_MIN:-}
+      ALERT_IGNORE: ${ALERT_IGNORE:-}
+      ALERT_RENOTIFY_MIN: ${ALERT_RENOTIFY_MIN:-}
+      ALERT_FEED_MAX: ${ALERT_FEED_MAX:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_WEBHOOK_FORMAT: ${ALERT_WEBHOOK_FORMAT:-slack}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
+      ALERT_WEBHOOK_TIMEOUT_MS: ${ALERT_WEBHOOK_TIMEOUT_MS:-10000}
+      ALERT_HEARTBEAT_URL: ${ALERT_HEARTBEAT_URL:-}
+      ALERT_HEARTBEAT_TIMEOUT_MS: ${ALERT_HEARTBEAT_TIMEOUT_MS:-10000}
+      PROMETHEUS_URL: http://prometheus:9090
+      N8N_READ_API_KEY: ${N8N_READ_API_KEY:-}
+      CONFIG_PATH: /app/config.json
     volumes:
-      - po11y_status:/po11y-status:ro
+      - po11y_store:/data
       - ./config.json:/app/config.json:ro
-    depends_on:
-      - dashboard
 
 volumes:
-  po11y_status:
   prometheus_data:
   grafana_data:
+  po11y_store:

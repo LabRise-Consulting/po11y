@@ -1,7 +1,8 @@
-# Po11y alerting overlay — Prometheus rules + Alertmanager, on top of Mode B.
+# Po11y alerting overlay — Prometheus rules + Alertmanager, on top of the
+# read-only stack.
 #
-# Opt-in, exactly like docker-compose.auth.yml: the default Mode B stack stays
-# one read-only collector plus the dashboard, and nobody who does not want a
+# Opt-in, exactly like docker-compose.auth.yml: the default read-only stack
+# stays the server plus the dashboard, and nobody who does not want a
 # second alerting daemon has to run one.
 #
 #   docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml up -d
@@ -11,8 +12,8 @@
 #                              an n8n webhook node is the natural choice here.
 #                              This is a credential; see docs/security.md.
 #
-# This is an alternative to the collector's own ALERT_WEBHOOK_URL push, not a
-# companion to it. Running both means every alert arrives twice.
+# This is an alternative to the server service's own ALERT_WEBHOOK_URL push,
+# not a companion to it. Running both means every alert arrives twice.
 services:
   prometheus:
     # `entrypoint` is REPLACED by an overlay, never merged, so the base command
