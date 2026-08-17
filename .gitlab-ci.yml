@@ -170,12 +170,37 @@ manifests:
   stage: validate
   image: alpine/k8s:1.31.1
   extends: .not-on-schedule
+  # kubeconform fetches one JSON schema per resource from
+  # raw.githubusercontent.com, which puts a third-party host on the critical
+  # path of a job that validates nothing but local files. On 2026-08-17 that
+  # host returned 503 for every request during a GitHub outage: all 23
+  # resources reported an ERROR rather than "invalid" (`Valid: 0, Invalid: 0,
+  # Errors: 23`), so the job failed while every manifest was in fact fine, and
+  # it spent 35 minutes doing it because kubeconform retries each fetch three
+  # times. Anonymous requests to that host are also rate-limited, which is the
+  # same failure on a busy day rather than an outage.
+  #
+  # -cache writes each downloaded schema into the project directory, which
+  # GitLab then carries between runs, so only a cold cache touches the network.
+  # The timeout bounds the cold-cache-plus-unreachable-host case: a healthy run
+  # of this job takes about 8 seconds.
+  timeout: 5m
   variables:
     KUBECONFORM_VERSION: "0.6.7"
+    KUBECONFORM_CACHE: .kubeconform-cache
+  cache:
+    # Bumping KUBECONFORM_VERSION rotates the cache. Entries are keyed by URL,
+    # so a stale one validates against the schema set that was current when it
+    # was written — older API knowledge, not wrong answers.
+    key: "kubeconform-$KUBECONFORM_VERSION"
+    paths:
+      - .kubeconform-cache/
   script:
+    # kubeconform requires the cache directory to exist; it will not create it.
+    - mkdir -p "$KUBECONFORM_CACHE"
     # alpine/k8s ships kustomize + curl; add a pinned kubeconform release.
     - curl -sSLf "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar -xz -C /usr/local/bin kubeconform
-    - kustomize build deploy/k8s | kubeconform -strict -summary
+    - kustomize build deploy/k8s | kubeconform -strict -summary -cache "$KUBECONFORM_CACHE"
 
 smoke:
   stage: smoke

@@ -27,8 +27,11 @@ sh ci/check-dashboard-entrypoint.sh
 docker compose -f docker-compose.yml config -q
 docker compose -f docker-compose.readonly.yml config -q
 
-# Kubernetes manifest validation
-kustomize build deploy/k8s | kubeconform -strict -summary
+# Kubernetes manifest validation. `-cache` keeps the downloaded JSON schemas
+# in the working tree (gitignored), so only the first run needs
+# raw.githubusercontent.com to be reachable.
+mkdir -p .kubeconform-cache
+kustomize build deploy/k8s | kubeconform -strict -summary -cache .kubeconform-cache
 ```
 
 You can also install and run pre-commit hooks:

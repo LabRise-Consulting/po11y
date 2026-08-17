@@ -28,3 +28,8 @@ site/site
 .superpowers/
 docs/superpowers/
 .claude/
+
+# Kubeconform's downloaded JSON schemas. Populated by CI (and by anyone running
+# the manifests check locally) so the validation stops depending on
+# raw.githubusercontent.com being reachable on every run.
+.kubeconform-cache/

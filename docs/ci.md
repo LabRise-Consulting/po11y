@@ -39,7 +39,7 @@ Pushes to branches with open merge requests suppress duplicate branch pipelines.
 | `lint` | `shellcheck-alpine:v0.10.0` | Runs ShellCheck on all shell scripts, verifies no expired markers exist in `bootstrap.sh`, and validates both shared entrypoints — Grafana's (`ci/check-grafana-entrypoint.sh`) and the dashboard's (`ci/check-dashboard-entrypoint.sh`). |
 | `interlock` | `alpine:3.20` | Verifies that `bootstrap.sh` exits with code 78 when configured with a non-loopback bind address without authentication. |
 | `compose-config` | `docker:27` | Validates both Docker Compose files (bundled and read-only) and their overlays using `docker compose config`. |
-| `manifests` | `alpine/k8s:1.31.1` | Validates Kubernetes manifests in `deploy/k8s` against Kubernetes schemas using `kustomize` and `kubeconform -strict`. |
+| `manifests` | `alpine/k8s:1.31.1` | Validates Kubernetes manifests in `deploy/k8s` against Kubernetes schemas using `kustomize` and `kubeconform -strict`. The schemas are cached between runs, so only a cold cache needs `raw.githubusercontent.com`; the job is capped at 5 minutes because an unreachable schema host otherwise fails slowly. |
 | `smoke` | `docker:27` + dind | Starts the full bundled stack in Docker-in-Docker, verifies 16 HTTP assertions with `ci/smoke.sh`, and runs bootstrap twice to verify idempotency. |
 
 You can run all validation jobs locally without starting the docker stack. See [CONTRIBUTING.md](../CONTRIBUTING.md) for local commands.
