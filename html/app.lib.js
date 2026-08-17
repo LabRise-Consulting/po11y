@@ -169,6 +169,105 @@ export const scopedSrc = (src, activeScope) => (!activeScope || activeScope === 
 export const withTab = (t) => !t.id ? t.src
   : String(t.src ?? '') + (String(t.src).includes('?') ? '&' : '?') + 'tab=' + encodeURIComponent(t.id);
 
+// ---- hash routing -----------------------------------------------------------
+// Which sidebar view the address bar names. Without it a reload always landed
+// on Overview, so a tab could not be bookmarked, shared, or survive the reload
+// a scope switch does. The hash is written in the terms a user would type
+// ("#reports/daily", "#map"), not in dom ids: grouped entries carry a "g-"
+// prefixed id purely to keep their generated element ids apart.
+//
+// The three functions below are the whole routing table — app.js only owns
+// showing a view and selecting a pane.
+
+/** A config label or id as a hash token: lowercase, a-z0-9 runs joined by "-". */
+export const routeSlug = (s) => String(s ?? '').toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+/**
+ * Split "#view/sub" into its two slugs. Leading "#" and "#/" are both accepted,
+ * as is a percent-encoded token — a hash typed by hand or copied out of a chat
+ * client can arrive either way. An undecodable escape is slugged raw rather
+ * than thrown: a bad hash must fall back to Overview, never break boot.
+ */
+export function parseHash(hash) {
+  let raw = String(hash ?? '').replace(/^#\/?/, '');
+  try { raw = decodeURIComponent(raw); } catch { /* keep it raw */ }
+  const [view, sub] = raw.split('/');
+  return { view: routeSlug(view), sub: routeSlug(sub) };
+}
+
+// Every token that may name this entry: its id, its id without the group
+// prefix, and its label.
+const entryKeys = (e) => [routeSlug(e.id), routeSlug(String(e.id).replace(/^g-/, '')), routeSlug(e.label)];
+const tabKeys = (t) => [routeSlug(t.id), routeSlug(t.label)];
+
+/**
+ * Resolve a hash against the sidebar entries, or null when it names nothing.
+ *
+ * A sub-tab may be addressed on its own ("#map"), because that is what a user
+ * reads on the tab strip — the group it happens to live in is an implementation
+ * detail of the sidebar. A "#view/sub" pair whose sub does not exist still
+ * opens the view: the tab strip then falls back to its remembered pane rather
+ * than the whole route being dropped.
+ *
+ * @param {string} hash - location.hash
+ * @param {Array<{id: string, label: string, tabs: Array<{id: string, label: string}>}>} entries
+ * @returns {{view: string, sub: string|null}|null}
+ */
+export function resolveRoute(hash, entries = []) {
+  const { view, sub } = parseHash(hash);
+  if (!view) return null;
+  const entry = entries.find((e) => entryKeys(e).includes(view));
+  if (entry) {
+    const t = sub && (entry.tabs || []).find((x) => tabKeys(x).includes(sub));
+    return { view: entry.id, sub: t ? t.id : null };
+  }
+  // Not a view — maybe a tab inside a grouped one, named without its group.
+  for (const e of entries) {
+    const t = (e.tabs || []).find((x) => tabKeys(x).includes(view));
+    if (t) return { view: e.id, sub: t.id };
+  }
+  return null;
+}
+
+/**
+ * The canonical hash for a view (and pane), the inverse of resolveRoute. The
+ * sub is written only for an entry that actually shows a tab strip — a lone
+ * tab's pane id would be noise in the address bar.
+ */
+export function routeHash(view, sub, entries = []) {
+  const entry = entries.find((e) => e.id === view);
+  if (!entry) return `#${routeSlug(view)}`;
+  const base = routeSlug(String(entry.id).replace(/^g-/, ''));
+  return (sub && (entry.tabs || []).length > 1) ? `#${base}/${routeSlug(sub)}` : `#${base}`;
+}
+
+// ---- executions -------------------------------------------------------------
+
+/**
+ * The status dot for one `byWorkflow` row: `fail` when the recent window holds
+ * failures, `run` when the workflow has an execution still going, `ok`
+ * otherwise.
+ *
+ * Failure outranks activity on purpose. A workflow that is erroring AND running
+ * is a failing workflow that happens to be busy, and a green-or-blue dot over a
+ * red state is exactly the false all-clear this codebase keeps re-learning.
+ *
+ * `running` is absent on a status.json written by a server older than this
+ * field, so a missing count reads as none rather than as activity.
+ */
+export const execDot = (w) => (w?.errors ? 'fail' : (w?.running ? 'run' : 'ok'));
+
+/**
+ * The "N running" fragment for an execution row, or '' when nothing is in
+ * flight — the row should not carry a "0 running" that means "idle".
+ *
+ * Freshness is bounded by the poll: the server learns this from n8n's public
+ * API every POLL_INTERVAL (30 s by default), so this is "running as of the last
+ * poll", not a live subscription.
+ */
+export const runningText = (n) => (n ? `${n} running` : '');
+
 // ---- metrics ----------------------------------------------------------------
 
 /**

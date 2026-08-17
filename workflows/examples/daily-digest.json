@@ -1,0 +1,34 @@
+{
+  "id": "po11ydigest00000",
+  "name": "Po11y example - Daily digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "days", "triggerAtHour": 8, "triggerAtMinute": 0 }]
+        }
+      },
+      "id": "a5000000-0000-0000-0000-000000000001",
+      "name": "Every day at 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demo workflow: rolls up the previous day into one summary item.\n// Zero credentials and no outbound calls — the numbers are derived from the\n// clock, not from a real source. It exists so a fresh install shows a second\n// schedule cadence next to the 30-minute one on the architecture map.\nconst now = new Date();\nconst since = new Date(now.getTime() - 24 * 60 * 60 * 1000);\nreturn [\n  {\n    json: {\n      window_start: since.toISOString(),\n      window_end: now.toISOString(),\n      title: `Digest for ${since.toISOString().slice(0, 10)}`,\n      status: 'info',\n    },\n  },\n];"
+      },
+      "id": "a5000000-0000-0000-0000-000000000002",
+      "name": "Summarise yesterday",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Every day at 08:00": {
+      "main": [[{ "node": "Summarise yesterday", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

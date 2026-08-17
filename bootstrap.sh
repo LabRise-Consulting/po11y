@@ -321,7 +321,7 @@ if [ "$NEEDS_SETUP" = "true" ]; then
   CODE="$(printf '%s' "$SETUP_BODY" | tail -n1)"
   if [ "$CODE" = "200" ]; then
     echo "bootstrap: n8n owner created ($EMAIL) — password in $ENV_FILE"
-  elif [ "$CODE" = "400" ] && printf '%s' "$SETUP_BODY" | grep -qi 'already setup\|already set up'; then
+  elif [ "$CODE" = "400" ] && printf '%s' "$SETUP_BODY" | grep -qiE 'already set ?up'; then
     # On an idempotent re-run /rest/settings can still report
     # showSetupOnFirstLoad=true for a window; the POST is the authority. Not a
     # failure — say so instead of the manual-setup warning.

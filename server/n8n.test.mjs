@@ -140,8 +140,8 @@ test('fetchStatus builds the executions summary shape, sorted by count desc', as
   // errors counts failures WITHIN the recent window so the pair is a real rate.
   assert.equal(ex.errors, 1);
   assert.equal(ex.byWorkflow.length, 2);
-  assert.deepEqual(ex.byWorkflow[0], { name: 'Alpha', id: '1', count: 3, errors: 1, lastAt: '2026-07-19T03:00:00Z' });
-  assert.deepEqual(ex.byWorkflow[1], { name: 'Beta', id: '2', count: 1, errors: 0, lastAt: '2026-07-19T01:30:00Z' });
+  assert.deepEqual(ex.byWorkflow[0], { name: 'Alpha', id: '1', count: 3, errors: 1, lastAt: '2026-07-19T03:00:00Z', running: 0 });
+  assert.deepEqual(ex.byWorkflow[1], { name: 'Beta', id: '2', count: 1, errors: 0, lastAt: '2026-07-19T01:30:00Z', running: 0 });
 });
 
 test('fetchStatus counts crashed executions as errors, both totals and per-workflow', async () => {
@@ -155,6 +155,25 @@ test('fetchStatus counts crashed executions as errors, both totals and per-workf
   assert.equal(ex.errors, 2, 'crashed is a failure; canceled is not');
   assert.equal(ex.byWorkflow.find((w) => w.id === '1').errors, 2);
   assert.equal(ex.byWorkflow.find((w) => w.id === '2').errors, 0);
+});
+
+// The dashboard's execution rows claim to say what is running "right now".
+// summarizeExecutions has always tracked the still-running executions for the
+// watchdog's `stuck` rule; the status projection used to drop them, so the
+// dashboard could only ever show counts that had already finished.
+test('fetchStatus reports the per-workflow count of still-running executions', async () => {
+  const recent = [
+    { id: 'e1', workflowId: '1', workflowName: 'Alpha', status: 'running', startedAt: '2026-07-19T03:00:00Z' },
+    { id: 'e2', workflowId: '1', workflowName: 'Alpha', status: 'running', startedAt: '2026-07-19T02:50:00Z' },
+    { id: 'e3', workflowId: '1', workflowName: 'Alpha', status: 'success', startedAt: '2026-07-19T02:00:00Z' },
+    { id: 'e4', workflowId: '2', workflowName: 'Beta', status: 'success', startedAt: '2026-07-19T01:30:00Z' },
+  ];
+  const { status } = await fetchStatus(async () => jsonRes({ data: recent }), N8N, 'k', { now: Date.now() });
+  const ex = status.executions;
+  assert.equal(ex.byWorkflow.find((w) => w.id === '1').running, 2);
+  // A number, not undefined: the renderer should not have to distinguish
+  // "none running" from "this build does not report running".
+  assert.equal(ex.byWorkflow.find((w) => w.id === '2').running, 0);
 });
 
 test('fetchStatus name falls back to workflowId when the execution omits a name', async () => {
@@ -257,8 +276,32 @@ test('makeLlm sends stream:false — Mode A OmniRoute routes default to SSE with
   await llm('prompt');
   assert.equal(body.stream, false, 'without this res.json() throws on an SSE reply');
   assert.equal(body.model, 'auto/best-free');
-  assert.equal(body.max_tokens, 3000);
+  assert.equal(body.max_tokens, 8000);
   assert.deepEqual(body.response_format, { type: 'json_object' });
+});
+
+test('makeLlm takes the token budget from config so a reasoning model can be paid for', async () => {
+  let body = null;
+  const fetchFn = async (url, opts) => {
+    body = JSON.parse(opts.body);
+    return jsonRes({ choices: [{ message: { content: '{}' } }] });
+  };
+  const llm = makeLlm(fetchFn, { base: AI, key: 'k', model: 'm', maxTokens: 16_000 });
+  await llm('prompt');
+  assert.equal(body.max_tokens, 16_000);
+});
+
+test('makeLlm reports a truncated answer as truncation, not as broken JSON', async () => {
+  // A reasoning model spends the SAME budget on its thinking, so the visible
+  // answer can stop mid-string. Returning it hands the caller half a document
+  // and a "Unterminated string in JSON" that names neither the cause nor the
+  // fix — and the ai-map then degrades to heuristic text for good, on the
+  // bundled default route, with nothing in the log pointing at max_tokens.
+  const fetchFn = async () => jsonRes({
+    choices: [{ finish_reason: 'length', message: { content: '{"subs": {"wf:1": "half a sen' } }],
+  });
+  const llm = makeLlm(fetchFn, { base: AI, key: 'k', model: 'm', maxTokens: 3000 });
+  await assert.rejects(() => llm('prompt'), /truncated/i);
 });
 
 // ---- feed documents ----------------------------------------------------------

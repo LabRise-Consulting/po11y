@@ -26,7 +26,9 @@ The intro video demonstrates the complete stack: dashboard views, architecture m
 
   ![Grafana execution analytics](docs/img/grafana.png)
 
-- **Interactive Workflow Map**: Pan and zoomable workflow diagram with dark/light mode toggles and custom sidebar pages.
+- **Interactive Workflow Map**: Pan and zoomable workflow diagram with dark/light mode toggles and custom sidebar pages. Edges follow real references, so a sub-workflow call shows up as a labelled edge rather than a guess.
+
+  ![Interactive workflow map](docs/img/map.png)
 
 - **Alerting Options**: The server's own watchdog runs by default in every deployment. The bundled stack also ships pre-configured Grafana alert rules against n8n's database, and any deployment can add an optional Prometheus + Alertmanager overlay. See [docs/alerting.md](docs/alerting.md).
 
@@ -72,7 +74,7 @@ Rough edges are likelier on the read-only topology. Please [open an issue](https
 ```sh
 git clone https://gitlab.com/labrise/po11y && cd po11y
 ./bootstrap.sh                # Full stack: n8n, Postgres, Prometheus, Grafana, Dashboard
-./bootstrap.sh --no-examples  # Skip the demo workflow
+./bootstrap.sh --no-examples  # Skip the demo workflows
 ```
 
 Access services at:
@@ -84,12 +86,45 @@ By default, services bind to `127.0.0.1`. To expose services on a local network 
 ### Bundled Workflows
 
 The dashboard's own feeds (map, forms, status, `/metrics`) come from the
-`server` process, not from n8n workflows. Bootstrap installs one optional demo
-workflow (skip it with `--no-examples`):
+`server` process, not from n8n workflows. Bootstrap installs five optional demo
+workflows (skip them with `--no-examples`). They need no credentials, and only
+the first one makes an outbound call:
 
-| Workflow | Description |
-|---|---|
-| Po11y example - HN tech news | Runs every 30 minutes, and on demand from the Actions tab. Fetches Hacker News top stories, so a fresh install has real executions, a workflow-map node and a form button to look at. |
+| Workflow | Trigger | Description |
+|---|---|---|
+| Po11y example - HN tech news | Schedule (30 min) + form | Fetches Hacker News top stories, so a fresh install has real executions to look at. |
+| Po11y example - Order intake (webhook) | `POST /webhook/po11y-intake` | Accepts an order and hands it to the sub-workflow below. Gives the map a webhook trigger and a real sub-workflow edge. |
+| Po11y example - Enrich record (sub-workflow) | Called by another workflow | Derives a few fields from whatever the caller sent. Fills the map's sub-workflow column. |
+| Po11y example - Ops checklist (form) | Form | Records a shift handover. A second Actions button, with real form fields. |
+| Po11y example - Daily digest | Schedule (daily 08:00) | Rolls the previous day into one summary item. A second schedule cadence next to the 30-minute one. |
+
+Together they give a fresh install something to show on every view: five
+triggers of four kinds, a sub-workflow call, and two external services on the
+architecture map.
+
+#### Demo Heartbeat (opt-in)
+
+All five examples above finish in a few seconds, so the live-run indicator has
+nothing to show unless a poll happens to land inside a run. `workflows/demo/`
+holds one more workflow that solves this, kept out of the default import
+because it runs 1440 times a day:
+
+```sh
+./bootstrap.sh --pack /workflows/demo    # Po11y demo - Heartbeat
+```
+
+It runs every minute and holds the execution open for 20 seconds, so roughly
+one third of the time a workflow is genuinely in flight. Use it to see the cyan
+"N running" pill, `po11y_workflow_running_seconds` counting up, and the
+watchdog's `stuck` rule with real input. Pair it with a short poll:
+
+```sh
+SERVER_POLL_INTERVAL=5   # in .env
+"refreshSec": 5          # in config.json
+```
+
+Waits shorter than 65 seconds keep the execution in memory, so n8n reports it
+as `running`. A longer wait becomes `waiting`, which Po11y does not count.
 
 ### Importing Existing Workflows
 
@@ -122,12 +157,24 @@ docker compose -f docker-compose.readonly.yml up -d
 
 | Variable | Required | Description |
 |---|---|---|
-| `N8N_API_URL` | Yes | Base URL of target n8n instance |
+| `N8N_API_URL` | Yes | Base URL of target n8n instance — where po11y sends requests |
 | `N8N_API_KEY` | Yes | Read-only API key |
+| `N8N_PUBLIC_URL` | No | Base URL a reader opens, used for links in tool results and alerts (default: `N8N_API_URL`) |
 | `N8N_METRICS_TARGET` | Yes | `host:port` for n8n `/metrics` endpoint |
 | `GRAFANA_ADMIN_PASSWORD` | Yes | Grafana admin password |
-| `SERVER_POLL_INTERVAL` | No | Server poll interval in seconds (default: `60`) |
+| `SERVER_POLL_INTERVAL` | No | Server poll interval in seconds (default: `30`) |
 | `EXECUTIONS_LIMIT` | No | Recent execution window size (default: `100`, max: `250`) |
+
+The poll interval sets how fresh the dashboard is, and it also sets what the
+dashboard can see at all. Po11y knows a workflow is running only if a poll
+occurs while the workflow runs. Workflows that complete in less time than
+`SERVER_POLL_INTERVAL` can start and finish between two polls. Po11y then
+records the run, but never shows it as running, and the watchdog cannot report
+it as stuck. Decrease `SERVER_POLL_INTERVAL` if your workflows are short and you
+want to see them run. Each decrease adds two more n8n API requests per interval,
+one for the finished executions and one for the running executions. Also make
+sure that `EXECUTIONS_LIMIT` stays larger than the number of executions that
+complete in one interval.
 
 ## Feature Comparison
 

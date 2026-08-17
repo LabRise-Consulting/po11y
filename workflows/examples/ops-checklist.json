@@ -1,0 +1,51 @@
+{
+  "id": "po11yreport00000",
+  "name": "Po11y example - Ops checklist (form)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "po11y-ops-checklist",
+        "formTitle": "Ops checklist",
+        "formDescription": "Record a shift handover. Runs on submit and shows up in the executions feed.",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Operator", "requiredField": true },
+            {
+              "fieldLabel": "Shift",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [{ "option": "morning" }, { "option": "evening" }, { "option": "night" }]
+              },
+              "requiredField": true
+            },
+            { "fieldLabel": "Notes", "fieldType": "textarea" }
+          ]
+        },
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a6000000-0000-0000-0000-000000000001",
+      "name": "Checklist form",
+      "webhookId": "po11y-ops-checklist",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demo workflow: turns a submitted checklist into one record.\n// Zero credentials and no outbound calls. It exists so a fresh install has a\n// second form button in the dashboard's Actions section, with real fields\n// rather than an empty submit.\nreturn items.map((item) => {\n  const form = item.json || {};\n  return {\n    json: {\n      operator: form.Operator || 'unknown',\n      shift: form.Shift || 'unspecified',\n      notes: form.Notes || '',\n      recorded_at: new Date().toISOString(),\n    },\n  };\n});"
+      },
+      "id": "a6000000-0000-0000-0000-000000000002",
+      "name": "Record checklist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Checklist form": {
+      "main": [[{ "node": "Record checklist", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

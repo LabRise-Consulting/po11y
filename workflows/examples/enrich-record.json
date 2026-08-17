@@ -1,0 +1,32 @@
+{
+  "id": "po11yenrich00000",
+  "name": "Po11y example - Enrich record (sub-workflow)",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "a3000000-0000-0000-0000-000000000001",
+      "name": "Called by another workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demo sub-workflow: derives a few fields from whatever the caller sent.\n// Zero credentials and no outbound calls — it exists so a fresh install has\n// a real sub-workflow edge on the architecture map rather than an empty\n// column, and so the caller has something to hand work to.\nreturn items.map((item) => {\n  const rec = item.json || {};\n  const email = String(rec.email || '');\n  return {\n    json: {\n      ...rec,\n      domain: email.includes('@') ? email.split('@').pop() : null,\n      received_at: new Date().toISOString(),\n      priority: Number(rec.amount || 0) > 500 ? 'high' : 'normal',\n    },\n  };\n});"
+      },
+      "id": "a3000000-0000-0000-0000-000000000002",
+      "name": "Add derived fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Called by another workflow": {
+      "main": [[{ "node": "Add derived fields", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

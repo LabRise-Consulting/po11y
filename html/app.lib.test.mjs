@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { esc, safeUrl, withHost, ago, refreshMs, actionKey, formCards,
-  scopeKeys, pickScope, feedUrl, scopedSrc, withTab, metricsRangeLabel } from './app.lib.js';
+  scopeKeys, pickScope, feedUrl, scopedSrc, withTab, metricsRangeLabel,
+  execDot, runningText,
+  routeSlug, parseHash, resolveRoute, routeHash } from './app.lib.js';
 
 // ---- esc --------------------------------------------------------------------
 test('esc neutralises every character that can break out of markup', () => {
@@ -238,4 +240,117 @@ test('metricsRangeLabel translates the grafana ranges it can read', () => {
 test('metricsRangeLabel shows an unparsed range raw, and defaults to now-7d', () => {
   assert.equal(metricsRangeLabel('now-90m/m'), 'now-90m/m');
   assert.equal(metricsRangeLabel(undefined), 'last 7 days');
+});
+
+// ---- hash routing -----------------------------------------------------------
+// A representative sidebar, in the shape buildChrome derives from
+// config tabs[]: Overview, the Notifications view, two grouped entries and two
+// ungrouped ones.
+const ENTRIES = [
+  { id: 'overview', label: 'Overview', tabs: [] },
+  { id: 'notifications', label: 'Notifications', tabs: [] },
+  { id: 'g-maps', label: 'Maps', groupLabel: 'Maps',
+    tabs: [{ id: 'map', label: 'Map' }, { id: 'arch', label: 'Architecture' }] },
+  { id: 'projects', label: 'Projects', tabs: [{ id: 'projects', label: 'Projects' }] },
+  { id: 'prs', label: 'PRs', tabs: [{ id: 'prs', label: 'PRs' }] },
+  { id: 'g-reports', label: 'Reports', groupLabel: 'Reports',
+    tabs: [{ id: 'daily', label: 'Daily' }, { id: 'weekly', label: 'Weekly' },
+      { id: 'monthly', label: 'Monthly' }] },
+];
+
+test('routeSlug lowercases and collapses everything that is not a-z0-9', () => {
+  assert.equal(routeSlug('Reports'), 'reports');
+  assert.equal(routeSlug('PRs'), 'prs');
+  assert.equal(routeSlug('  Weekly report! '), 'weekly-report');
+  assert.equal(routeSlug(undefined), '');
+});
+
+test('parseHash splits view/sub and tolerates the leading # and #/', () => {
+  assert.deepEqual(parseHash('#reports/daily'), { view: 'reports', sub: 'daily' });
+  assert.deepEqual(parseHash('#/reports/daily'), { view: 'reports', sub: 'daily' });
+  assert.deepEqual(parseHash('#Map'), { view: 'map', sub: '' });
+  assert.deepEqual(parseHash(''), { view: '', sub: '' });
+  assert.deepEqual(parseHash('#'), { view: '', sub: '' });
+});
+
+test('parseHash decodes percent-escapes without throwing on a broken one', () => {
+  assert.deepEqual(parseHash('#weekly%20report'), { view: 'weekly-report', sub: '' });
+  assert.deepEqual(parseHash('#%E0%A4%A'), { view: 'e0-a4-a', sub: '' });
+});
+
+test('resolveRoute matches a view by id, by label, and case-insensitively', () => {
+  assert.deepEqual(resolveRoute('#projects', ENTRIES), { view: 'projects', sub: null });
+  assert.deepEqual(resolveRoute('#PRs', ENTRIES), { view: 'prs', sub: null });
+  assert.deepEqual(resolveRoute('#overview', ENTRIES), { view: 'overview', sub: null });
+  assert.deepEqual(resolveRoute('#notifications', ENTRIES), { view: 'notifications', sub: null });
+});
+
+test('resolveRoute matches a group by its label, not by the g- prefixed dom id', () => {
+  assert.deepEqual(resolveRoute('#reports', ENTRIES), { view: 'g-reports', sub: null });
+  assert.deepEqual(resolveRoute('#g-reports', ENTRIES), { view: 'g-reports', sub: null });
+  assert.deepEqual(resolveRoute('#Maps', ENTRIES), { view: 'g-maps', sub: null });
+});
+
+test('resolveRoute opens a grouped tab named on its own, without its group', () => {
+  // "#Map" is the tab inside the Maps group — the shape a user types.
+  assert.deepEqual(resolveRoute('#Map', ENTRIES), { view: 'g-maps', sub: 'map' });
+  assert.deepEqual(resolveRoute('#Architecture', ENTRIES), { view: 'g-maps', sub: 'arch' });
+  assert.deepEqual(resolveRoute('#monthly', ENTRIES), { view: 'g-reports', sub: 'monthly' });
+});
+
+test('resolveRoute reads view/sub pairs and ignores a sub the view does not have', () => {
+  assert.deepEqual(resolveRoute('#reports/weekly', ENTRIES), { view: 'g-reports', sub: 'weekly' });
+  assert.deepEqual(resolveRoute('#maps/Architecture', ENTRIES), { view: 'g-maps', sub: 'arch' });
+  assert.deepEqual(resolveRoute('#reports/nope', ENTRIES), { view: 'g-reports', sub: null });
+});
+
+test('resolveRoute returns null for an empty or unknown hash', () => {
+  assert.equal(resolveRoute('', ENTRIES), null);
+  assert.equal(resolveRoute('#', ENTRIES), null);
+  assert.equal(resolveRoute('#nosuchview', ENTRIES), null);
+  assert.equal(resolveRoute('#projects', []), null);
+});
+
+test('routeHash writes the friendly form, with a sub only where there is a strip', () => {
+  assert.equal(routeHash('overview', null, ENTRIES), '#overview');
+  assert.equal(routeHash('projects', 'projects', ENTRIES), '#projects');
+  assert.equal(routeHash('g-reports', 'daily', ENTRIES), '#reports/daily');
+  assert.equal(routeHash('g-maps', 'arch', ENTRIES), '#maps/arch');
+  assert.equal(routeHash('g-maps', null, ENTRIES), '#maps');
+});
+
+test('routeHash round-trips through resolveRoute for every entry and sub-tab', () => {
+  for (const e of ENTRIES) {
+    for (const sub of (e.tabs.length ? e.tabs.map((t) => t.id) : [null])) {
+      const back = resolveRoute(routeHash(e.id, sub, ENTRIES), ENTRIES);
+      assert.equal(back.view, e.id);
+      if (e.tabs.length > 1) assert.equal(back.sub, sub);
+    }
+  }
+});
+
+// ---- execDot / runningText --------------------------------------------------
+test('execDot marks a workflow with a live execution as running', () => {
+  assert.equal(execDot({ count: 4, errors: 0, running: 1 }), 'run');
+  assert.equal(execDot({ count: 4, errors: 0, running: 0 }), 'ok');
+});
+
+// A red dot must never be masked by activity: a workflow that is erroring AND
+// running is a failing workflow that happens to be busy, not a healthy one.
+test('execDot keeps failure ahead of activity', () => {
+  assert.equal(execDot({ count: 4, errors: 2, running: 1 }), 'fail');
+});
+
+// Older servers publish no `running` key at all. Absent must read as "nothing
+// to say", never as a running workflow.
+test('execDot treats a missing running count as none', () => {
+  assert.equal(execDot({ count: 4, errors: 0 }), 'ok');
+  assert.equal(execDot(null), 'ok');
+});
+
+test('runningText names the count, and says nothing when none are running', () => {
+  assert.equal(runningText(1), '1 running');
+  assert.equal(runningText(3), '3 running');
+  assert.equal(runningText(0), '');
+  assert.equal(runningText(undefined), '');
 });

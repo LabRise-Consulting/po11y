@@ -24,8 +24,10 @@
     .bar + .bar { margin-top: -6px; }
     .bar button { padding: 4px 10px; cursor: pointer; }
     .bar button.active { font-weight: 700; }
-    /* Range buttons are generated, so the group needs its own flex gap. */
+    /* Range and source buttons are generated, so the groups need their own
+       flex gap. Sources wrap: a feed may merge many upstreams. */
     #ranges { display: flex; gap: 8px; }
+    #sources { display: flex; gap: 8px; flex-wrap: wrap; }
     h2.day { margin: 18px 0 8px; font-size: 14px; opacity: .7; }
     .card { display: block; padding: 10px 12px; margin: 6px 0; border: 1px solid #8883;
             border-radius: 8px; text-decoration: none; color: inherit; }
@@ -58,6 +60,11 @@
     <span>Range:</span>
     <span id="ranges"></span>
   </div>
+  <div class="bar" id="sourcebar" hidden>
+    <span id="sourcelabel">Source:</span>
+    <button id="source-all">All</button>
+    <span id="sources"></span>
+  </div>
   <div class="bar">
     <span>Sort:</span>
     <button id="sort-day">Newest</button>
@@ -68,7 +75,8 @@
   <button class="more" id="more" hidden>load more</button>
 
   <script type="module">
-    import { sortItems, groupByDay, filterByRange, walkPages, RANGES } from '/lib/list-rows.mjs';
+    import { sortItems, groupByDay, filterByRange, badgeValues, filterByBadges,
+      walkPages, RANGES } from '/lib/list-rows.mjs';
 
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
       (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
@@ -79,6 +87,10 @@
                      pageSize: 250, title: 'List' };
     let sortBy = 'day';
     let range = 'all';
+    // Badge values (the `badge` column — job board, upstream, …) the user
+    // ticked. Empty = every source, which is also the reset state. Client-side
+    // like sorting: the rows are already in hand, so no re-walk.
+    const sources = new Set();
     // How many pages the walk below may pull. A bounded range usually stops
     // itself well before this (see windowComplete); `load more` raises it when
     // the budget, not the data, was the binding constraint.
@@ -106,6 +118,7 @@
       range = settings.defaultRange || 'all';
       maxPages = basePages(range);
       document.title = settings.title || 'List';
+      $('sourcelabel').textContent = `${settings.badgeLabel || 'Source'}:`;
     }
 
     // Walk pages until the feed runs out, the selected window is provably
@@ -187,8 +200,14 @@
       let walk;
       try { walk = await walkRows(); }
       catch { $('list').innerHTML = '<p class="empty">feed unavailable</p>'; return; }
-      const items = sortItems(filterByRange(walk.rows, range, todayIso()), sortBy);
-      $('count').textContent = `${items.length} shown`;
+      const inRange = filterByRange(walk.rows, range, todayIso());
+      // Options come from the windowed rows, not the badge-filtered ones —
+      // otherwise ticking a source would delete every other button.
+      paintSources(badgeValues(inRange));
+      const items = sortItems(filterByBadges(inRange, sources), sortBy);
+      $('count').textContent = sources.size
+        ? `${items.length} of ${inRange.length} shown`
+        : `${items.length} shown`;
       // Only offered when the page budget — not the data — ended the walk.
       // Once a window is provably covered there is nothing left to load.
       $('more').hidden = !walk.truncated;
@@ -213,6 +232,24 @@
       }
     }
 
+    // One button per badge value, plus any ticked source the current window no
+    // longer contains — dropping those would strand a filter the user can see
+    // in the count but not switch off. A single-source feed hides the bar.
+    function paintSources(options) {
+      const all = [...new Set([...options, ...sources])].sort();
+      const bar = $('sourcebar');
+      bar.hidden = all.length < 2 && !sources.size;
+      $('sources').innerHTML = all.map((s) =>
+        `<button data-source="${esc(s)}" class="${sources.has(s) ? 'active' : ''}"`
+        + ` aria-pressed="${sources.has(s)}">${esc(s)}</button>`).join('');
+      $('source-all').classList.toggle('active', !sources.size);
+    }
+
+    function toggleSource(value) {
+      if (sources.has(value)) sources.delete(value); else sources.add(value);
+      render();                                // repaints the bar from the walk
+    }
+
     function setSort(by) { sortBy = by; paintSort(); render(); }
 
     function setRange(key) {
@@ -229,6 +266,11 @@
       const b = e.target.closest('button[data-range]');
       if (b) setRange(b.dataset.range);
     });
+    $('sources').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-source]');
+      if (b) toggleSource(b.dataset.source);
+    });
+    $('source-all').addEventListener('click', () => { sources.clear(); render(); });
     $('sort-day').addEventListener('click', () => setSort('day'));
     $('sort-score').addEventListener('click', () => setSort('score'));
     $('more').addEventListener('click', () => { maxPages += 1; render(); });

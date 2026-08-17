@@ -190,9 +190,16 @@ services:
     read_only: true
     environment:
       N8N_API_URL: ${MCP_N8N_API_URL:-http://n8n:5678}
+      # Where a READER opens n8n, as against where this container sends its
+      # polls. N8N_API_URL above is the compose-network address, which resolves
+      # here and nowhere else, so links built from it were dead for whoever
+      # received them. n8n's own WEBHOOK_URL is built from BIND_ADDR for the
+      # same reason; this default matches it. Behind a reverse proxy or a
+      # tunnel, set N8N_PUBLIC_URL to the external URL.
+      N8N_PUBLIC_URL: ${N8N_PUBLIC_URL:-http://${BIND_ADDR:-127.0.0.1}:5678}
       N8N_API_KEY: ${MCP_N8N_API_KEY:-${N8N_API_KEY:-}}
       SYNC_INTERVAL: ${SERVER_SYNC_INTERVAL:-600}
-      POLL_INTERVAL: ${SERVER_POLL_INTERVAL:-60}
+      POLL_INTERVAL: ${SERVER_POLL_INTERVAL:-30}
       N8N_TIMEOUT_MS: ${N8N_TIMEOUT_MS:-30000}
       EXECUTIONS_LIMIT: ${EXECUTIONS_LIMIT:-100}
       PO11Y_RETENTION_DAYS: ${PO11Y_RETENTION_DAYS:-30}

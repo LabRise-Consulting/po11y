@@ -10,7 +10,7 @@ See [`config.example.json`](../config.example.json). All fields are optional.
 |-----|-------------|
 | `title`, `lede`, `footer` | UI branding text. `lede` appears in the sidebar below the title. `footer` is an array of `[{text, href?}]` rendered at the bottom of the sidebar. |
 | `cards` | Defined as `{ "Group heading": [{name, sub, href \| action, tip?, up?, mem?}] }`. Defines ordered card groups. `tip` sets hover tooltips. `up` (and optional `mem`) accept Prometheus queries to show live status indicators (UP/DOWN, RSS memory). `action` sets a form trigger path that sends POST requests through the `/form/` proxy. Cards declared here override auto-discovered form cards. |
-| `tabs` | Defined as `[{id, label, src, group?}]`. Configures iframe views in the sidebar. `src` specifies the page path (e.g. `/site/page.html`). Entries with matching `group` labels group together into a tabbed sidebar item. |
+| `tabs` | Defined as `[{id, label, src, group?}]`. Configures iframe views in the sidebar. `src` specifies the page path (e.g. `/site/page.html`). Entries with matching `group` labels group together into a tabbed sidebar item. The open view is named in the address bar (`#projects`, `#reports/daily`) — see [Address-bar routing](#address-bar-routing). |
 | `sections` | Controls visible status sections and headings: `{executions, notifications}`. `notifications` opens a dedicated sidebar view with an unread badge. `executions` renders in the Overview view. (`containers` is still accepted for backward compatibility, but `status.json` never carries a `containers` list any more — see [docs/server.md](server.md#accepted-regressions) — so a configured `containers` section always renders empty.) |
 | `metrics` | Configures Grafana and Prometheus metrics panels: `{heading, grafana: {embed, base, dashboard, panels: [{id, title?, span?, h?, wide?}], range}, promBase, stats: [{label, up, mem?}]}`. `span` sets column width (1–4, default 2). `h` sets height in pixels (120–800). |
 | `refreshSec` | Poll interval for `status.json` and `notifications.json` in seconds (default `30`). |
@@ -65,7 +65,7 @@ Written by the po11y `server`, from its own store, on every deployment.
     "recent": 42,
     "errors": 1,
     "byWorkflow": [
-      { "name": "Sync Job", "id": "42", "count": 10, "errors": 0, "lastAt": "2026-07-10T11:58:00Z" }
+      { "name": "Sync Job", "id": "42", "count": 10, "errors": 0, "lastAt": "2026-07-10T11:58:00Z", "running": 1 }
     ]
   }
 }
@@ -73,6 +73,30 @@ Written by the po11y `server`, from its own store, on every deployment.
 
 `status.json` always carries this `executions` object with run metrics. It
 never carries a container list — see [docs/server.md](server.md#accepted-regressions).
+
+`running` is how many executions of that workflow were still in flight at the
+last poll, and the dashboard renders it as a cyan dot and an "N running" pill.
+Two things bound it:
+
+- **It is as fresh as `POLL_INTERVAL`** (30 s by default), not live. A workflow
+  that finishes inside one poll window can start and end without ever being
+  seen as running. Lower `SERVER_POLL_INTERVAL` if your workflows are shorter
+  than the interval and you want their runs to be visible while they happen.
+- **It needs the running listing.** n8n leaves in-flight executions out of the
+  default `/executions` response, so the server asks for `?status=running`
+  separately each poll. If that request fails the poll still succeeds and logs
+  `running-executions listing failed`; the counts simply go stale until an
+  execution ends and reappears with its terminal status.
+
+Only the `running` status counts. An execution parked on a Wait node longer
+than 65 seconds is `waiting`, not `running`, because n8n takes it out of memory
+— it is not consuming a worker, so Po11y does not report it as in flight.
+Shorter waits stay in memory and remain `running`.
+
+To watch the indicator work, import `workflows/demo/heartbeat.json`
+(`./bootstrap.sh --pack /workflows/demo`). It holds an execution open for 20
+seconds of every minute. The bundled example workflows all finish in a few
+seconds, which is shorter than the default poll interval.
 
 ### `/notifications.json`
 
@@ -136,8 +160,12 @@ The po11y server exposes Prometheus metrics at `server:8081/metrics`, on every d
 | `po11y_workflow_errors_total` | Counter | `workflow_id`, `workflow_name` | Total failed executions recorded for a workflow, persisted in the store. |
 | `po11y_workflow_last_success_timestamp_seconds` | Gauge | `workflow_id`, `workflow_name` | Unix timestamp of the last successful run for a workflow. Omitted if a workflow has no recorded success. |
 | `po11y_workflow_running_seconds` | Gauge | `workflow_id`, `workflow_name` | Duration in seconds of the current longest-running execution (`0` if none). |
+| `po11y_ai_map_llm_up` | Gauge | None | `1` if the last ai-map build got LLM prose, `0` if it fell back to heuristic descriptions. Absent when no LLM is configured, and until a build has actually called one. |
 
 Before writing rules against these:
+
+- **`po11y_ai_map_llm_up` reports the last LLM *call*, not a reachability probe.** Nothing scrapes the gateway directly; the value is a byproduct of the ai-map build the server already performs. `buildAiMap` returns without calling the LLM when the workflow set has not changed (`republish`, `keep-annotated`, `skip-fresh`), and on those rebuilds the metric holds its previous reading rather than reporting an all-clear it has no evidence for. A stack whose workflows never change can therefore hold a stale `1` — the reading is only refreshed when a build genuinely goes to the LLM. Force one with `docker kill -s HUP <server>`.
+- **It is absent, not `0`, when no LLM is configured.** A deployment running `OMNIROUTE_ENABLED=false` with no `AI_MAP_*` has no LLM to be down, and a `0` there would leave `Po11yAiMapLlmDegraded` firing forever on a correctly configured stack.
 
 - **`po11y_workflow_errors_total` is persisted and monotonic.** The count lives in a SQLite table, incremented once per failed execution and never decremented, so it survives process restarts and retention pruning. This replaced an in-memory accumulator that reset to zero on every restart — a reset Prometheus believed, several times a week. Expect one discontinuity the first time a deployment runs on the new counter (the table starts empty), then a flatter, more honest line than before. **A store restored from an older backup rewinds the counter** — that is a genuine counter reset, and Prometheus handles it correctly. Do not paper over it with a `max()` guard.
 - **A workflow that has never succeeded exports no `last_success` series.** Zero-filling would mean 1970, so every staleness rule would fire on workflows that simply have not run yet. Use the `failing` rule for that case, or `absent()` to alert on it explicitly.
@@ -214,6 +242,25 @@ Always sort DataTable queries by a unique column (such as `id:desc`) to ensure r
 
 Custom pages placed in `/site/` can be added to the dashboard sidebar using `tabs[]` in `config.json`. Pages adapt to dark/light theme settings via `po11y-theme` in `localStorage` and `html[data-theme]`.
 
+### Address-bar routing
+
+The open view is named in the URL fragment, so a reload, a bookmark or a shared
+link opens it instead of the Overview. The dashboard writes the canonical form
+and accepts the shorter ones:
+
+| Hash | Opens |
+|------|-------|
+| `#overview`, `#notifications` | Those two views. |
+| `#projects` | An ungrouped tab, by its `id` or its `label`. |
+| `#reports/daily` | A grouped tab: group first, then the tab. |
+| `#reports` | That group, on its remembered tab. |
+| `#map` | A grouped tab named on its own — the group is implied. |
+
+Matching ignores case and punctuation (`#PRs` and `#prs` are the same view), and
+a hash naming nothing in the config is ignored: the Overview opens and the URL
+is left alone. Selecting a view or a tab pushes a history entry, so the browser
+Back button walks the views.
+
 ### Data Table List View (`site/list.html`)
 
 Render tabular data using `site/list.html` by configuring a tab entry:
@@ -245,7 +292,8 @@ Render tabular data using `site/list.html` by configuring a tab entry:
 
 - `endpoint`: API endpoint path (e.g. `/n8n-table/...` or static JSON path).
 - `mapping`: Maps data columns to card fields (`title`, `url`, `score`, `day`, `badge`, `meta`, `detail`).
-- `badge`: (Optional) Column displayed as a tag pill next to the title.
+- `badge`: (Optional) Column displayed as a tag pill next to the title. When the rows in the selected range carry more than one badge value, the tab also shows a multi-select filter — tick any number of values (e.g. `sentry` and `webhook`) to narrow the list, **All** to clear it. Rows without a badge are hidden while the filter is active. The filter is client-side, so it never re-fetches; it resets on reload.
+- `badgeLabel`: (Optional) Caption for that filter row. Default `Source`.
 - `detail`: (Optional) Column containing JSON assessment arrays (`{ aspect, kind, assessment }`) to make cards expandable.
 - `defaultSort`: `"day"` (date grouped) or `"score"` (ranking order).
 - `defaultRange`: Active time range filter on load (`"all"`, `"today"`, `"7d"`, `"30d"`).

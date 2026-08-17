@@ -149,7 +149,16 @@ a{color:var(--sky)}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:6px}
 .dot.ok{background:var(--emerald)} .dot.fail{background:var(--red)}
 .dot.info{background:var(--muted)}
+/* A workflow with an execution still in flight. Cyan rather than a third
+   traffic-light colour: this is activity, not health -- a failing workflow
+   keeps its red dot even while it runs (see execDot in app.lib.js). */
+.dot.run{background:var(--cyan)}
 .err{color:var(--red)}
+.run{color:var(--cyan)}
+@media (prefers-reduced-motion:no-preference){
+  .dot.run{animation:po11y-pulse 1.8s ease-in-out infinite}
+}
+@keyframes po11y-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
 button.card.action{appearance:none;font:inherit;text-align:left;cursor:pointer;
   color:inherit;width:100%}

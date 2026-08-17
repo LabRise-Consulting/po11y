@@ -63,12 +63,24 @@ export function makePrometheus({ url, fetchFn = fetch }) {
  * sharing that function keeps ONE choke point in the codebase that can talk
  * to n8n, and it hard-codes method:'GET'.
  *
- * @param {{url: string, apiKey: string, fetchFn?: typeof fetch}} opts
+ * Two URLs, on purpose. `url` is where this process SENDS requests; publicUrl
+ * (N8N_PUBLIC_URL) is what a reader OPENS. In the bundled stack the first is
+ * the container-network address — docker-compose.yml passes
+ * MCP_N8N_API_URL, default http://n8n:5678 — which resolves inside the compose
+ * network and nowhere else, so a link built from it is dead on arrival for the
+ * operator or the remote agent reading the answer. publicUrl defaults to `url`,
+ * which is exactly right for the single-host case where the two coincide.
+ *
+ * The field is called linkBase rather than baseUrl so that a future link site
+ * cannot reach for the request URL out of habit: there is no longer a
+ * plausibly-named field on this adapter that yields the unroutable address.
+ *
+ * @param {{url: string, apiKey: string, publicUrl?: string, fetchFn?: typeof fetch}} opts
  */
-export function makeN8n({ url, apiKey, fetchFn = fetch }) {
+export function makeN8n({ url, apiKey, publicUrl = '', fetchFn = fetch }) {
   return {
     available: () => Boolean(url && apiKey),
-    baseUrl: String(url || '').replace(/\/$/, ''),
+    linkBase: String(publicUrl || url || '').replace(/\/$/, ''),
     get: (path) => apiGet(fetchFn, url, apiKey, path),
   };
 }

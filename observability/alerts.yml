@@ -48,7 +48,7 @@ groups:
       # without ever reaching n8n: the gauge says up, but no poll has
       # completed. The series is stamped by the executions poll-fill tick,
       # and only on a fetch that actually answered (server/sync.mjs pollFill)
-      # — so 1800s is 30 missed ticks at the default POLL_INTERVAL of 60s.
+      # — so 1800s is 60 missed ticks at the default POLL_INTERVAL of 30s.
       # Deliberately generous: a single slow tick must not page anyone.
       - alert: Po11yPollStalled
         expr: time() - po11y_poll_last_success_timestamp_seconds > 1800
@@ -58,6 +58,27 @@ groups:
         annotations:
           summary: "po11y has not completed a poll in over 30 minutes"
           description: "Last successful poll was {{ $value | humanizeDuration }} ago."
+
+      # Cosmetic, so warning and a long window: the Architecture tab keeps its
+      # structure and falls back to heuristic descriptions, and nothing else in
+      # the stack depends on the LLM. It is worth knowing about because the
+      # usual cause is silent — a keyless free-tier provider exhausting its
+      # quota looks identical to a working map until you read the footer.
+      #
+      # The series is absent when no LLM is configured (OMNIROUTE_ENABLED=false
+      # and no AI_MAP_*), so this rule cannot fire on a stack that never wanted
+      # one. It is also absent until a rebuild has actually called the LLM —
+      # buildAiMap republishes without calling it when the workflow set has not
+      # changed, and the metric deliberately holds its last reading rather than
+      # inventing an all-clear.
+      - alert: Po11yAiMapLlmDegraded
+        expr: po11y_ai_map_llm_up == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "po11y's architecture map has lost its LLM"
+          description: "The last ai-map build fell back to heuristic descriptions. Check the gateway or provider quota; the map itself is still correct."
 
       - alert: Po11yWorkflowFailing
         expr: increase(po11y_workflow_errors_total[1h]) >= 3

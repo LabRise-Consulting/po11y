@@ -4,7 +4,7 @@
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { openDb, openReadOnlyDb, getKv, setKv } from './db.mjs';
-import { buildSnapshot, renderMetrics } from './metrics.mjs';
+import { aiMapLlmUpFrom, buildSnapshot, renderMetrics } from './metrics.mjs';
 import { seedCache, seedBuiltAt, persistCache } from './cache.mjs';
 import {
   syncWorkflows, pollFill, pruneOlderThan, withTimeout, assertGetOnly, POLL_LAST_SUCCESS_KEY,
@@ -36,8 +36,25 @@ const PORT = num(process.env.PORT, 8081, 'PORT');
 const BIND_HOST = process.env.BIND_HOST || '127.0.0.1';
 const N8N_API_URL = process.env.N8N_API_URL || '';
 const N8N_API_KEY = process.env.N8N_API_KEY || '';
+// Where a READER opens n8n, as opposed to where this process sends requests.
+// The bundled stack polls over the container network (docker-compose.yml:
+// MCP_N8N_API_URL, default http://n8n:5678), an address that resolves in the
+// compose network and nowhere else — so every link po11y hands out (MCP tool
+// results, watchdog notifications, webhook pushes) was unopenable for the
+// operator or remote agent that received it. Defaults to N8N_API_URL, which is
+// correct for the single-host case where the two genuinely coincide.
+//
+// Never fetched, so deliberately NOT passed to guardOutbound: that guard exists
+// to stop an optional outbound target being aimed at the n8n host, and this
+// value is a link base whose whole purpose is to name that host.
+const N8N_PUBLIC_URL = process.env.N8N_PUBLIC_URL || N8N_API_URL;
 const SYNC_INTERVAL = num(process.env.SYNC_INTERVAL, 600, 'SYNC_INTERVAL');
-const POLL_INTERVAL = num(process.env.POLL_INTERVAL, 60, 'POLL_INTERVAL');
+// 30s, not 60s: the poll is also the only thing that can SEE a run in flight.
+// A workflow shorter than one interval can start and finish between two polls,
+// so it is recorded but never observed running — and the watchdog's `stuck`
+// rule can never see it either. 30s halves that blind spot for the short
+// workflows most instances actually run, at two extra GETs per minute.
+const POLL_INTERVAL = num(process.env.POLL_INTERVAL, 30, 'POLL_INTERVAL');
 const EXECUTIONS_LIMIT = num(process.env.EXECUTIONS_LIMIT, 100, 'EXECUTIONS_LIMIT');
 // Generous by design: a full workflow sync pages the whole instance, and this
 // bounds a single request, not the tick.
@@ -69,7 +86,7 @@ const PUSH = {
   format: process.env.ALERT_WEBHOOK_FORMAT || 'slack',
   chatId: process.env.ALERT_TELEGRAM_CHAT_ID || '',
   timeoutMs: num(process.env.ALERT_WEBHOOK_TIMEOUT_MS, 10000, 'ALERT_WEBHOOK_TIMEOUT_MS'),
-  baseUrl: N8N_API_URL,
+  baseUrl: N8N_PUBLIC_URL,
 };
 if (PUSH.url && !FORMATS.includes(PUSH.format)) {
   console.error(`server: ALERT_WEBHOOK_FORMAT="${PUSH.format}" is not one of ${FORMATS.join(', ')} — push disabled`);
@@ -127,7 +144,10 @@ if (!SYNC_ENABLED && HEARTBEAT.url) {
   console.error('server: ALERT_HEARTBEAT_URL is set but sync is disabled — no ping can ever be sent; '
     + 'set the ops key (MCP_N8N_API_KEY on the bundled stack) or unset the heartbeat');
 }
-const llm = aiConfigured ? makeLlm(fetch, { base: AI_BASE, key: AI_KEY, model: AI_MODEL }) : null;
+const AI_MAX_TOKENS = num(process.env.AI_MAP_MAX_TOKENS, 8000, 'AI_MAP_MAX_TOKENS');
+const llm = aiConfigured
+  ? makeLlm(fetch, { base: AI_BASE, key: AI_KEY, model: AI_MODEL, maxTokens: AI_MAX_TOKENS })
+  : null;
 
 const db = openDb(DB_PATH);
 const pack = PACK_PATH ? loadPack(readFileSync(PACK_PATH, 'utf8')) : { expectations: [] };
@@ -141,6 +161,12 @@ let lastSyncError = null;
 // identically to "healthy" unless this is tracked separately — see
 // n8nReachable in alerts.mjs for why that matters.
 let syncedOnce = false;
+
+// Last ai-map build's LLM outcome, for po11y_ai_map_llm_up. null until the
+// first rebuild records one — no build has happened yet, so there is no
+// outcome to report, and the series stays absent rather than claiming a
+// gateway is down before anything has asked it for prose.
+let aiMapLlmUp = null;
 
 // ai-map.json and notifications.json are seeded from the store so a restart
 // does not serve `null`/`[]` until the first sync/poll tick completes — the
@@ -169,7 +195,7 @@ const mcpSources = {
   // cannot see", not as "nothing is wrong".
   store: makeStore({ db, enabled: SYNC_ENABLED }),
   prometheus: makePrometheus({ url: PROMETHEUS_URL }),
-  n8n: makeN8n({ url: N8N_API_URL, apiKey: N8N_API_KEY }),
+  n8n: makeN8n({ url: N8N_API_URL, apiKey: N8N_API_KEY, publicUrl: N8N_PUBLIC_URL }),
   grafana: makeGrafana({ url: GRAFANA_URL, token: GRAFANA_SA_TOKEN, datasourceUid: GRAFANA_DATASOURCE_UID }),
   datatables: makeDataTables({ n8nUrl: N8N_API_URL, readKey: N8N_READ_API_KEY }),
 };
@@ -191,6 +217,9 @@ async function rebuild() {
   if (built.warning) console.error(built.warning);
   built.aiWarnings.forEach((w) => console.error(w));
   if (built.degraded) console.error(`server: ai-map degraded (LLM unavailable) — ${built.degraded}`);
+  aiMapLlmUp = aiMapLlmUpFrom({
+    aiConfigured, action: built.aiAction, degraded: built.degraded, previous: aiMapLlmUp,
+  });
 
   // Expectations are gated on state transition (reconcileExpectations),
   // mirroring the watchdog's reconcileAlerts: evaluate() re-reports a
@@ -228,7 +257,7 @@ async function rebuild() {
   const n8nOk = n8nReachable({ syncedOnce, consecutiveFailures: health.consecutiveFailures });
   const { notifications: alertNotes, fire: alertFire } = alertNotifications(db, {
     executions: built.executions, workflows: built.workflows, names: built.names,
-    cfg: ALERTS, now, renotifyMin: RENOTIFY_MIN, baseUrl: N8N_API_URL,
+    cfg: ALERTS, now, renotifyMin: RENOTIFY_MIN, baseUrl: N8N_PUBLIC_URL,
     rules: n8nOk ? null : ['failing', 'stale', 'stuck'],
   });
   // Gated on an actual recorded failure, not merely `!n8nOk`: before the
@@ -238,7 +267,7 @@ async function rebuild() {
   let unreachable = { notifications: [], fire: [] };
   if (lastSyncError) {
     unreachable = unreachableNotifications(db, {
-      error: lastSyncError, cfg: ALERTS, now, renotifyMin: RENOTIFY_MIN, baseUrl: N8N_API_URL,
+      error: lastSyncError, cfg: ALERTS, now, renotifyMin: RENOTIFY_MIN, baseUrl: N8N_PUBLIC_URL,
     });
   }
   const pushFire = [...unreachable.fire, ...alertFire];
@@ -383,6 +412,7 @@ const ctx = {
       const ms = iso ? Date.parse(iso) : NaN;
       return Number.isFinite(ms) ? ms : null;
     })(),
+    aiMapLlmUp,
   })),
   // /n8n-table proxy: the one place this process forwards a browser-shaped
   // request to n8n. assertGetOnly makes the GET-only invariant structural, and

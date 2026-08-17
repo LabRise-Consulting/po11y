@@ -8,6 +8,70 @@ versioned yet, so `main` is the only line.
 
 ### Added
 
+- List tab source filter: a `list` tab with a `badge` mapping now offers a
+  multi-select over the badge values present in the selected range, so a feed
+  merging several upstreams can be narrowed to a few of them (e.g. only
+  `sentry` and `webhook`). Client-side over the rows already walked — no
+  extra requests — with an **All** button to clear it and an optional
+  `badgeLabel` to caption the row. The bar stays hidden for single-source
+  feeds.
+
+- Dashboard: the open view is named in the address bar (`#projects`,
+  `#reports/daily`, `#map`), so a reload, a bookmark or a shared link opens
+  that view instead of the Overview — including the reload a scope switch
+  performs. Views and tabs are addressable by `id` or by `label`, case and
+  punctuation insensitive, and a grouped tab can be named on its own. Picking a
+  view pushes a history entry, so Back walks them; a hash the config does not
+  describe is ignored rather than rewritten.
+
+- Execution rows on the Overview say what is running **now**: `status.json`'s
+  `byWorkflow` entries carry a `running` count, drawn as a cyan pulsing dot and
+  an "N running" pill. Failure still outranks activity — an erroring workflow
+  keeps its red dot while it runs. Freshness is bounded by `POLL_INTERVAL`
+  (30 s by default), so this is "running as of the last poll".
+
+- `po11y_ai_map_llm_up`: a gauge saying whether the last ai-map build got LLM
+  prose (`1`) or fell back to heuristic descriptions (`0`), plus a
+  `Po11yAiMapLlmDegraded` warning rule in `observability/alerts.yml`. A keyless
+  free-tier provider exhausting its quota is otherwise silent — the map keeps
+  its structure and only the footer changes from `by auto/best-free` to
+  `by heuristic`.
+
+  It is a byproduct of the build the server already runs, not a probe: OmniRoute
+  exposes no `/metrics`, and pointing a scrape job at its `/v1/models` would
+  report a healthy gateway as **down**, because Prometheus cannot parse a JSON
+  body and records the scrape as failed. The series is absent when no LLM is
+  configured, and holds its previous reading on rebuilds where `buildAiMap`
+  returned without calling the LLM (`republish`, `keep-annotated`,
+  `skip-fresh`) rather than reading a null degraded-reason as an all-clear.
+
+- OmniRoute link card in `config.example.json`'s Monitoring group. The gateway
+  boots with the bundled stack but nothing pointed at it, so the one place you
+  connect providers was undiscoverable unless you knew the port. `config.json`
+  is seeded only when absent, so existing installs must add the card by hand;
+  deployments running `OMNIROUTE_ENABLED=false` should remove it.
+
+- Four more demo workflows in `workflows/examples/`: `order-intake` (webhook)
+  calling `enrich-record` (sub-workflow), plus `ops-checklist` (form) and
+  `daily-digest` (schedule). Phase 3 correctly stopped installing po11y's own
+  workflows into n8n, which left a fresh install with one workflow and almost
+  nothing on the map. All four are credential-free, make no outbound call, and
+  cannot fail on a healthy install.
+
+- `workflows/demo/heartbeat.json`, an opt-in demo workflow that runs every
+  minute and holds the execution open for 20 seconds. Every bundled example
+  finishes in a few seconds — shorter than any sane poll interval — so the
+  live-run indicator, `po11y_workflow_running_seconds` and the watchdog's
+  `stuck` rule had nothing to act on. This one keeps a workflow genuinely in
+  flight about a third of the time. Import it with
+  `./bootstrap.sh --pack /workflows/demo`; it is kept out of `workflows/examples/`
+  because bootstrap publishes everything it imports, and 1440 executions a day
+  is not a default anyone asked for.
+
+  Waits under 65 seconds keep the execution in memory and n8n reports it as
+  `running`; a longer wait becomes `waiting`, which Po11y deliberately does not
+  count as in flight.
+
 - CI `publish-images` job: pushing a git tag now builds and publishes a
   multi-arch (amd64 + arm64) `server` image to
   `registry.gitlab.com/labrise/po11y/server:<tag>` (plus a moving `latest`),
@@ -46,6 +110,61 @@ versioned yet, so `main` is the only line.
   attribution despite being MIT-licensed.
 
 ### Fixed
+
+- The architecture map's LLM call could not afford a reasoning model. Its
+  budget was a hard-coded `max_tokens: 3000`, and a reasoning model spends the
+  same allowance on its hidden thinking as on the answer — so the bundled
+  default route (`auto/best-free`, which resolves to one) thought, then stopped
+  mid-string. The server reported `annotation unusable` with a JSON parse error
+  naming neither the cause nor the cure, and the map sat on heuristic text
+  indefinitely on a stock install. The default is now 8000, tunable with
+  `AI_MAP_MAX_TOKENS`, and a truncated reply is reported as truncation.
+
+- The poll now asks n8n for in-flight executions. n8n's public API leaves
+  running executions **out** of the default `/executions` listing — they are
+  reachable only via `?status=running` — so a poll-driven deployment never
+  stored a single running row. Everything downstream read a confident zero:
+  `po11y_workflow_running_seconds`, the watchdog's `stuck` rule and the
+  `Po11yWorkflowStuck` alert could not fire on polled data at all. The extra
+  listing is supplementary: if it fails the poll still succeeds, and a row left
+  stale at `running` self-heals when the execution ends and reappears with its
+  terminal status.
+
+  Unit tests could not have caught this — they fed the fetcher a list that
+  already contained a running execution. It surfaced only by watching a real
+  execution against a real n8n while the metric insisted nothing was running.
+
+- `N8N_PUBLIC_URL`: every link po11y hands out — MCP tool results, watchdog
+  notifications, webhook pushes — was built from `N8N_API_URL`, the address
+  this process *sends* to. On the bundled stack that is the compose-network
+  address `http://n8n:5678`, which resolves inside that network and nowhere
+  else, so a `po11y_failure` result told its reader to open a URL that could
+  not be opened. Links now come from `N8N_PUBLIC_URL`, which falls back to
+  `N8N_API_URL` (correct for the single-host and read-only stacks, where the
+  two coincide) and which the bundled compose file defaults to
+  `http://${BIND_ADDR}:5678` — the same address n8n builds its own
+  `WEBHOOK_URL` from. The adapter field is now `linkBase`, not `baseUrl`, so
+  a future link site cannot reach for the request address by habit.
+
+- `po11y_executions` no longer phrases a filtered slice as a failure rate.
+  `{status: "error"}` returns rows that are all errors by construction, and
+  the old summary — "1 of 1 recent runs failed" — described a burning instance
+  where it meant one error existed at all. Under a `status` filter the summary
+  now offers no denominator and says the result is a slice; the applied
+  `filters` are echoed back, since the answer travels further than the call
+  that produced it.
+
+- `po11y_executions` reports the age of the newest matching run
+  (`newest_started_at`, `newest_age_seconds`, and in words in the summary). A
+  column of timestamps never says "and nothing has matched since", so an error
+  filter on an instance that recovered days ago read as a live outage — the
+  same reason `po11y_incidents` already carried `feed_age_seconds`.
+
+- `po11y_failure` names where the payload *is*, not only that po11y withholds
+  it: the deep link, or n8n's own MCP server (`get_execution`), which returns
+  the run under the operator's credentials. The privacy rule is a po11y
+  policy, and stating it without a forward pointer is where an investigation
+  stops or starts guessing.
 
 - Phase 3: `po11y_poll_last_success_timestamp_seconds` is refreshed only by a
   poll that actually reached n8n. The executions fetch swallowed every failure
@@ -135,6 +254,15 @@ versioned yet, so `main` is the only line.
   the ai-map degraded to heuristic text silently.
 
 ### Changed
+
+- `SERVER_POLL_INTERVAL` now defaults to **30 s**, down from 60 s. The interval
+  is not only how stale the dashboard can be — it is the resolution of the
+  live-run view. A workflow that finishes in less than one interval can start
+  and end between two polls, so it is counted but never seen running, and the
+  watchdog's `stuck` rule cannot see it either. 30 s halves that blind spot for
+  the short workflows most instances run, at two extra GETs per minute. The
+  trade-off, and how to size the interval, is documented in the README and in
+  [docs/server.md](docs/server.md).
 
 - Phase 3 — one mode, not two: `po11y_workflow_errors_total` is now
   persisted in the store and monotonic across restarts, instead of an

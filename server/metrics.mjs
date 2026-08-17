@@ -24,9 +24,12 @@ export function escapeLabelValue(v) {
  * being exported rather than lingering forever as a stale total.
  *
  * @param {import('node:sqlite').DatabaseSync} db
- * @param {{now?: number, n8nUp?: number, pollLastSuccessMs?: number|null}} opts
+ * @param {{now?: number, n8nUp?: number, pollLastSuccessMs?: number|null,
+ *          aiMapLlmUp?: number|null}} opts
  */
-export function buildSnapshot(db, { now = Date.now(), n8nUp = 0, pollLastSuccessMs = null } = {}) {
+export function buildSnapshot(db, {
+  now = Date.now(), n8nUp = 0, pollLastSuccessMs = null, aiMapLlmUp = null,
+} = {}) {
   const totals = errorTotals(db);
   const lastOk = lastSuccessByWorkflow(db);
   const running = oldestRunningByWorkflow(db, now);
@@ -43,7 +46,39 @@ export function buildSnapshot(db, { now = Date.now(), n8nUp = 0, pollLastSuccess
       runningSeconds: running.get(id) || 0,
     });
   }
-  return { n8nUp: n8nUp ? 1 : 0, pollLastSuccessMs, workflows: out };
+  return {
+    n8nUp: n8nUp ? 1 : 0,
+    pollLastSuccessMs,
+    aiMapLlmUp: aiMapLlmUp == null ? null : (aiMapLlmUp ? 1 : 0),
+    workflows: out,
+  };
+}
+
+/**
+ * Read an ai-map build outcome as the po11y_ai_map_llm_up sample.
+ *
+ * `aiConfigured` gates everything: a deployment with no LLM wired up has
+ * nothing to be down, and must export no series at all rather than a 0 that
+ * alerts on a correctly-configured stack forever.
+ *
+ * The `action` check is what keeps this honest. buildAiMap returns early on
+ * republish / keep-annotated / skip-fresh WITHOUT calling the LLM, so a null
+ * `degraded` on those rebuilds says nothing about the gateway — reading it as
+ * "up" would clear a genuinely dead provider for as long as the workflow set
+ * stays unchanged. Only a 'publish' actually went to the LLM; every other
+ * action carries the previous reading forward untouched.
+ *
+ * @param {{aiConfigured?: boolean, action?: string|null, degraded?: string|null,
+ *          previous?: 1|0|null}} outcome
+ * @returns {1|0|null} 1 up, 0 degraded, null nothing to report
+ */
+export function aiMapLlmUpFrom({
+  aiConfigured = false, action = null, degraded = null, previous = null,
+} = {}) {
+  if (!aiConfigured) return null;
+  if (degraded) return 0;
+  if (action === 'publish') return 1;
+  return previous;
 }
 
 const META = [
@@ -52,6 +87,7 @@ const META = [
   ['po11y_workflow_errors_total', 'counter', 'Failed (error or crashed) executions observed for a workflow.'],
   ['po11y_workflow_last_success_timestamp_seconds', 'gauge', 'Unix time of a workflow\'s last successful execution.'],
   ['po11y_workflow_running_seconds', 'gauge', 'Age of the oldest currently-running execution of a workflow, in seconds.'],
+  ['po11y_ai_map_llm_up', 'gauge', 'Whether the last ai-map build got LLM prose (1) or fell back to the heuristic (0). Absent when no LLM is configured.'],
 ];
 
 const secs = (ms) => (ms == null ? null : Math.floor(ms / 1000));
@@ -84,6 +120,13 @@ export function renderMetrics(snap) {
 
   lines.push(meta.get('po11y_workflow_running_seconds'));
   for (const w of workflows) lines.push(`po11y_workflow_running_seconds${labels(w)} ${w.runningSeconds || 0}`);
+
+  // Absent when no LLM is configured — see the note on the alert rule. The
+  // HELP/TYPE header goes inside the guard so it never appears without a sample.
+  if (snap?.aiMapLlmUp != null) {
+    lines.push(meta.get('po11y_ai_map_llm_up'));
+    lines.push(`po11y_ai_map_llm_up ${snap.aiMapLlmUp ? 1 : 0}`);
+  }
 
   return `${lines.join('\n')}\n`;
 }

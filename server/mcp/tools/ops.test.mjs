@@ -66,7 +66,7 @@ test('executions and workflow: a serving-only store answers unavailable, not an 
   // not exist — both read as a healthy instance.
   const db = openDb(':memory:');
   const store = makeStore({ db, enabled: false });
-  const n8n = { available: () => false, baseUrl: '' };
+  const n8n = { available: () => false, linkBase: '' };
 
   const execs = await executionsTool({ store }).handler({});
   assert.equal(execs.error, 'unavailable');
@@ -202,7 +202,7 @@ const EXEC = {
   },
 };
 
-const n8nWith = (byPath) => ({ available: () => true, baseUrl: 'http://n8n:5678',
+const n8nWith = (byPath) => ({ available: () => true, linkBase: 'http://n8n:5678',
   get: async (p) => byPath[p.split('?')[0]] ?? byPath[p] });
 const off = { available: () => false };
 
@@ -243,6 +243,23 @@ test('failure: includes a deep link so the operator can read the real payload', 
   const tool = failureTool({ n8n: n8nWith({ '/api/v1/executions/77': EXEC }), grafana: off });
   const out = await tool.handler({ executionId: 77 });
   assert.match(out.link, /\/executions\/77$/);
+});
+
+test('failure: the deep link is built from the public base, not the polling address', async () => {
+  // The regression this pins: links were built from N8N_API_URL, which on the
+  // bundled stack is http://n8n:5678 — resolvable inside the compose network
+  // and by nobody who reads the answer.
+  const n8n = { ...n8nWith({ '/api/v1/executions/77': EXEC }), linkBase: 'https://n8n.example.org' };
+  const out = await failureTool({ n8n, grafana: off }).handler({ executionId: 77 });
+  assert.equal(out.link, 'https://n8n.example.org/executions/77');
+});
+
+test('failure: says where the payload IS, not only that po11y withholds it', async () => {
+  const tool = failureTool({ n8n: n8nWith({ '/api/v1/executions/77': EXEC }), grafana: off });
+  const out = await tool.handler({ executionId: 77 });
+  // A refusal with no forward pointer is where an agent stops or starts
+  // guessing; n8n's own MCP server is the sanctioned way to the run data.
+  assert.match(out.payload_note, /get_execution/);
 });
 
 test('failure: without n8n or grafana it names both variables', async () => {
@@ -299,6 +316,70 @@ test('po11y_executions: workflow name falls back through workflowName -> workflo
   assert.equal(byId['2'], 'b', 'falls back to workflowId when even workflowData is absent');
 });
 
+// A fixed clock so the age fields are assertable. Rows below are dated
+// relative to it rather than to the wall clock.
+const NOW = Date.parse('2026-08-16T12:00:00.000Z');
+const at = (msAgo) => new Date(NOW - msAgo).toISOString();
+const HOUR = 3_600_000;
+
+test('po11y_executions: a status filter is never phrased as a failure rate', async () => {
+  // "1 of 1 recent runs failed" was true and read as a burning instance. Under
+  // a filter every row matches by construction, so no denominator may appear.
+  const tool = executionsTool({
+    store: storeOf([{ id: '1', workflowId: 'a', status: 'error', startedAt: at(HOUR) }]),
+    now: () => NOW,
+  });
+  const out = await tool.handler({ status: 'error' });
+  assert.doesNotMatch(out.summary, /1 of 1/);
+  assert.match(out.summary, /filtered slice/i);
+  assert.deepEqual(out.filters, { workflow_id: null, status: 'error' });
+});
+
+test('po11y_executions: with no filter the failure rate is still stated plainly', async () => {
+  const tool = executionsTool({
+    store: storeOf([
+      { id: '1', workflowId: 'a', status: 'error', startedAt: at(HOUR) },
+      { id: '2', workflowId: 'a', status: 'success', startedAt: at(2 * HOUR) },
+    ]),
+    now: () => NOW,
+  });
+  const out = await tool.handler({});
+  assert.match(out.summary, /1 of 2 recent runs failed/);
+  assert.deepEqual(out.filters, { workflow_id: null, status: null });
+});
+
+test('po11y_executions: an old newest match is reported as old, in the summary', async () => {
+  // The observed miss: the newest error was two days stale on an instance that
+  // had been healthy since, and a column of timestamps never says so.
+  const tool = executionsTool({
+    store: storeOf([{ id: '1', workflowId: 'a', status: 'error', startedAt: at(48 * HOUR) }]),
+    now: () => NOW,
+  });
+  const out = await tool.handler({ status: 'error' });
+  assert.equal(out.newest_started_at, at(48 * HOUR));
+  assert.equal(out.newest_age_seconds, 172_800);
+  assert.match(out.summary, /2d old/);
+});
+
+test('po11y_executions: an empty result carries no age and says nothing matched', async () => {
+  const out = await executionsTool({ store: storeOf([]), now: () => NOW }).handler({ status: 'error' });
+  assert.equal(out.newest_started_at, null);
+  assert.equal(out.newest_age_seconds, null);
+  assert.match(out.summary, /No executions matched/);
+});
+
+test('po11y_executions: a row with no timestamps ages to null instead of to 1970', async () => {
+  // execRow coalesces startedAt/createdAt; a row missing both must not become
+  // Date.parse(undefined) territory or a 56-year-old "newest match".
+  const tool = executionsTool({
+    store: storeOf([{ id: '1', workflowId: 'a', status: 'waiting' }]),
+    now: () => NOW,
+  });
+  const out = await tool.handler({});
+  assert.equal(out.newest_age_seconds, null);
+  assert.doesNotMatch(out.summary, /old/);
+});
+
 test('po11y_executions: sanitises a non-numeric limit rather than sending "NaN" to the store', async () => {
   let requestedLimit = null;
   const store = {
@@ -318,7 +399,7 @@ test('po11y_workflow resolves by name from the store and counts recent errors', 
   const tool = workflowTool({
     feeds: { available: () => false },
     store: storeOf(rows, wfs),
-    n8n: { available: () => false, baseUrl: 'http://n8n:5678' },
+    n8n: { available: () => false, linkBase: 'http://n8n:5678' },
   });
   const out = await tool.handler({ workflow: 'ingest' });
   assert.equal(out.workflow.id, 'a');
@@ -332,7 +413,7 @@ test('po11y_workflow: with no feed build behind it, neighbours reports unavailab
   const tool = workflowTool({
     feeds: { available: () => false },
     store: storeOf([], wfs),
-    n8n: { available: () => false, baseUrl: 'http://n8n:5678' },
+    n8n: { available: () => false, linkBase: 'http://n8n:5678' },
   });
   const out = await tool.handler({ workflow: 'HN notify' });
   assert.equal(out.neighbours.error, 'unavailable');
@@ -344,7 +425,7 @@ test('po11y_workflow: when ai-map.json has not been written yet, neighbours says
   const tool = workflowTool({
     feeds: feedsWith({}), // volume present, file never written
     store: storeOf([], wfs),
-    n8n: { available: () => false, baseUrl: 'http://n8n:5678' },
+    n8n: { available: () => false, linkBase: 'http://n8n:5678' },
   });
   const out = await tool.handler({ workflow: 'HN notify' });
   assert.match(out.neighbours.error, /ai-map\.json has not been written yet/);
@@ -354,7 +435,7 @@ test('po11y_workflow lists known names on a miss', async () => {
   const tool = workflowTool({
     feeds: { available: () => false },
     store: storeOf([], [{ id: 'a', name: 'Ingest', active: true }]),
-    n8n: { available: () => false, baseUrl: '' },
+    n8n: { available: () => false, linkBase: '' },
   });
   const out = await tool.handler({ workflow: 'nope' });
   assert.match(out.error, /not found/);

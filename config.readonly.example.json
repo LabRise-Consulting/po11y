@@ -47,5 +47,5 @@
   },
   "refreshSec": 30,
   "staleAfterMin": 20,
-  "statusHint": "status.json missing — the first server poll runs at startup, then every SERVER_POLL_INTERVAL (default 60 s)"
+  "statusHint": "status.json missing — the first server poll runs at startup, then every SERVER_POLL_INTERVAL (default 30 s)"
 }

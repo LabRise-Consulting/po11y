@@ -47,6 +47,29 @@ test('n8n: unavailable without both url and key', () => {
   assert.equal(makeN8n({ url: 'http://n8n:5678', apiKey: 'k' }).available(), true);
 });
 
+test('n8n: links use the public URL while requests keep using the API URL', async () => {
+  const calls = [];
+  const fetchFn = async (u, opts) => { calls.push(u); return { ok: true, json: async () => ({}) }; };
+  const n8n = makeN8n({
+    url: 'http://n8n:5678', apiKey: 'k', publicUrl: 'https://n8n.example.org', fetchFn,
+  });
+  await n8n.get('/api/v1/executions/1');
+  // The two must not collapse into one: polling over the container network is
+  // the whole reason the addresses differ.
+  assert.equal(calls[0], 'http://n8n:5678/api/v1/executions/1');
+  assert.equal(n8n.linkBase, 'https://n8n.example.org');
+});
+
+test('n8n: linkBase falls back to the API URL and trims a trailing slash', () => {
+  // The single-host default — one address for both roles — must keep working
+  // untouched for every deployment that never sets N8N_PUBLIC_URL.
+  assert.equal(makeN8n({ url: 'http://127.0.0.1:5678', apiKey: 'k' }).linkBase, 'http://127.0.0.1:5678');
+  assert.equal(
+    makeN8n({ url: 'http://n8n:5678', apiKey: 'k', publicUrl: 'https://n8n.example.org/' }).linkBase,
+    'https://n8n.example.org',
+  );
+});
+
 test('assertSelect accepts a single SELECT and strips a trailing semicolon', () => {
   assert.equal(assertSelect('  SELECT 1;  '), 'SELECT 1');
 });

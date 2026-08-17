@@ -1,0 +1,49 @@
+{
+  "id": "po11yheartbeat00",
+  "name": "Po11y demo - Heartbeat",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 1 }]
+        }
+      },
+      "id": "b7000000-0000-0000-0000-000000000001",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "amount": 20,
+        "unit": "seconds"
+      },
+      "id": "b7000000-0000-0000-0000-000000000002",
+      "name": "Stay in flight 20s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [220, 0],
+      "webhookId": "b7000000-0000-0000-0000-0000000000ff"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demo workflow: exists so the dashboard has something visibly in flight.\n//\n// Po11y learns that a workflow is running by asking n8n for its running\n// executions once per POLL_INTERVAL. A workflow that finishes in less time\n// than one interval can start and end between two polls, so it is counted but\n// never seen running. Every other example workflow finishes in a few seconds,\n// which makes the live indicator impossible to demonstrate on a fresh install.\n//\n// This one holds an execution open for 20 seconds of every minute, so a poll\n// lands inside a run often enough to watch the indicator appear and clear.\n// Zero credentials, no outbound calls, no data produced beyond this stamp.\nreturn [{ json: { beat_at: new Date().toISOString(), held_seconds: 20 } }];"
+      },
+      "id": "b7000000-0000-0000-0000-000000000003",
+      "name": "Stamp the beat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [[{ "node": "Stay in flight 20s", "type": "main", "index": 0 }]]
+    },
+    "Stay in flight 20s": {
+      "main": [[{ "node": "Stamp the beat", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

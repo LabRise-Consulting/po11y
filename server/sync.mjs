@@ -117,7 +117,23 @@ export async function pollFill(db, fetchFn, baseUrl, apiKey, limit, now = Date.n
   } catch (error) {
     return { ok: false, n: 0, error };
   }
-  const n = upsertExecutions(db, executions);
+  // Second listing, because n8n's default one is finished-only: an execution
+  // that is still going appears ONLY under ?status=running. Without this the
+  // store never holds a running row, and everything downstream of that —
+  // po11y_workflow_running_seconds, the watchdog's `stuck` rule, the
+  // dashboard's live indicator — reads a confident zero forever.
+  //
+  // Supplementary, so a failure here is logged and dropped rather than failing
+  // the tick: the finished window is what the poll's stamp attests to. A row
+  // left stale at 'running' self-heals, because the execution shows up in the
+  // ordinary listing with its terminal status once it ends.
+  let running = [];
+  try {
+    running = await fetchExecutions(assertGetOnly(fetchFn), baseUrl, apiKey, limit, { strict: true, status: 'running' });
+  } catch (e) {
+    console.error(`server: running-executions listing failed — ${e.message}; live-run state may be stale`);
+  }
+  const n = upsertExecutions(db, [...executions, ...running]);
   setKv(db, POLL_LAST_SUCCESS_KEY, new Date(now).toISOString());
   return { ok: true, n, error: null };
 }

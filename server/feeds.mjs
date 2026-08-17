@@ -40,6 +40,10 @@ export async function buildFeeds(db, { stamp, now = Date.parse(stamp), prevAiMap
     feeds: { ...docs, 'status.json': { generated_at: stamp, ...status } },
     aiMap,
     degraded: built.ai?.degraded ?? null,
+    // Which branch buildAiMap took. republish/keep-annotated/skip-fresh return
+    // without calling the LLM, so the caller cannot read a null `degraded` as
+    // an all-clear without knowing this.
+    aiAction: built.ai?.action ?? null,
     aiWarnings: built.ai?.summary?.warnings ?? [],
     warning,
     executions,

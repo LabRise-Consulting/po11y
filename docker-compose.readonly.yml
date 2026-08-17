@@ -12,7 +12,8 @@
 #   N8N_METRICS_TARGET   host:port of the remote n8n /metrics (required; the
 #                        remote must run with N8N_METRICS=true — absent metrics
 #                        degrade gracefully to an empty Grafana tab)
-#   SERVER_POLL_INTERVAL seconds between polls (default 60)
+#   SERVER_POLL_INTERVAL seconds between polls (default 30 — lower it further to
+#                        catch workflows that finish inside one interval)
 #   EXECUTIONS_LIMIT     recent-executions window per poll (default 100, max
 #                        250 — n8n's API cap; see "Sizing the executions
 #                        window" in docs/configuration.md)
@@ -155,9 +156,14 @@ services:
     read_only: true
     environment:
       N8N_API_URL: ${N8N_API_URL:?set N8N_API_URL to the remote n8n base URL}
+      # Usually redundant here — the remote n8n's URL is already the one a
+      # reader opens, and an unset value falls back to it. Set it only when
+      # po11y reaches n8n by an address a reader cannot: a tunnel, a private
+      # DNS name, a mesh IP.
+      N8N_PUBLIC_URL: ${N8N_PUBLIC_URL:-}
       N8N_API_KEY: ${N8N_API_KEY:?set N8N_API_KEY to a public-API key on that n8n}
       SYNC_INTERVAL: ${SERVER_SYNC_INTERVAL:-600}
-      POLL_INTERVAL: ${SERVER_POLL_INTERVAL:-60}
+      POLL_INTERVAL: ${SERVER_POLL_INTERVAL:-30}
       N8N_TIMEOUT_MS: ${N8N_TIMEOUT_MS:-30000}
       EXECUTIONS_LIMIT: ${EXECUTIONS_LIMIT:-100}
       PO11Y_RETENTION_DAYS: ${PO11Y_RETENTION_DAYS:-30}

@@ -222,13 +222,69 @@ const execRow = (e) => ({
   duration_seconds: seconds(e.startedAt, e.stoppedAt),
 });
 
-/** Recent executions as a compact table, read from the store. */
-export function executionsTool({ store }) {
+const DAY = 86_400;
+
+/**
+ * Coarse, human-readable age. Deliberately one significant unit: this exists to
+ * stop "days old" being read as "now", and a precise figure invites confidence
+ * the poll interval does not support.
+ *
+ * @param {number|null} s - seconds, or null when there is nothing to age
+ * @returns {string|null}
+ */
+const humanAge = (s) => {
+  if (s == null) return null;
+  if (s < 120) return `${s}s`;
+  if (s < 7200) return `${Math.round(s / 60)}m`;
+  if (s < 2 * DAY) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / DAY)}d`;
+};
+
+/** Seconds between an ISO timestamp and `nowMs`; null for anything unparseable. */
+const ageSeconds = (iso, nowMs) => {
+  const t = Date.parse(iso || '');
+  return Number.isFinite(t) ? Math.max(0, Math.round((nowMs - t) / 1000)) : null;
+};
+
+/**
+ * The one line an agent reads before anything else, so it must not be capable
+ * of misleading on its own. Two failure modes it is written against:
+ *
+ * 1. A filtered slice read as a rate. `{status:'error'}` returns rows that are
+ *    all errors by construction, and the old wording — "1 of 1 recent runs
+ *    failed" — describes a burning instance when what it means is that exactly
+ *    one error exists at all. Under a status filter the sentence must not offer
+ *    a denominator, because any denominator there looks like a rate.
+ * 2. A stale row read as current. The newest match can be days old — the normal
+ *    case for an error filter on a healthy instance — and a column of
+ *    timestamps never says "and nothing has matched since". So the age of the
+ *    newest match is stated in words rather than left to be derived.
+ */
+function summarize({ count, errors, workflowId, status, newestAge }) {
+  if (!count) return 'No executions matched.';
+  const scope = workflowId ? ` for workflow ${workflowId}` : '';
+  const age = humanAge(newestAge);
+  const since = age ? ` Newest match is ${age} old.` : '';
+  if (status) {
+    return `${count} recent run${count === 1 ? '' : 's'}${scope} matched status "${status}". `
+      + `This is a filtered slice, not a failure rate — re-run without \`status\` for that.${since}`;
+  }
+  return `${errors} of ${count} recent runs${scope} failed.${since}`;
+}
+
+/**
+ * Recent executions as a compact table, read from the store.
+ *
+ * `now` is injected so the age fields are testable; every caller in production
+ * takes the default.
+ */
+export function executionsTool({ store, now = Date.now }) {
   return {
     name: 'po11y_executions',
     title: 'Recent executions',
     description: 'Recent workflow runs from the po11y store, filterable by workflow and status. '
-      + 'Returns timings and statuses only — never the data that flowed through the run.',
+      + 'Returns timings and statuses only — never the data that flowed through the run. '
+      + 'A `status` filter returns a slice, not a rate: omit it to learn how often runs fail.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -245,11 +301,23 @@ export function executionsTool({ store }) {
         limit: clampLimit(limit, 20, 250),
       });
       const executions = rows.map(execRow);
+      const errors = executions.filter((e) => e.status === 'error').length;
+      // recentExecutions orders by COALESCE(started_at, created_at) DESC, and
+      // execRow carries the same coalesce forward, so row 0 is the newest match.
+      const newestStartedAt = (executions[0] && executions[0].started_at) || null;
+      const newestAge = ageSeconds(newestStartedAt, now());
       return {
         count: executions.length,
-        summary: executions.length
-          ? `${executions.filter((e) => e.status === 'error').length} of ${executions.length} recent runs failed.`
-          : 'No executions matched.',
+        // Echo the filter back. The caller knows what it asked for, but the
+        // answer travels — into a report, a summary, another agent's context —
+        // and a bare count with no filter attached alongside it reads as
+        // instance-wide.
+        filters: { workflow_id: workflowId || null, status: status || null },
+        summary: summarize({
+          count: executions.length, errors, workflowId, status, newestAge,
+        }),
+        newest_started_at: newestStartedAt,
+        newest_age_seconds: newestAge,
         executions,
       };
     },
@@ -311,8 +379,15 @@ export function failureTool({ n8n, grafana }) {
         started_at: e.startedAt || e.createdAt,
         duration_seconds: seconds(e.startedAt, e.stoppedAt),
         payload_shapes: shapes,
-        payload_note: 'Payload data is not returned by design; open the link to inspect it in n8n.',
-        link: `${n8n.baseUrl}/executions/${e.id}`,
+        // Name where the payload IS, not only where it is not. The privacy
+        // rule is a po11y policy, not a fact about the world, and an agent told
+        // "not here" with no forward pointer either stops or starts guessing.
+        // n8n ships its own MCP server, which returns whole executions under
+        // the operator's credentials rather than po11y's read-only key — so the
+        // pointer costs po11y nothing and keeps the policy intact.
+        payload_note: 'Payload data is not returned by design. Open the link to read it in n8n, '
+          + 'or call n8n\'s own MCP server (get_execution) to fetch the run programmatically.',
+        link: `${n8n.linkBase}/executions/${e.id}`,
       };
     },
   };
@@ -369,7 +444,7 @@ export function workflowTool({ feeds, store, n8n }) {
           last: executions[0] || null,
         },
         neighbours,
-        link: n8n.baseUrl ? `${n8n.baseUrl}/workflow/${wf.id}` : null,
+        link: n8n.linkBase ? `${n8n.linkBase}/workflow/${wf.id}` : null,
       };
     },
   };

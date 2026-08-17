@@ -81,3 +81,11 @@ test('nextAiMap prefers a fresh build, falls back to previous, then to null', ()
   assert.deepEqual(nextAiMap({ a: 1 }, null), { a: 1 });
   assert.equal(nextAiMap(null, null), null);
 });
+
+// po11y_ai_map_llm_up cannot tell "the LLM answered" from "no LLM call was made
+// this rebuild" unless the action reaches the caller. Without it the metric
+// reports a dead gateway as up on every republish.
+test('buildFeeds reports the ai-map action, not only its degraded reason', async () => {
+  const { aiAction } = await buildFeeds(seed(), { stamp: STAMP, now: NOW });
+  assert.equal(typeof aiAction, 'string', 'the caller needs the action to read the LLM outcome');
+});

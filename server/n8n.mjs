@@ -140,7 +140,7 @@ export async function fetchAllWorkflows(fetchFn, baseUrl, apiKey) {
  * adding a renderer.
  *
  * Shape:
- *   { executions: { recent, errors, byWorkflow: [{ name, id, count, errors, lastAt }] } }
+ *   { executions: { recent, errors, byWorkflow: [{ name, id, count, errors, lastAt, running }] } }
  * where recent = size of the recent window and errors = the failures WITHIN
  * that same window, so the dashboard's "N recent · M errors" is a real rate.
  * (An earlier version sourced `errors` from a separate error-only query that
@@ -180,7 +180,8 @@ export async function fetchStatus(fetchFn, baseUrl, apiKey, { names = null, exec
     // with no workflowId at all (summarize skips them) no longer produce a
     // blank byWorkflow row; they still count toward `recent` and `errors`.
     const byWorkflow = [...summarizeExecutions(recent, { names }).values()]
-      .map(({ name, id, count, errors, lastAt }) => ({ name, id, count, errors, lastAt }))
+      .map(({ name, id, count, errors, lastAt, running }) =>
+        ({ name, id, count, errors, lastAt, running: running.length }))
       .sort((a, b) => b.count - a.count || String(a.name).localeCompare(String(b.name)))
       .slice(0, 10);
 
@@ -196,16 +197,23 @@ export async function fetchStatus(fetchFn, baseUrl, apiKey, { names = null, exec
 
 /**
  * Build an LLM transport for the architecture-map annotation call (POST to
- * {base}/chat/completions, bearer key, JSON-object response format,
- * max_tokens 3000, returns the first choice's message content). Base/key/model
- * come from AI_MAP_BASE_URL/AI_MAP_API_KEY/AI_MAP_MODEL. This is the ONLY
- * non-GET the core issues, and it never targets the n8n host.
+ * {base}/chat/completions, bearer key, JSON-object response format, returns
+ * the first choice's message content). Base/key/model come from
+ * AI_MAP_BASE_URL/AI_MAP_API_KEY/AI_MAP_MODEL. This is the ONLY non-GET the
+ * core issues, and it never targets the n8n host.
+ *
+ * The budget defaults to 8000, not 3000, because a reasoning model spends the
+ * SAME allowance on its hidden thinking as on the answer. The bundled default
+ * route (`auto/best-free`) resolves to one, and 3000 left it enough room to
+ * think and then stop mid-string — so the map degraded to heuristic text on a
+ * stock install and stayed there. Raise it further with AI_MAP_MAX_TOKENS if a
+ * larger instance still truncates.
  *
  * @param {typeof fetch} fetchFn
- * @param {{ base: string, key: string, model: string }} cfg
+ * @param {{ base: string, key: string, model: string, maxTokens?: number }} cfg
  * @returns {(prompt: string) => Promise<string>}
  */
-export function makeLlm(fetchFn, { base, key, model }) {
+export function makeLlm(fetchFn, { base, key, model, maxTokens = 8000 }) {
   const url = `${String(base).replace(/\/$/, '')}/chat/completions`;
   return async (prompt) => {
     const res = await fetchFn(url, {
@@ -215,7 +223,7 @@ export function makeLlm(fetchFn, { base, key, model }) {
         model,
         messages: [{ role: 'user', content: prompt }],
         response_format: { type: 'json_object' },
-        max_tokens: 3000,
+        max_tokens: maxTokens,
         // stream:false is explicit — some gateways (OmniRoute auto/* routes,
         // the bundled default) reply with SSE when the field is absent, and
         // res.json() then throws on every poll.
@@ -224,7 +232,15 @@ export function makeLlm(fetchFn, { base, key, model }) {
     });
     if (!res.ok) throw new Error(`LLM POST -> ${res.status}`);
     const data = await res.json();
-    return ((data.choices || [])[0] || {}).message?.content || '';
+    const choice = (data.choices || [])[0] || {};
+    // A truncated answer is a budget failure, not a malformed one. Handing the
+    // half-document back makes the caller report "annotation unusable" with a
+    // JSON parse error that names neither the cause nor the cure, and the map
+    // then sits on heuristic text indefinitely. Say what happened instead.
+    if (choice.finish_reason === 'length') {
+      throw new Error(`LLM answer truncated at max_tokens ${maxTokens} — raise AI_MAP_MAX_TOKENS`);
+    }
+    return choice.message?.content || '';
   };
 }
 
@@ -257,13 +273,19 @@ export function makeLlm(fetchFn, { base, key, model }) {
  * @param {string} baseUrl
  * @param {string} apiKey
  * @param {number} [limit]
- * @param {{strict?: boolean}} [opts] - strict:true rethrows instead of returning []
+ * `status` narrows the listing to one n8n execution status. It exists for one
+ * reason: n8n leaves in-flight executions OUT of the default listing, so
+ * `?status=running` is the ONLY way a poller can see that anything is running.
+ * Without it the store holds finished rows exclusively.
+ *
+ * @param {{strict?: boolean, status?: (string|null)}} [opts] - strict:true rethrows instead of returning []
  * @returns {Promise<object[]>}
  */
-export async function fetchExecutions(fetchFn, baseUrl, apiKey, limit = EXECUTIONS_LIMIT, { strict = false } = {}) {
+export async function fetchExecutions(fetchFn, baseUrl, apiKey, limit = EXECUTIONS_LIMIT, { strict = false, status = null } = {}) {
   let res;
+  const q = `/api/v1/executions?limit=${clampLimit(limit)}${status ? `&status=${encodeURIComponent(status)}` : ''}`;
   try {
-    res = await apiGet(fetchFn, baseUrl, apiKey, `/api/v1/executions?limit=${clampLimit(limit)}`);
+    res = await apiGet(fetchFn, baseUrl, apiKey, q);
   } catch (e) {
     if (strict) throw e;
     return [];

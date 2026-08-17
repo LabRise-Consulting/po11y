@@ -1,0 +1,56 @@
+{
+  "id": "po11yintake00000",
+  "name": "Po11y example - Order intake (webhook)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "po11y-intake",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "a4000000-0000-0000-0000-000000000001",
+      "name": "Order webhook",
+      "webhookId": "po11y-intake",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demo workflow: accepts a POSTed order and hands it to a sub-workflow.\n// Zero credentials and no outbound calls. It exists so a fresh install has a\n// webhook trigger and a real sub-workflow edge on the architecture map.\n// POST anything to /webhook/po11y-intake to produce an execution.\nreturn items.map((item) => {\n  const body = (item.json && item.json.body) || item.json || {};\n  return {\n    json: {\n      order_id: body.order_id || `demo-${Math.floor(Math.random() * 100000)}`,\n      email: body.email || 'someone@example.com',\n      amount: Number(body.amount || 0),\n    },\n  };\n});"
+      },
+      "id": "a4000000-0000-0000-0000-000000000002",
+      "name": "Validate payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "po11yenrich00000",
+          "mode": "list",
+          "cachedResultName": "Po11y example - Enrich record (sub-workflow)"
+        },
+        "workflowInputs": { "mappingMode": "defineBelow", "value": {} },
+        "options": {}
+      },
+      "id": "a4000000-0000-0000-0000-000000000003",
+      "name": "Enrich record",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Order webhook": {
+      "main": [[{ "node": "Validate payload", "type": "main", "index": 0 }]]
+    },
+    "Validate payload": {
+      "main": [[{ "node": "Enrich record", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

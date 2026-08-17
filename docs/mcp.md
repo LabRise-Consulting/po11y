@@ -12,7 +12,7 @@ The MCP endpoint is a route (`/mcp`) served by the po11y `server` process — th
 |---|---|---|
 | `po11y_incidents` | Lists active issues: failing, stale, stuck, and unreachable workflows. | Status feeds |
 | `po11y_graph` | Returns the workflow dependency graph or a subtree around a specific node. | Status feeds |
-| `po11y_executions` | Returns recent execution history, filterable by workflow and status. | po11y store |
+| `po11y_executions` | Returns recent execution history, filterable by workflow and status. A `status` filter returns a slice, not a rate — see [Reading the answers](#reading-the-answers). | po11y store |
 | `po11y_failure` | Returns failure details for an execution: failing node, error message, and payload data shapes. | n8n API |
 | `po11y_workflow` | Returns a workflow's health summary: active state, recent error rate, and graph neighbors. | po11y store & feeds |
 | `po11y_promql` | Runs raw PromQL queries against Prometheus. | Prometheus |
@@ -66,6 +66,28 @@ Omit `headers` if `DASHBOARD_BASIC_AUTH` is not set.
 - `po11y_failure` returns data structure shapes (e.g. `object, 4 keys` or `array, 12 items`) and error text, never raw payload content.
 - Execution payload contents are excluded from tool responses to prevent sensitive data from entering LLM context.
 - **Exceptions**: `po11y_row` returns full row data for specified content datasets. `po11y_sql` returns row results for explicit `SELECT` queries against non-sensitive tables.
+
+The rule is a po11y policy, not a dead end. When the payload itself is what an
+investigation needs, `po11y_failure` names the two ways to it: the `link` it
+returns, and n8n's own MCP server, whose `get_execution` returns the whole run
+under the operator's credentials rather than po11y's read-only key.
+
+## Reading the answers
+
+Two shapes of question mislead an agent that reads only the numbers, so the
+tools answer them in words:
+
+- **A filter is not a rate.** `po11y_executions {status: "error"}` returns rows
+  that are all errors by construction. Its summary therefore refuses to offer a
+  denominator, and the response echoes the `filters` it applied. Omit `status`
+  to learn how often runs actually fail — or read `error_rate` from
+  `po11y_workflow`, which is scoped to one workflow and never filtered.
+- **Old is not current.** The newest matching row can be days stale — the normal
+  case for an error filter on an instance that has since recovered. Every
+  `po11y_executions` response carries `newest_started_at` and
+  `newest_age_seconds`, and states the age in its summary. `po11y_incidents`
+  carries `feed_age_seconds` for the same reason: report the age alongside the
+  finding, or a two-day-old failure reads as an outage in progress.
 
 ## `po11y_sql` details (bundled stack only)
 

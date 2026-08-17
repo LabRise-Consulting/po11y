@@ -37,10 +37,11 @@ mount) and talks to n8n's public API read-only.
 
 | Variable | Default | Description |
 |---|---|---|
-| `N8N_API_URL` | *(required)* | Base URL of the n8n instance the server polls. |
+| `N8N_API_URL` | *(required)* | Base URL of the n8n instance the server polls. Where this process **sends** requests. |
+| `N8N_PUBLIC_URL` | *(falls back to `N8N_API_URL`)* | Base URL a reader **opens**, used for every link po11y hands out: MCP tool results, watchdog notifications, webhook pushes. On the bundled stack the two differ — the server polls `http://n8n:5678` over the compose network, an address that resolves nowhere else — so the bundled compose file defaults this to `http://${BIND_ADDR}:5678`, the same address n8n builds its own `WEBHOOK_URL` from. Set it explicitly behind a reverse proxy or a tunnel. Never fetched; it names the n8n host by design and so is exempt from the outbound-target guard. |
 | `N8N_API_KEY` | *(required on the read-only stack)* | A public-API key on that n8n, used GET-only. The bundled stack's compose file maps `MCP_N8N_API_KEY` (falling back to `N8N_API_KEY`) onto it, and `bootstrap.sh` mints a read-only key into `MCP_N8N_API_KEY` when it is empty, so a default bundled stack has one. Should both be empty — you cleared them, or the mint failed — the server starts in **serving-only** mode: no sync, no poll, no feed build. `/mcp`, `/n8n-table` and the feed routes still answer, but the MCP ops tools report `unavailable` and the feed tools report not-built rather than an empty result. |
 | `SERVER_SYNC_INTERVAL` | `600` | Seconds between workflow-definition syncs (name/active state). Measured from the end of the previous sync, not its start: ticks never overlap. |
-| `SERVER_POLL_INTERVAL` | `60` | Seconds between execution poll-fills, measured the same way. |
+| `SERVER_POLL_INTERVAL` | `30` | Seconds between execution poll-fills, measured the same way. Each poll makes two GETs — the finished window, and a second listing of the still-running executions, which n8n omits from the first. The interval is therefore also the resolution of the live-run view: a workflow shorter than one interval can start and finish between two polls, so it is counted but never seen running, and the watchdog's `stuck` rule cannot see it either. |
 | `EXECUTIONS_LIMIT` | `100` | Recent-executions window fetched per poll (n8n's API caps this at 250 — see docs/configuration.md "Sizing the executions window"). |
 | `N8N_TIMEOUT_MS` | `30000` | Deadline on one call to n8n. A tick re-arms only after the previous one settles, so a request without a deadline would stop the sync or poll loop for good. |
 | `PO11Y_RETENTION_DAYS` | `30` | Executions (and data-table-count samples, if any) older than this are pruned. |
@@ -49,6 +50,7 @@ mount) and talks to n8n's public API read-only.
 | `PO11Y_INGEST_TOKEN` | *(empty)* | Bearer token that enables `POST /ingest`. Empty = disabled (poll-fill only) — see [Push versus poll](#push-versus-poll). |
 | `PO11Y_DATATABLES` | *(empty)* | Comma-separated data-table **names** to sample a row count for every poll-fill tick — see [below](#po11y_datatables-data-table-row-count-sampling). Empty = sampling off. |
 | `AI_MAP_BASE_URL` / `AI_MAP_API_KEY` / `AI_MAP_MODEL` | *(empty)* | Architecture-map LLM annotation (see `.env.example`); all three or none. |
+| `AI_MAP_MAX_TOKENS` | `8000` | Budget for the annotation call. Reasoning models spend it on thinking as well as on the answer, so too small a budget returns a reply cut off mid-string — logged as `LLM answer truncated at max_tokens`, after which the map keeps its heuristic text. |
 | `ALERTS_ENABLED` | `true` | Evaluate the watchdog rules against the store and publish the verdicts to `notifications.json`. This service also **delivers** them — see the push and heartbeat rows below. |
 | `ALERT_STALE_AFTER_MIN` / `ALERT_STUCK_AFTER_MIN` | `0` / `0` | Off by default; see `.env.example`'s watchdog section. |
 | `ALERT_MIN_ERRORS` / `ALERT_ERROR_RATE` | `3` / `0.5` | The `failing` rule's floors — both must be cleared. |

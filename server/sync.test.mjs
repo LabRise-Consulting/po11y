@@ -131,6 +131,40 @@ test('pollFill is idempotent across overlapping windows', async () => {
   assert.equal(recentExecutions(db).length, 2);
 });
 
+// n8n's public API leaves in-flight executions OUT of the default listing:
+// GET /executions?limit=N returns only finished ones, and a running execution
+// is reachable only via ?status=running. Polling the default list alone
+// therefore never learns that anything is running — which silently emptied
+// po11y_workflow_running_seconds, the watchdog's `stuck` rule and the
+// dashboard's live indicator on every poll-driven deployment.
+test('pollFill records executions that only the running listing returns', async () => {
+  const db = openDb(':memory:');
+  const fetchFn = async (url) => jsonResponse({
+    data: String(url).includes('status=running')
+      ? [{ id: '9', workflowId: 'wf1', status: 'running', startedAt: '2026-08-11T02:10:00.000Z' }]
+      : [{ id: '1', workflowId: 'wf1', status: 'success', startedAt: '2026-08-11T02:00:00.000Z' }],
+  });
+  const { ok } = await pollFill(db, fetchFn, 'http://n8n', 'k', 100);
+  assert.equal(ok, true);
+  const stored = recentExecutions(db);
+  assert.deepEqual(stored.map((e) => [e.id, e.status]).sort(),
+    [['1', 'success'], ['9', 'running']]);
+});
+
+// The running listing is a supplement, not the poll's evidence of life: losing
+// it must not take down the executions poll, the stamp, or the tick behind it.
+test('pollFill survives a failing running listing and keeps the finished window', async () => {
+  const db = openDb(':memory:');
+  const fetchFn = async (url) => {
+    if (String(url).includes('status=running')) throw new Error('running listing refused');
+    return jsonResponse({ data: [{ id: '1', workflowId: 'wf1', status: 'success', startedAt: '2026-08-11T02:00:00.000Z' }] });
+  };
+  const { ok, error } = await pollFill(db, fetchFn, 'http://n8n', 'k', 100);
+  assert.equal(ok, true, 'the finished window arrived, so the poll succeeded');
+  assert.equal(error, null);
+  assert.equal(recentExecutions(db).length, 1);
+});
+
 // po11y_poll_last_success_timestamp_seconds exists to say "the poll stopped
 // working". It used to be stamped unconditionally after pollFill, and
 // fetchExecutions swallowed every transport failure into [] — so an

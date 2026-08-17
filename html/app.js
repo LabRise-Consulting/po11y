@@ -7,7 +7,10 @@
 //   tabs          extra sidebar views, each an iframe onto an instance-served
 //                 page; entries sharing a "group" fold into one sidebar entry
 //                 whose view keeps a tab strip (the key is still "tabs" so
-//                 existing configs work unchanged)
+//                 existing configs work unchanged). The open view is named in
+//                 the address bar (#projects, #reports/daily, #map), so a
+//                 reload, a bookmark and a shared link all land where they left
+//                 off instead of on Overview.
 //   sections      which /status.json sections to render, and their headings;
 //                 "notifications" renders as its own sidebar view (with an
 //                 unseen badge), the rest as Overview sections
@@ -26,7 +29,8 @@
 // everything DOM-shaped stays here.
 import { esc, safeUrl, ago, refreshMs, formCards, withHost as withHostOf,
   scopeKeys as scopeKeysOf, pickScope, feedUrl as feedUrlOf,
-  scopedSrc as scopedSrcOf, withTab, metricsRangeLabel }
+  scopedSrc as scopedSrcOf, withTab, metricsRangeLabel, execDot, runningText,
+  resolveRoute, routeHash }
   from './app.lib.js';
 
 const $ = (id) => document.getElementById(id);
@@ -128,6 +132,10 @@ function applyTheme(next) {
 }
 
 // ---- static chrome ------------------------------------------------------------
+// Sidebar entries as the router sees them ({id, label, tabs}); filled by
+// buildChrome, read by resolveRoute/routeHash.
+let navEntries = [];
+
 function buildChrome() {
   document.title = cfg.title;
   $('title').textContent = cfg.title;
@@ -154,6 +162,11 @@ function buildChrome() {
   // more: it gets its own view right after Overview (built below), with an
   // unseen badge on the nav entry.
   const notifLabel = (cfg.sections || {}).notifications;
+  // Routing table, in sidebar order: Overview, Notifications, then the tab
+  // entries. Built from the same list the sidebar renders, so a config change
+  // moves the routes with it.
+  navEntries = [entries[0], ...(notifLabel ? [{ id: 'notifications', label: notifLabel, tabs: [] }] : []),
+    ...entries.slice(1)];
   const ovSections = [
     ...(cfg.metrics ? [{ id: 'metrics', label: cfg.metrics.heading || 'Metrics' }] : []),
     ...Object.keys(cfg.cards || {}).map((g, i) => ({ id: `cards-${i}`, label: g })),
@@ -209,7 +222,37 @@ function buildChrome() {
   }
   const loadFrame = (f) => { f.src = f.dataset.src; f.removeAttribute('data-src'); };
   const closeSide = () => { document.body.classList.remove('side-open'); $('backdrop').hidden = true; };
-  function showView(id) {
+  // Which pane a grouped view is showing (null for a view with no tab strip) —
+  // the sub the address bar names when the view itself is what changed.
+  const activeSub = (sec) => sec?.querySelector('.subtabs .tab.active')?.dataset.sub || null;
+  // Swap panes inside a grouped view, lazy-load the one revealed, remember it.
+  // Panes and buttons are matched by dataset rather than by a built selector:
+  // tab ids come from config, so a selector would need escaping to be safe.
+  function selectSub(sec, subId) {
+    const panes = [...sec.querySelectorAll('iframe[data-sub-pane]')];
+    if (!panes.some((f) => f.dataset.subPane === subId)) return activeSub(sec);
+    sec.querySelectorAll('.subtabs .tab').forEach((b) => {
+      const on = b.dataset.sub === subId;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+    panes.forEach((f) => {
+      f.hidden = f.dataset.subPane !== subId;
+      if (!f.hidden && f.dataset.src) loadFrame(f);
+    });
+    localStorage.setItem(`po11y-subtab-${sec.id.slice(5)}`, subId);
+    return subId;
+  }
+  // Name the open view in the address bar. A click pushes, so Back walks the
+  // views; applying a route that came *from* the address bar replaces, so
+  // normalising "#Map" to "#maps/map" does not need a second Back press.
+  function syncHash(view, sub, mode) {
+    const h = routeHash(view, sub, navEntries);
+    if (location.hash === h) return;
+    if (mode === 'replace') history.replaceState(null, '', h);
+    else location.hash = h;
+  }
+  function showView(id, sub = null, mode = 'push') {
     document.querySelectorAll('.nav-item').forEach((b) => {
       const on = b.dataset.view === id;
       b.classList.toggle('active', on);
@@ -217,11 +260,21 @@ function buildChrome() {
       else b.removeAttribute('aria-current');
     });
     document.querySelectorAll('.view').forEach((v) => { v.hidden = v.id !== `view-${id}`; });
-    document.getElementById(`view-${id}`)
-      .querySelectorAll('iframe[data-src]:not([hidden])').forEach(loadFrame);
+    const sec = document.getElementById(`view-${id}`);
+    const openSub = sub ? selectSub(sec, sub) : activeSub(sec);
+    sec.querySelectorAll('iframe[data-src]:not([hidden])').forEach(loadFrame);
     if (id === 'notifications') markNotifSeen();
     closeSide();
+    syncHash(id, openSub, mode);
   }
+  // #<view> or #<view>/<sub>, resolved against the sidebar: a hash the config
+  // does not describe is ignored (Overview stays open) rather than rewritten,
+  // so a link that predates a config change fails visibly but harmlessly.
+  function applyRoute() {
+    const r = resolveRoute(location.hash, navEntries);
+    if (r) showView(r.view, r.sub, 'replace');
+  }
+  addEventListener('hashchange', applyRoute);
   $('nav').addEventListener('click', (e) => {
     const sub = e.target.closest('.nav-sub');
     if (sub) {
@@ -235,20 +288,12 @@ function buildChrome() {
     const btn = e.target.closest('.nav-item');
     if (btn) showView(btn.dataset.view);
   });
-  // Sub-tab strip inside a grouped view: swap panes, lazy-load, remember.
+  // Sub-tab strip inside a grouped view.
   $('main').addEventListener('click', (e) => {
     const t = e.target.closest('.subtabs .tab');
     if (!t) return;
     const sec = t.closest('.view');
-    sec.querySelectorAll('.tab').forEach((b) => {
-      b.classList.toggle('active', b === t);
-      b.setAttribute('aria-selected', String(b === t));
-    });
-    sec.querySelectorAll('iframe[data-sub-pane]').forEach((f) => {
-      f.hidden = f.dataset.subPane !== t.dataset.sub;
-      if (!f.hidden && f.dataset.src) loadFrame(f);
-    });
-    localStorage.setItem(`po11y-subtab-${sec.id.slice(5)}`, t.dataset.sub);
+    syncHash(sec.id.slice(5), selectSub(sec, t.dataset.sub), 'push');
   });
   // Small screens: the sidebar slides in over a backdrop.
   $('menu').addEventListener('click', () => {
@@ -345,6 +390,11 @@ function buildChrome() {
   $('sec-containers')?.classList.add('cards');
 
   applyTheme(theme); // sets html[data-theme], the button glyph, and renders metrics
+  // Last, so the whole sidebar exists to resolve against: open the view the
+  // address bar names. No hash (the plain "/" visit) leaves Overview open and
+  // the URL untouched — the address bar only starts naming views once one is
+  // picked. A scope switch reloads, so the hash carries the view across it too.
+  applyRoute();
 }
 
 // ---- metrics: grafana embeds or deep-link card, plus prometheus stat cards -----
@@ -455,7 +505,7 @@ function renderContainers() {
 }
 
 // ---- executions -------------------------------------------------------------
-// { executions: { recent, errors, byWorkflow: [{ name, id, count, errors, lastAt }] } }
+// { executions: { recent, errors, byWorkflow: [{ name, id, count, errors, lastAt, running }] } }
 // — see server/n8n.mjs. Filter box narrows byWorkflow by name, same
 // mechanism as renderContainers.
 function renderExecutions() {
@@ -471,13 +521,17 @@ function renderExecutions() {
   // though the server only ever writes numbers.
   const summary = `<p class="updated">${esc(ex.recent ?? 0)} recent · ${esc(ex.errors ?? 0)} errors</p>`;
   el.innerHTML = summary + rows.map((w) => {
-    const dot = w.errors ? 'fail' : 'ok';
+    const dot = execDot(w);
     const errPart = w.errors
       ? `<b class="err">${esc(w.errors)} errors</b>`
       : `${esc(w.errors ?? 0)} errors`;
+    // Only rendered while something is in flight, so the row does not carry a
+    // permanent "0 running". See runningText on how fresh this actually is.
+    const run = runningText(w.running);
+    const runPart = run ? ` · <b class="run">${esc(run)}</b>` : '';
     return `<div class="notif"><span class="dot ${dot}"></span>
       <div><b>${esc(w.name)}</b> <span class="updated">${w.lastAt ? esc(ago(w.lastAt)) : 'never'}</span>
-      <p>${esc(w.count ?? 0)} runs · ${errPart}</p></div></div>`;
+      <p>${esc(w.count ?? 0)} runs · ${errPart}${runPart}</p></div></div>`;
   }).join('');
 }
 

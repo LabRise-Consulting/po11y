@@ -13,7 +13,9 @@
         "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}" },
       { "name": "Execution analytics", "sub": "grafana", "href": "/grafana/d/adfcxfk" },
       { "name": "System health", "sub": "n8n process metrics", "href": "/grafana/d/adv6qmb" },
-      { "name": "Prometheus", "sub": "raw metrics", "href": "http://{host}:9090/" }
+      { "name": "Prometheus", "sub": "raw metrics", "href": "http://{host}:9090/" },
+      { "name": "OmniRoute", "sub": "LLM gateway", "href": "http://{host}:20128/",
+        "tip": "Bundled OmniRoute gateway — connect providers, inspect routing. Loopback-only by default (OMNIROUTE_BIND_ADDR); remove this card if you set OMNIROUTE_ENABLED=false" }
     ]
   },
   "tabs": [
