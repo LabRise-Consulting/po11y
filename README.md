@@ -8,7 +8,7 @@ Po11y is open-source (MIT licensed) and self-hosted. n8n's own diagnostics are s
 
 ## Core Features
 
-▶ **[Watch the video overview](https://gitlab.com/labrise/po11y/uploads/3a36c55ec373989dfb8bc2fee89f4a31/intro.mp4)**
+▶ **[Watch the video overview](https://github.com/labrise-consulting/po11y/releases/download/v0.1.0/intro.mp4)**
 
 The intro video demonstrates the complete stack: dashboard views, architecture maps, Grafana panels, alerting rules, MCP endpoints, and read-only monitoring of an existing n8n instance.
 
@@ -67,12 +67,12 @@ Both topologies work, but they do not have equal mileage.
 | CI coverage | End-to-end smoke test: `bootstrap.sh`, live assertions against the running stack, then a repeat run to check idempotency | Server unit tests, including a GET-only invariant test, plus Compose config validation. No end-to-end bring-up |
 | Real-world use | The path Po11y is developed against day to day | Fewer instances, and more varied ones |
 
-Rough edges are likelier on the read-only topology. Please [open an issue](https://gitlab.com/labrise/po11y/-/issues) if you hit one.
+Rough edges are likelier on the read-only topology. Please [open an issue](https://github.com/labrise-consulting/po11y/issues) if you hit one.
 
 ## Quickstart: Bundled (with n8n)
 
 ```sh
-git clone https://gitlab.com/labrise/po11y && cd po11y
+git clone https://github.com/labrise-consulting/po11y && cd po11y
 ./bootstrap.sh                # Full stack: n8n, Postgres, Prometheus, Grafana, Dashboard
 ./bootstrap.sh --no-examples  # Skip the demo workflows
 ```
@@ -147,7 +147,7 @@ This topology monitors an external n8n instance without altering its configurati
 ### Setup Commands
 
 ```sh
-git clone https://gitlab.com/labrise/po11y && cd po11y
+git clone https://github.com/labrise-consulting/po11y && cd po11y
 cp .env.example .env                         # Configure N8N_API_URL, N8N_API_KEY, N8N_METRICS_TARGET, GRAFANA_ADMIN_PASSWORD
 cp config.readonly.example.json config.json   # Read-only configuration template
 docker compose -f docker-compose.readonly.yml up -d
@@ -201,7 +201,7 @@ complete in one interval.
 
 ## Contributing
 
-Merge requests and issue reports are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for local testing instructions. Please report security issues according to [SECURITY.md](SECURITY.md).
+Pull requests and issue reports are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for local testing instructions. Please report security issues according to [SECURITY.md](SECURITY.md).
 
 ## About
 

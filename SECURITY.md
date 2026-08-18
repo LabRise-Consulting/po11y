@@ -4,8 +4,9 @@
 
 Do **not** open public issues for security vulnerabilities.
 
-Submit confidential reports using GitLab issues:
-[Create confidential issue](https://gitlab.com/labrise/po11y/-/issues/new) and select **"This issue is confidential"**.
+Submit private reports using GitHub security advisories:
+[Report a vulnerability](https://github.com/labrise-consulting/po11y/security/advisories/new). The report stays private
+between you and the maintainers until an advisory is published.
 
 Please include:
 - Affected deployment topology (bundled or read-only).

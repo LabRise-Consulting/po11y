@@ -135,7 +135,7 @@ data:
       "eyebrow": "po11y · status",
       "lede": "Live view of this stack. Status feeds do not work on this k8s path yet — see deploy/k8s/README.md — but the Map tab is generated from the n8n instance itself.",
       "footer": [
-        { "text": "po11y", "href": "https://gitlab.com/labrise/po11y" }
+        { "text": "po11y", "href": "https://github.com/labrise-consulting/po11y" }
       ],
       "cards": {
         "Actions": [

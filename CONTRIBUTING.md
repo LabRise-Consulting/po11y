@@ -1,6 +1,6 @@
 # Contributing to Po11y
 
-We welcome issues, bug reports, and merge requests. Please report security vulnerabilities confidentially according to [SECURITY.md](SECURITY.md).
+We welcome issues, bug reports, and pull requests. Please report security vulnerabilities privately according to [SECURITY.md](SECURITY.md).
 
 ## Running checks locally
 

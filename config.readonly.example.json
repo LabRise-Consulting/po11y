@@ -5,7 +5,7 @@
   "n8nUrl": "http://{host}:5678",
   "formProxy": false,
   "footer": [
-    { "text": "po11y", "href": "https://gitlab.com/labrise/po11y" }
+    { "text": "po11y", "href": "https://github.com/labrise-consulting/po11y" }
   ],
   "cards": {
     "Actions": [

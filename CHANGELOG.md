@@ -74,7 +74,7 @@ versioned yet, so `main` is the only line.
 
 - CI `publish-images` job: pushing a git tag now builds and publishes a
   multi-arch (amd64 + arm64) `server` image to
-  `registry.gitlab.com/labrise/po11y/server:<tag>` (plus a moving `latest`),
+  `ghcr.io/labrise-consulting/po11y/server:<tag>` (plus a moving `latest`),
   gated behind the full validate + smoke pipeline. The n8n-derived bundled
   image stays build-local (Sustainable Use License; the bundled stack needs
   the clone for `bootstrap.sh` anyway).

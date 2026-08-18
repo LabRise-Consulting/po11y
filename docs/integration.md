@@ -35,7 +35,7 @@ dashboard:
 To add Po11y as a git submodule:
 
 ```sh
-git submodule add https://gitlab.com/labrise/po11y external/po11y
+git submodule add https://github.com/labrise-consulting/po11y external/po11y
 ```
 
 ## Running the server against your n8n

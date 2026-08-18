@@ -1,0 +1,343 @@
+# Po11y CI — the pipeline for the stack. Jobs:
+#   test           node's built-in test runner over the html/, site/, lib/
+#                  and server/ unit tests
+#   lint           shellcheck over every shell script
+#   interlock      bootstrap.sh must refuse a non-loopback bind with exit 78
+#   compose-config daemonless `docker compose config` of both compose files,
+#                  plus each merged with the forward-auth, alerting and otel
+#                  overlays
+#   manifests      kustomize build + kubeconform schema validation of deploy/k8s
+#   smoke          full bring-up via bootstrap.sh + HTTP smoke, run twice to
+#                  also prove bootstrap idempotency
+#   publish-images on git tags only: multi-arch build + push of the server
+#                  image to GHCR
+#
+# All image tags are pinned. The five validate jobs are skipped on scheduled
+# runs (the nightly schedule only cares about the smoke build against a fresh
+# upstream n8n image); smoke runs on every trigger.
+#
+# Runner policy: every job runs on GitHub-hosted `ubuntu-24.04`, which ships a
+# working Docker daemon (Server 28.x, Compose v2, Buildx) on a disposable VM.
+# That is why there is no docker-in-docker service and no privileged host here:
+# smoke and publish-images talk to the runner's own daemon. Self-hosted runners
+# are deliberately not used — a fork's pull request executes repository code,
+# and on a public repository that would be arbitrary code on our hardware.
+#
+# The validate jobs pin their toolchain with `container:`, the GitHub analogue
+# of GitLab's per-job `image:`. smoke and publish-images must NOT use
+# `container:`: a job container cannot reach the host Docker daemon, which
+# would reintroduce the need for docker-in-docker.
+#
+# Job graph: GitLab staged validate -> smoke -> publish to keep a 30-minute
+# smoke run off a scarce self-hosted runner after a two-second lint failure.
+# GitHub-hosted runners are free and unmetered on public repositories, so smoke
+# runs in parallel with validate and only publish-images waits for everything.
+# Chaining smoke behind the validate jobs would also break the nightly
+# schedule: those jobs are skipped on a schedule, and a job whose `needs` were
+# skipped is skipped too.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    # Version tags only. GitLab fired the publish stage on any tag; narrowing
+    # it here keeps a non-release tag (a backup marker, a docs snapshot) from
+    # pushing an image nobody asked for.
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # Nightly smoke against whatever the upstream n8n image is today.
+    - cron: "0 3 * * *"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Superseded pull request runs are worth cancelling; a tag run is publishing
+  # an immutable image and must never be interrupted.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'schedule'
+    container: node:24-alpine
+    steps:
+      # actions/checkout falls back to a REST tarball when git is missing,
+      # which loses the ref metadata some steps expect. Installing git keeps
+      # every alpine-container job on the same code path as the host jobs.
+      - run: apk add --no-cache git
+      - uses: actions/checkout@v5
+      # Directory-scoped node test runner. Node expands the ** glob itself (it
+      # is quoted so the shell leaves it alone).
+      - run: node --test "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" "server/**/*.test.mjs"
+
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'schedule'
+    container: koalaman/shellcheck-alpine:v0.10.0
+    steps:
+      - run: apk add --no-cache git
+      - uses: actions/checkout@v5
+      - run: shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh
+      # Fail if any dated '# REMOVE AFTER YYYY-MM' liability in bootstrap.sh is past.
+      - run: sh ci/check-expired-markers.sh bootstrap.sh
+      # Guard the A3 bug class: an overlay re-inlining grafana's entrypoint
+      # silently drops the alert rules (compose replaces, never merges).
+      - run: sh ci/check-grafana-entrypoint.sh
+      - run: sh ci/check-dashboard-entrypoint.sh
+
+  interlock:
+    # Proves the exposure interlock stays wired: bootstrap.sh with a
+    # non-loopback BIND_ADDR and no auth must exit 78 (EX_CONFIG) — and it must
+    # do so BEFORE any docker call, so this job needs no docker daemon. Asserts
+    # exit 78, nothing else.
+    name: interlock
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'schedule'
+    container: alpine:3.20
+    steps:
+      # Packages the bootstrap lines that run before the interlock need:
+      # python3 and openssl (its two prerequisite checks, plus secret
+      # generation), and docker-cli only so the `command -v docker` check
+      # passes (no daemon is contacted). git is for actions/checkout.
+      - run: apk add --no-cache git python3 openssl docker-cli
+      - uses: actions/checkout@v5
+      - run: printf 'BIND_ADDR=192.0.2.1\n' > .env
+      - run: |
+          set +e
+          ./bootstrap.sh --no-examples
+          code=$?
+          set -e
+          if [ "$code" -ne 78 ]; then
+            echo "interlock FAILED: expected exit 78, got $code"
+            exit 1
+          fi
+          echo "interlock OK: refused non-loopback bind with exit 78"
+
+  compose-config:
+    # Client-side render + schema validation of BOTH compose files. `docker
+    # compose config` never contacts a daemon — it only parses and interpolates
+    # — so this needs no daemon at all, unlike smoke. Dummy values satisfy the
+    # required (:?) vars; the rendered output is discarded with -q.
+    # --project-name isolates the check from any real project state. This is
+    # the only syntax gate on docker-compose.yml and the read-only
+    # docker-compose.readonly.yml.
+    name: compose-config
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'schedule'
+    container: docker:27
+    env:
+      # Bundled-stack required (:?) vars.
+      DB_POSTGRESDB_PASSWORD: dummy
+      PO11Y_RO_PASSWORD: dummy
+      GRAFANA_ADMIN_PASSWORD: dummy
+      # Read-only-stack required (:?) vars.
+      N8N_API_URL: http://example:5678
+      N8N_API_KEY: dummy
+      N8N_METRICS_TARGET: example:5678
+      # Forward-auth overlay required (:?) vars.
+      OAUTH2_PROXY_OIDC_ISSUER_URL: http://idp.example:8080/realms/dummy
+      OAUTH2_PROXY_CLIENT_ID: dummy
+      OAUTH2_PROXY_CLIENT_SECRET: dummy
+      # 32-byte secret (base64url) — oauth2-proxy requires exactly 16/24/32 bytes.
+      OAUTH2_PROXY_COOKIE_SECRET: cG8xMXktY2ktZHVtbXktY29va2llLXNlY3JldC0zMmI
+      # Alerting overlay required (:?) var.
+      ALERTMANAGER_WEBHOOK_URL: http://example:5678/webhook/dummy
+    steps:
+      # docker:27 ships the docker CLI but not the compose plugin. jq is for
+      # the overlay-merge assertions below; git is for actions/checkout.
+      - run: apk add --no-cache git docker-cli-compose jq
+      - uses: actions/checkout@v5
+      - run: docker compose -f docker-compose.yml --project-name po11y-ci-check config -q
+      - run: docker compose -f docker-compose.readonly.yml --project-name po11y-ci-check config -q
+      # Both base compose files must also merge cleanly with the forward-auth overlay.
+      - run: docker compose -f docker-compose.yml -f docker-compose.auth.yml --project-name po11y-ci-check config -q
+      - run: docker compose -f docker-compose.readonly.yml -f docker-compose.auth.yml --project-name po11y-ci-check config -q
+      # The alerting overlay must merge cleanly onto the read-only stack, alone
+      # and stacked with forward-auth.
+      - run: docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml --project-name po11y-ci-check config -q
+      - run: docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml -f docker-compose.auth.yml --project-name po11y-ci-check config -q
+      # The otel overlay must merge cleanly onto the bundled stack, and must NOT
+      # take the grafana provisioning render with it. Compose replaces an
+      # entrypoint rather than merging it, and an inline copy in the overlay is
+      # how all five Grafana alert rules once vanished from the exact command
+      # docs/deployment.md gives.
+      - run: docker compose -f docker-compose.yml -f docker-compose.otel.yml --project-name po11y-ci-check config -q
+      # Both halves of that failure are asserted: the shared entrypoint survives
+      # the merge, and alerting-src is still mounted for it to find.
+      - run: |
+          merged=$(docker compose -f docker-compose.yml -f docker-compose.otel.yml --project-name po11y-ci-check config --format json)
+          base_ep=$(docker compose -f docker-compose.yml --project-name po11y-ci-check config --format json | jq -r '.services.grafana.entrypoint | join(" ")')
+          otel_ep=$(printf '%s' "$merged" | jq -r '.services.grafana.entrypoint | join(" ")')
+          if [ "$base_ep" != "$otel_ep" ]; then
+            echo "grafana entrypoint differs under the otel overlay ('$otel_ep' vs '$base_ep') — do not re-declare it, mount into /etc/po11y-grafana-extras instead"
+            exit 1
+          fi
+          printf '%s' "$merged" | jq -e '.services.grafana.volumes | map(.target) | index("/etc/grafana/alerting-src")' > /dev/null \
+            || { echo "otel overlay lost the alerting mount"; exit 1; }
+      # Prometheus's command is likewise replaced, not merged: the otel overlay
+      # restates the base flags to add the remote-write receiver Tempo needs.
+      - run: |
+          base_cmd=$(docker compose -f docker-compose.yml --project-name po11y-ci-check config --format json | jq -r '.services.prometheus.command | join("\n")')
+          otel_cmd=$(docker compose -f docker-compose.yml -f docker-compose.otel.yml --project-name po11y-ci-check config --format json | jq -r '.services.prometheus.command | join("\n")')
+          expected=$(printf '%s\n--web.enable-remote-write-receiver' "$base_cmd")
+          if [ "$otel_cmd" != "$expected" ]; then
+            printf 'otel prometheus command drifted from the base compose\n--- expected ---\n%s\n--- got ---\n%s\n' "$expected" "$otel_cmd"
+            exit 1
+          fi
+
+  manifests:
+    name: manifests
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'schedule'
+    container: alpine/k8s:1.31.1
+    # kubeconform fetches one JSON schema per resource from
+    # raw.githubusercontent.com, which puts a third-party host on the critical
+    # path of a job that validates nothing but local files. On 2026-08-17 that
+    # host returned 503 for every request during a GitHub outage: all 23
+    # resources reported an ERROR rather than "invalid" (`Valid: 0, Invalid: 0,
+    # Errors: 23`), so the job failed while every manifest was in fact fine, and
+    # it spent 35 minutes doing it because kubeconform retries each fetch three
+    # times. Anonymous requests to that host are also rate-limited, which is the
+    # same failure on a busy day rather than an outage.
+    #
+    # The cache below writes each downloaded schema into the project directory
+    # and carries it between runs, so only a cold cache touches the network.
+    # The timeout bounds the cold-cache-plus-unreachable-host case: a healthy
+    # run of this job takes about 8 seconds.
+    timeout-minutes: 5
+    env:
+      KUBECONFORM_VERSION: "0.6.7"
+      KUBECONFORM_CACHE: .kubeconform-cache
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: .kubeconform-cache
+          # Bumping KUBECONFORM_VERSION rotates the cache. Entries are keyed by
+          # URL, so a stale one validates against the schema set that was
+          # current when it was written — older API knowledge, not wrong answers.
+          key: kubeconform-${{ env.KUBECONFORM_VERSION }}
+      # kubeconform requires the cache directory to exist; it will not create it.
+      - run: mkdir -p "$KUBECONFORM_CACHE"
+      # alpine/k8s ships kustomize + curl; add a pinned kubeconform release.
+      - run: curl -sSLf "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar -xz -C /usr/local/bin kubeconform
+      - run: kustomize build deploy/k8s | kubeconform -strict -summary -cache "$KUBECONFORM_CACHE"
+
+  smoke:
+    name: smoke
+    runs-on: ubuntu-24.04
+    # No `container:` on purpose — this job needs the runner's own Docker
+    # daemon, which a job container cannot reach.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      # Minimal .env: bootstrap generates the secrets and appends them. The
+      # stack and this job share one VM, so the published ports are reachable
+      # on loopback and BIND_ADDR stays loopback — which means the exposure
+      # interlock is fully armed here, unlike the old docker-in-docker job that
+      # had to bind 0.0.0.0 and set PO11Y_ALLOW_OPEN_BIND to get past it.
+      #
+      # AI_MAP_BASE_URL is set explicitly so bootstrap skips its OmniRoute
+      # auto-wire (which defaults the api key and model): the key stays empty,
+      # the server reads an empty key as "LLM off", and the smoke ai-map
+      # assertion tests the deterministic heuristic map instead of a live
+      # auto/best-free call whose latency has blown the 90 s budget.
+      # OmniRoute itself still boots — the overlay bring-up stays covered.
+      - run: printf 'BIND_ADDR=127.0.0.1\nAI_MAP_BASE_URL=http://omniroute:20128/v1\n' > .env
+      # Examples ARE imported here, unlike every other job. They used to be
+      # redundant: workflows/core/ held the two publisher workflows and bootstrap
+      # imported them unconditionally, so n8n always had something in it. Both are
+      # deleted, workflows/core/ is gone, and --no-examples now leaves n8n
+      # completely empty — which makes the feeds correct but blank, and the
+      # ai-map/forms assertions test nothing. hn-tech-news imports inactive, so it
+      # costs one import and makes no outbound call.
+      #
+      # Bring up, smoke, then bring up again (idempotency) and re-smoke. On any
+      # failure capture compose logs for the artifact before failing the job.
+      - name: bootstrap, smoke, re-bootstrap, re-smoke
+        env:
+          # Opts into the in-network compose-exec assertions in ci/smoke.sh
+          # (server /healthz and /metrics), which otherwise stay off because
+          # they don't work against a remote/non-compose BASE_URL.
+          SMOKE_COMPOSE_FILES: "-f docker-compose.yml"
+          BASE_URL: http://localhost:8080
+        run: |
+          if ! (
+            ./bootstrap.sh &&
+            ci/smoke.sh &&
+            ./bootstrap.sh &&
+            ci/smoke.sh
+          ); then
+            docker compose -f docker-compose.yml -f docker-compose.omniroute.yml logs --tail 200 > compose-logs.txt 2>&1 || true
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: compose-logs
+          path: compose-logs.txt
+          if-no-files-found: ignore
+
+  publish-images:
+    # Prebuilt images so `docker compose up` (or any k8s manifest) can pull
+    # instead of building from a clone. Only po11y's OWN code is published —
+    # server/ (the MCP surface ships inside the server image) — never the root
+    # Dockerfile: that one derives from n8n's image (Sustainable Use License),
+    # and the bundled stack needs the clone for bootstrap.sh regardless. The
+    # Dockerfile is a dependency-free COPY of the repo source, so a "build" here
+    # is a file copy: multi-arch via qemu is cheap (one RUN, a mkdir+chown).
+    #
+    # Publishes:
+    #   ghcr.io/labrise-consulting/po11y/server:<git tag>   (immutable)
+    #   ghcr.io/labrise-consulting/po11y/server:latest      (moving alias)
+    #
+    # Tags only, and only after every validate job and smoke pass on the tagged
+    # commit, so a published image is by definition a green build.
+    name: publish-images
+    runs-on: ubuntu-24.04
+    needs: [test, lint, interlock, compose-config, manifests, smoke]
+    # `github.repository` returns the org's canonical casing, so this comparison
+    # must use it verbatim — a lowercase literal never matches and the job
+    # silently skips on a real tag. Registry pushes are a canonical-project
+    # concern; a fork tagging its own clone has no business writing here.
+    if: startsWith(github.ref, 'refs/tags/') && github.repository == 'LabRise-Consulting/po11y'
+    permissions:
+      contents: read
+      packages: write
+    timeout-minutes: 20
+    env:
+      # GHCR rejects uppercase repository paths, so this is hardcoded lowercase
+      # rather than derived from `github.repository`.
+      IMAGE_BASE: ghcr.io/labrise-consulting/po11y
+    steps:
+      - uses: actions/checkout@v5
+      # qemu user-mode emulation so the arm64 layer of the manifest builds on
+      # the amd64 runner (Apple Silicon and Raspberry Pi hosts pull arm64).
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # The job-scoped GITHUB_TOKEN with packages:write — there is no
+          # long-lived registry credential to store or rotate.
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # --provenance=false keeps the pushed artifact a plain two-entry manifest
+      # list; the default attestation manifests render as an extra
+      # unknown/unknown "architecture" in the registry UI.
+      - run: |
+          for name in server; do
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --file "$name/Dockerfile" \
+              --tag "$IMAGE_BASE/$name:$GITHUB_REF_NAME" \
+              --tag "$IMAGE_BASE/$name:latest" \
+              --provenance=false \
+              --push .
+          done
