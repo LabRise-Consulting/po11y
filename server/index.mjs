@@ -49,6 +49,14 @@ const N8N_API_KEY = process.env.N8N_API_KEY || '';
 // value is a link base whose whole purpose is to name that host.
 const N8N_PUBLIC_URL = process.env.N8N_PUBLIC_URL || N8N_API_URL;
 const SYNC_INTERVAL = num(process.env.SYNC_INTERVAL, 600, 'SYNC_INTERVAL');
+// How long the sync waits after a FAILED tick, instead of the full interval.
+// The sync's first tick fires at process start, which on a cold bootstrap is
+// while n8n is still migrating, and compose restarts n8n again part-way
+// through. Without this, either miss strands map.json and ai-map.json empty
+// for ten minutes on an install that is otherwise healthy. 15s is the same
+// order as POLL_INTERVAL, so a sustained n8n outage costs no more n8n traffic
+// than the poll loop already generates.
+const SYNC_RETRY_INTERVAL = num(process.env.SYNC_RETRY_INTERVAL, 15, 'SYNC_RETRY_INTERVAL');
 // 30s, not 60s: the poll is also the only thing that can SEE a run in flight.
 // A workflow shorter than one interval can start and finish between two polls,
 // so it is recorded but never observed running — and the watchdog's `stuck`
@@ -365,7 +373,7 @@ if (SYNC_ENABLED) {
     } finally {
       await refresh();
     }
-  });
+  }, { retrySeconds: SYNC_RETRY_INTERVAL });
 
   every(POLL_INTERVAL, 'poll-fill', async () => {
     // pollFill stamps POLL_LAST_SUCCESS_KEY itself, and only when the fetch

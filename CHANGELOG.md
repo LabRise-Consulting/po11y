@@ -111,6 +111,20 @@ versioned yet, so `main` is the only line.
 
 ### Fixed
 
+- A cold `bootstrap.sh` could leave the architecture map and the workflow map
+  empty for ten minutes. The workflow sync runs its first tick the moment the
+  server process starts, which is while n8n is still applying its first-boot
+  migrations, so that tick failed with `fetch failed`. The loop then re-armed
+  at the full `SERVER_SYNC_INTERVAL` (600 s), and `map.json` and `ai-map.json`
+  stayed at their cold-start skeletons until it came round again — on an
+  install that was otherwise healthy, and where every other feed already
+  worked. Bootstrap restarts n8n part-way through, so a second miss was
+  possible even when the first tick got through. A failed sync now retries
+  after `SERVER_SYNC_RETRY_INTERVAL` (15 s) instead; a successful one always
+  returns to the full interval, so the retry never becomes the cadence. The
+  poll loop is untouched, since its 30 s interval already self-heals and
+  retrying faster would only add load to an n8n that is already unwell.
+
 - The architecture map's LLM call could not afford a reasoning model. Its
   budget was a hard-coded `max_tokens: 3000`, and a reasoning model spends the
   same allowance on its hidden thinking as on the answer — so the bundled
