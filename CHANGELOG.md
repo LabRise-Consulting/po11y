@@ -1,17 +1,25 @@
 # Changelog
 
 Notable changes to Po11y. Format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project is not
-versioned yet, so `main` is the only line.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-08-18
+
+First tagged release, and the first public one. Everything below is the
+project's development to this point, collapsed into one entry — which is why
+it also records features that were added and later removed. Nothing here was
+shipped under an earlier version number, so a reader tracking upgrades starts
+at this line.
 
 ### Added
 
 - List tab source filter: a `list` tab with a `badge` mapping now offers a
   multi-select over the badge values present in the selected range, so a feed
   merging several upstreams can be narrowed to a few of them (e.g. only
-  `sentry` and `webhook`). Client-side over the rows already walked — no
+  `sentry` and `grafana`). Client-side over the rows already walked — no
   extra requests — with an **All** button to clear it and an optional
   `badgeLabel` to caption the row. The bar stays hidden for single-source
   feeds.
@@ -53,9 +61,9 @@ versioned yet, so `main` is the only line.
 
 - Four more demo workflows in `workflows/examples/`: `order-intake` (webhook)
   calling `enrich-record` (sub-workflow), plus `ops-checklist` (form) and
-  `daily-digest` (schedule). Phase 3 correctly stopped installing po11y's own
-  workflows into n8n, which left a fresh install with one workflow and almost
-  nothing on the map. All four are credential-free, make no outbound call, and
+  `daily-digest` (schedule). The server consolidation correctly stopped
+  installing po11y's own workflows into n8n, which left a fresh install with
+  one workflow and almost nothing on the map. All four are credential-free, make no outbound call, and
   cannot fail on a healthy install.
 
 - `workflows/demo/heartbeat.json`, an opt-in demo workflow that runs every
@@ -93,18 +101,18 @@ versioned yet, so `main` is the only line.
   `server:8081/metrics`. The error metric is a true accumulated counter
   rather than a sliding execution window, so `increase()` and `rate()`
   behave. (This shipped first on the collector's own health port, scraped by
-  the read-only stack's Prometheus; the collector is gone — see the Phase 3
-  entry below — and `/metrics` now lives on the server for every deployment.)
+  the read-only stack's Prometheus; the collector is gone — see the collector
+  removal below — and `/metrics` now lives on the server for every deployment.)
 - `docker-compose.alerts.yml`: opt-in Prometheus rules + Alertmanager overlay
   for the read-only stack, with an inhibit rule so one unreachable n8n
   reports as one alert instead of one per workflow. An alternative to
   po11y's own webhook push (on the `server` service), not a companion to it.
-- `SECURITY.md`: confidential-issue disclosure process, plus an explicit
+- `SECURITY.md`: a private disclosure process, plus an explicit
   in-scope/out-of-scope list so the documented design trade-offs in
   `docs/security.md` don't get re-reported as vulnerabilities.
 - `CONTRIBUTING.md`: the full local check suite and the project conventions.
   (Its `lib/` → `tools/sync-workflows.mjs` → `maps.json` loop was retired in
-  the same Phase 3 that deleted that loop entirely — see below.)
+  the same consolidation that deleted that loop entirely — see below.)
 - `html/vendor/README.md` and `html/vendor/mermaid.LICENSE`: provenance,
   version and SHA-256 for the vendored Mermaid build, which shipped with no
   attribution despite being MIT-licensed.
@@ -180,7 +188,7 @@ versioned yet, so `main` is the only line.
   policy, and stating it without a forward pointer is where an investigation
   stops or starts guessing.
 
-- Phase 3: `po11y_poll_last_success_timestamp_seconds` is refreshed only by a
+- `po11y_poll_last_success_timestamp_seconds` is refreshed only by a
   poll that actually reached n8n. The executions fetch swallowed every failure
   into an empty list, so an unreachable n8n, a revoked key or a timed-out
   request all looked like an idle instance and the gauge reported a fresh poll
@@ -278,7 +286,7 @@ versioned yet, so `main` is the only line.
   trade-off, and how to size the interval, is documented in the README and in
   [docs/server.md](docs/server.md).
 
-- Phase 3 — one mode, not two: `po11y_workflow_errors_total` is now
+- One mode, not two: `po11y_workflow_errors_total` is now
   persisted in the store and monotonic across restarts, instead of an
   in-memory counter that reset to zero on every collector restart, several
   times a week. Existing Grafana panels over that series look flatter and
@@ -286,21 +294,21 @@ versioned yet, so `main` is the only line.
   discontinuity, since the table starts empty). A store restored from an
   older backup rewinds the counter — that is a genuine Prometheus counter
   reset, correctly handled, not a bug to paper over with a `max()` guard.
-- Phase 3: multi-scope deployments now need one `server` process per scope
+- Multi-scope deployments now need one `server` process per scope
   (each with its own store and `PO11Y_SCOPE`), instead of several publishers
   sharing one status volume. See `docs/server.md`.
-- Phase 3: the Grafana alert rule formerly named `Po11yCollectorDown` is now
+- The Grafana alert rule formerly named `Po11yCollectorDown` is now
   `Po11yServerDown`, matching the process it actually watches.
-- Phase 3: the bundled stack's Prometheus scrapes the `server` as the
+- The bundled stack's Prometheus scrapes the `server` as the
   `po11y-server` job. `observability/prometheus.yml` had no such job, so on
   `docker-compose.yml` the five po11y series existed nowhere in Prometheus and
   every rule in `observability/alerts.yml` was inert there.
-- Phase 3: `bootstrap.sh` deletes the retired `maps` and `status-publish`
+- `bootstrap.sh` deletes the retired `maps` and `status-publish`
   workflows from a live n8n on the next run. Without that, an upgraded
   deployment kept running both — `status-publish` writing to a volume that is
   no longer mounted, and `maps` making scheduled LLM calls alongside the
   server's own ai-map builder.
-- Phase 3: bootstrap's OmniRoute auto-wiring writes `AI_MAP_BASE_URL`,
+- Bootstrap's OmniRoute auto-wiring writes `AI_MAP_BASE_URL`,
   `AI_MAP_API_KEY` and `AI_MAP_MODEL` back into `.env`. It previously wrote
   them only into `secrets/ai-map.json`, which the deleted maps workflow read
   and the server does not, so a default bundled stack was silently publishing
@@ -352,7 +360,7 @@ versioned yet, so `main` is the only line.
   a fork or an outside merge request got no pipeline at all. `smoke` still
   needs a privileged dind host and is now restricted to the canonical project
   instead of hanging on a tag nobody else provides. (The validate stage was
-  six jobs at the time, including `sync-check`; Phase 3 dropped it to five —
+  six jobs at the time, including `sync-check`; the consolidation dropped it to five —
   see below.)
 - A missing or unreadable `/config.json` now says so in the dashboard lede
   instead of silently falling back to built-in defaults and rendering an empty
@@ -363,16 +371,16 @@ versioned yet, so `main` is the only line.
 
 ### Removed
 
-- Phase 3 — one mode, not two: the collector daemon (`collector/`) is
+- One mode, not two: the collector daemon (`collector/`) is
   deleted. The `server` process now owns polling, the feeds, and `/metrics`
   for every deployment (see above); n8n needs no po11y workflows installed.
-- Phase 3: Mode A's Code-node publisher workflows (`workflows/core/`),
+- Mode A's Code-node publisher workflows (`workflows/core/`),
   `tools/sync-workflows.mjs`, and `deploy/nginx/feeds-files.conf` are
   deleted. The dashboard's feeds always come from the server, proxied by
   nginx — there is no file-served alternative any more.
-- Phase 3: `FEED_SOURCE` and the shared `po11y_status` volume are gone.
+- `FEED_SOURCE` and the shared `po11y_status` volume are gone.
   There is one feed path now, not a switch between two.
-- **Phase 3: `bootstrap.sh` now mints an n8n API key.** The deleted publisher
+- **`bootstrap.sh` now mints an n8n API key.** The deleted publisher
   workflows read n8n through their own internal credentials, so a bundled stack
   produced a full dashboard with no key configured anywhere. The server reads
   n8n over the public API, which accepts nothing but a key — so without one a
@@ -384,7 +392,7 @@ versioned yet, so `main` is the only line.
   yourself is never touched**, including a key pointing at a different n8n, and
   a re-run never rotates a working one. If the mint fails, bootstrap says so and
   tells you where to create one by hand. See `docs/security.md`.
-- **Phase 3 — privileges that outlived their features.** The bundled stack no
+- **Privileges that outlived their features.** The bundled stack no
   longer mounts the host Docker socket, no longer runs the `docker-proxy`
   sidecar, and no longer sets `NODES_EXCLUDE=[]` (Execute Command) or
   `NODE_FUNCTION_ALLOW_BUILTIN=fs`. Each existed for a deleted publisher
@@ -401,12 +409,12 @@ versioned yet, so `main` is the only line.
   raises a `failing` alert (and a webhook push, if configured). Bootstrap
   deletes it — `--no-examples` included — but a `git pull && docker compose up
   -d` with no bootstrap run will not.
-- Phase 3: `ai-map-cli.sh` is deleted. It read and wrote the AI map inside the
+- `ai-map-cli.sh` is deleted. It read and wrote the AI map inside the
   n8n container through a mount that no longer exists, so it could not run at
   all. The server owns the map; force a rebuild with the **Build maps now**
   action or `docker kill -s HUP po11y-server`, and drive a local model by
   pointing `AI_MAP_BASE_URL` at Ollama or any OpenAI-compatible endpoint.
-- Phase 3: the `Po11y example - HN notify` demo workflow is deleted and
+- The `Po11y example - HN notify` demo workflow is deleted and
   `HN tech news` no longer calls it. Its Code node wrote
   `/po11y-status/notifications.json`. With that volume unmounted the write did
   not fail — it landed in the container filesystem, where nothing reads it — so
@@ -415,9 +423,11 @@ versioned yet, so `main` is the only line.
   above asks you to re-run `./bootstrap.sh`. The server is the only writer of
   the notifications feed; an n8n workflow cannot publish into it.
 - `docs/video/` and `docs/intro.mp4` removed and stripped from history. The
-  rendered video was 25 MB of a 78 MB clone, and Remotion is not MIT-licensed
-  — it requires a paid company licence above three people, which does not
-  belong in an MIT repo's dependency tree. The Remotion source moved to a
-  separate repository; the rendered mp4 is now a project upload that the
-  README links, so it costs the clone nothing.
+  rendered video was 25 MB of a 78 MB clone, and the renderer it was built with
+  is not MIT-licensed, so it does not belong in an MIT repo's dependency tree.
+  That source lives in a separate repository; the rendered mp4 ships as a
+  release asset the README links, so it costs the clone nothing.
 - `docs/superpowers/` (local planning output) removed and stripped from history.
+
+[Unreleased]: https://github.com/labrise-consulting/po11y/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/labrise-consulting/po11y/releases/tag/v0.1.0

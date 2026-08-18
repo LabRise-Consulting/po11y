@@ -292,7 +292,7 @@ Render tabular data using `site/list.html` by configuring a tab entry:
 
 - `endpoint`: API endpoint path (e.g. `/n8n-table/...` or static JSON path).
 - `mapping`: Maps data columns to card fields (`title`, `url`, `score`, `day`, `badge`, `meta`, `detail`).
-- `badge`: (Optional) Column displayed as a tag pill next to the title. When the rows in the selected range carry more than one badge value, the tab also shows a multi-select filter — tick any number of values (e.g. `sentry` and `webhook`) to narrow the list, **All** to clear it. Rows without a badge are hidden while the filter is active. The filter is client-side, so it never re-fetches; it resets on reload.
+- `badge`: (Optional) Column displayed as a tag pill next to the title. When the rows in the selected range carry more than one badge value, the tab also shows a multi-select filter — tick any number of values (e.g. `sentry` and `grafana`) to narrow the list, **All** to clear it. Rows without a badge are hidden while the filter is active. The filter is client-side, so it never re-fetches; it resets on reload.
 - `badgeLabel`: (Optional) Caption for that filter row. Default `Source`.
 - `detail`: (Optional) Column containing JSON assessment arrays (`{ aspect, kind, assessment }`) to make cards expandable.
 - `defaultSort`: `"day"` (date grouped) or `"score"` (ranking order).
