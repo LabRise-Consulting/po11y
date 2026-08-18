@@ -6,6 +6,45 @@ Notable changes to Po11y. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The feature comparison now states its scope, links every project it names, and
+  carries the date it was compiled along with an invitation to correct it. Three
+  cells were wrong when checked against the projects' own documentation: n8n
+  Manager's licence was listed as unstated when it is MIT and ships in
+  `thenguyenvn90/n8n-toolkit`, and both of FlowPulse's "undisclosed" cells are
+  documented by the vendor. A fourth, n8n-trace's alerting, could not be
+  verified from its README at all. Describing a project as secretive when it
+  publishes the detail is the one thing a comparison table must not do. The
+  table is now limited to self-hosted open-source projects, a boundary that can
+  be stated and checked rather than left implicit, and each row leads with how
+  the tool reads n8n — the property that decides what it can see, and the one
+  least likely to go stale between their releases.
+
+- The README states two claims accurately that it previously overstated. n8n's
+  diagnostics are switched off by the bundled topology only, which was written
+  as though it were true everywhere, and the read-only topology cannot change a
+  setting on an instance it does not manage. "Real-time visibility" was also
+  promised in the opening line and then withdrawn a screen later by the poll
+  interval section, which explains that a workflow shorter than one interval is
+  never shown as running at all.
+- The privacy note names where the digests actually go — OmniRoute's
+  `auto/best-free` route — instead of "a keyless free-tier third-party
+  provider". A reader cannot weigh a privacy default whose recipient is
+  unnamed.
+- The published container images are now in the README. CI has pushed
+  `ghcr.io/labrise-consulting/po11y/server` on every tag since the move to
+  GitHub Actions, but only `docs/ci.md` and this changelog said so, so a reader
+  had no way to learn they could pull the server rather than build it. The
+  entry also records what is deliberately not published, and that the bundled
+  topology still needs the repository.
+- Smaller README corrections: the bundled quickstart states its prerequisites,
+  as the read-only one already did; `--pack` explains that `/workflows/` and
+  `/packs/` paths are read inside the container while any other path is a host
+  directory; the two map bullets name the tabs they describe, which the UI
+  labels differently; CI, licence and release badges are at the top; and the
+  headings use one capitalisation style.
+
 ### Fixed
 
 - Alert rules now evaluate production executions only. n8n stamps every run
@@ -23,6 +62,13 @@ project's development to this point, collapsed into one entry — which is why
 it also records features that were added and later removed. Nothing here was
 shipped under an earlier version number, so a reader tracking upgrades starts
 at this line.
+
+Entries below use **Mode A** and **Mode B**, the names the two deployments
+carried while they were built on different machinery: Mode A published the
+dashboard's feeds from Code nodes inside a bundled n8n, Mode B from a separate
+collector daemon watching an n8n you already ran. Both now run the same
+`server` process — the "one mode, not two" entries record that consolidation —
+and the README calls the deployments **bundled** and **read-only**.
 
 ### Added
 

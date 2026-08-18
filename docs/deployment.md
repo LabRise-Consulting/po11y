@@ -50,4 +50,4 @@ docker compose -f docker-compose.yml -f docker-compose.otel.yml up -d
 
 ## Comparisons with other tools
 
-For detailed comparisons with tools like `n8n-trace`, `n8n Manager`, `FlowPulse`, and `n8n-observability`, see [README.md](../README.md#feature-comparison).
+For a comparison with other self-hosted, open-source options — `n8nTrace`, `n8n-toolkit`, and `n8n-observability` — see [README.md](../README.md#feature-comparison).
