@@ -17,6 +17,7 @@
 import {
   summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, unreachableAlert,
 } from './watchdog.mjs';
+import { isProduction } from './exec-status.mjs';
 import { getKv, setKv } from './db.mjs';
 
 const STATE_KEY = 'alert-state';
@@ -31,7 +32,11 @@ export function alertNotifications(db, {
   let alerts;
   try {
     if (!Array.isArray(workflows)) throw new Error('workflows must be an array');
-    const summary = summarizeExecutions(executions, { now, names });
+    // Hand-run executions are dropped before the fold, not inside it: the same
+    // summariser feeds status.json, which should keep showing them. See
+    // exec-status.mjs for why `integrated` stays in.
+    const production = (Array.isArray(executions) ? executions : []).filter(isProduction);
+    const summary = summarizeExecutions(production, { now, names });
     alerts = evaluateAlerts(summary, workflows, cfg, { now });
   } catch (e) {
     log(`server: alert evaluation failed — ${e.message}`);

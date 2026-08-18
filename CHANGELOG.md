@@ -6,6 +6,16 @@ Notable changes to Po11y. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Alert rules now evaluate production executions only. n8n stamps every run
+  with the mode that started it, and the two hand-run modes (`manual`,
+  `evaluation`) were counted like any other: failed editor runs could raise a
+  `failing` alert while debugging, and — worse — one manual success refreshed
+  the staleness budget of a schedule that had been dead for days. Sub-workflow
+  runs (`integrated`) still count, since for many sub-workflows that is the
+  only way they run. The dashboard's execution summary stays unfiltered.
+
 ## [0.1.0] - 2026-08-18
 
 First tagged release, and the first public one. Everything below is the

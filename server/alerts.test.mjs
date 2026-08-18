@@ -122,3 +122,43 @@ test('the production call order for a failed sync — scoped alertNotifications 
   assert.ok(getKv(db, 'alert-state').includes('failing:wf1'), 'workflow alert must survive the production order');
   assert.ok(getKv(db, 'alert-state').includes('unreachable:'), 'unreachable alert must survive the production order');
 });
+
+// Mode filtering. n8n stamps every execution with how it was started, and two
+// of those modes are a human at the keyboard rather than the workflow doing its
+// job. Counting them is the false-all-clear shape: a broken schedule that
+// somebody ran by hand in the editor reads as "succeeded recently".
+const STALE = { ...CFG, staleAfterMin: 60 };
+const WF_OLD = [{ id: 'wf1', name: 'Ingest', active: true, updatedAt: '2026-08-10T00:00:00.000Z', nodes: [], connections: {} }];
+
+test('a manual run does not clear a workflow staleness budget', () => {
+  const db = openDb(':memory:');
+  const { notifications } = call(db, {
+    workflows: WF_OLD,
+    cfg: STALE,
+    executions: [{ id: '9', workflowId: 'wf1', status: 'success', mode: 'manual', startedAt: '2026-08-11T05:55:00.000Z' }],
+  });
+  assert.equal(notifications.length, 1, 'a hand-run editor success must not count as the workflow succeeding');
+  assert.match(notifications[0].message, /No successful execution on record/);
+});
+
+test('a production run does clear the same budget', () => {
+  const db = openDb(':memory:');
+  const { notifications } = call(db, {
+    workflows: WF_OLD,
+    cfg: STALE,
+    executions: [{ id: '9', workflowId: 'wf1', status: 'success', mode: 'trigger', startedAt: '2026-08-11T05:55:00.000Z' }],
+  });
+  assert.equal(notifications.length, 0);
+});
+
+test('manual failures do not trip the failing rule', () => {
+  const db = openDb(':memory:');
+  const manual = failing().map((e) => ({ ...e, mode: 'manual' }));
+  assert.equal(call(db, { executions: manual }).notifications.length, 0, 'debugging in the editor is not an outage');
+});
+
+test('a sub-workflow run still counts as production', () => {
+  const db = openDb(':memory:');
+  const sub = failing().map((e) => ({ ...e, mode: 'integrated' }));
+  assert.equal(call(db, { executions: sub }).notifications.length, 1, 'a sub-workflow that only ever runs as a child must still alert');
+});

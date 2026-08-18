@@ -49,3 +49,41 @@ const FAILED = new Set(FAILED_STATUSES);
 export function isFailed(execution) {
   return FAILED.has(execution?.status);
 }
+
+// How the run was started, from n8n's execution_entity.mode enum: cli, error,
+// evaluation, integrated, internal, manual, retry, trigger, webhook.
+//
+// TWO of those are a person at the keyboard rather than the workflow doing its
+// job, and counting them corrupts alerting in both directions: a handful of
+// failed editor runs while debugging reads as an outage, and — the worse half —
+// one manual success on a schedule that has been dead for a week refreshes
+// `lastOkAt`, so the staleness rule sees a healthy workflow. That is the same
+// false-all-clear shape the rest of this server is built to avoid.
+//
+// `integrated` is deliberately production: a sub-workflow may have no other way
+// to run, and excluding it would make every one of them permanently stale.
+// `retry` and `error` are production too — a retry that succeeds is real
+// recovery, and an error workflow's own runs are its real work.
+//
+// An execution with no mode at all counts as production. Old rows and reduced
+// API payloads land there, and the safe direction for an unknown is to keep
+// evaluating it rather than to fall silent about it.
+//
+// Consumer: alerts.mjs, which filters the window before the watchdog folds it.
+// status.json deliberately does NOT filter — the dashboard's execution summary
+// shows what actually ran, manual runs included.
+
+/** n8n execution modes that mean "a human did this by hand". */
+export const NON_PRODUCTION_MODES = Object.freeze(['manual', 'evaluation']);
+
+const HAND_RUN = new Set(NON_PRODUCTION_MODES);
+
+/**
+ * Did this execution happen as production work, rather than by hand?
+ *
+ * @param {{mode?: string}|null|undefined} execution
+ * @returns {boolean}
+ */
+export function isProduction(execution) {
+  return !HAND_RUN.has(execution?.mode);
+}

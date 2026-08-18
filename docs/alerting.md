@@ -58,6 +58,11 @@ every deployment. The MCP `po11y_incidents` tool reads the same feed.
 
 - Set `ALERTS_ENABLED=false` to disable. Budget settings `ALERT_STALE_AFTER_MIN` and `ALERT_STUCK_AFTER_MIN` default to `0` (off), so default alerts cover only `failing` and `unreachable` states.
 - **Bundled stack**: the server needs its ops key (`MCP_N8N_API_KEY`) to have a store to evaluate. Without it nothing is published, and the tools report that rather than reporting zero incidents.
+- Alert rules count production executions only. Runs started by hand — n8n's `manual` and `evaluation` modes — are
+  excluded, so debugging a workflow in the editor cannot raise a `failing` alert, and a hand-run success cannot
+  refresh a dead schedule's staleness budget. Sub-workflow runs (`integrated` mode) do count, because for many
+  sub-workflows that is the only way they ever run. The dashboard's execution summary is unfiltered and still
+  shows every run.
 - The server is the only writer. An n8n workflow cannot publish into this feed: the server serves it from its own store, not from a file on a shared volume.
 
 This feed is displayed only on the dashboard and does not send external notifications.
