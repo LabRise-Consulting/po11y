@@ -3,10 +3,8 @@
 // The dashboard (app.js) merges /forms.json into its Actions cards, so a
 // new form trigger becomes a button without touching config.json.
 //
-// Originally a pure extraction of the "Publish forms.json" Code node from
-// Mode A's workflows/core/maps.json (deleted along with Mode A): same
-// traversal order and fallbacks. The caller owns I/O (reading the workflow
-// list, writing forms.json) and generated_at.
+// The caller owns I/O (reading the workflow list, writing forms.json) and
+// generated_at.
 
 /**
  * @typedef {Object} N8nNode

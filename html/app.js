@@ -199,9 +199,8 @@ function buildChrome() {
         title="${esc(t.label)}"${t.id === open ? '' : ' hidden'}></iframe>`).join('');
     $('main').appendChild(sec);
   });
-  // Notifications view: the feed list plus its all/ok/fail filter, which
-  // used to sit on the Overview heading. Opening it moves the unseen
-  // watermark (markNotifSeen), which clears the nav badge.
+  // Notifications view: the feed list plus its all/ok/fail filter. Opening it
+  // moves the unseen watermark (markNotifSeen), which clears the nav badge.
   if (notifLabel) {
     const sec = document.createElement('section');
     sec.id = 'view-notifications';

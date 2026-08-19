@@ -4,10 +4,10 @@
 # ConfigMap — see README step 3): it copies the read-only provisioning source
 # to a writable /tmp copy, seds the n8n deep-link host into the dashboard
 # JSON, rewrites the dashboards.yml provider path, and copies the alerting
-# rules in when /etc/grafana/alerting-src is present. An inline copy of that
-# script used to live here and (exactly like the compose otel overlay once
-# did) silently lacked the alerting branch — ci/check-grafana-entrypoint.sh
-# now guards this file too. Grafana serves from /grafana/ behind nginx.
+# rules in when /etc/grafana/alerting-src is present. Do not inline a copy of
+# that script here: ci/check-grafana-entrypoint.sh guards against it, because a
+# copy that silently lacks the alerting branch is the known failure. Grafana
+# serves from /grafana/ behind nginx.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

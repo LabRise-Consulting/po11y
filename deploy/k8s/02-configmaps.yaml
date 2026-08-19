@@ -58,9 +58,8 @@ data:
   #
   # Status feeds: the compose path proxies every feed to the po11y `server`
   # process (deploy/nginx/feeds-server.conf). There is no server Deployment on
-  # this k8s path, and the block that used to alias a shared status volume
-  # directly is gone too — see deploy/k8s/README.md's "Status feeds do not
-  # work" section for what that means and what porting it over would take.
+  # this k8s path — see deploy/k8s/README.md's "Status feeds do not work"
+  # section for what that means and what porting it over would take.
   #
   # Keep this list current when you edit ./nginx.conf.
   default.conf: |
@@ -79,10 +78,9 @@ data:
       }
 
       # status.json, notifications.json, map.json, ai-map.json and forms.json
-      # are NOT served here. They used to alias a shared volume that n8n
-      # workflows wrote; those workflows are gone, and there is no server
-      # Deployment on this k8s path to proxy them to instead. Every feed
-      # request 404s until that gap is closed — see deploy/k8s/README.md.
+      # are NOT served here: there is no server Deployment on this k8s path to
+      # proxy them to. Every feed request 404s until that gap is closed — see
+      # deploy/k8s/README.md.
 
       location /site/ {
         alias /usr/share/nginx/site/;

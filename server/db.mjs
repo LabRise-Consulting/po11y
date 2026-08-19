@@ -1,7 +1,4 @@
-// The single owner of persistent state. Everything the dashboard used to read
-// from JSON files on a shared volume lives here instead, which removes the
-// class of failures where file ownership, inode identity or file-vs-directory
-// semantics differed between the Docker daemon, the host and CI.
+// The single owner of persistent state.
 //
 // Execution rows are stored in the exact shape /api/v1/executions returns, so
 // summarizeExecutions(), fetchStatus() and evaluateAlerts() consume them with

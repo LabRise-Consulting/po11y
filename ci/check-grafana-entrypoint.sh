@@ -2,7 +2,7 @@
 # Guard against the A3 class of bug: compose REPLACES an entrypoint rather
 # than merging it, so an overlay that re-declares grafana's entrypoint inline
 # silently drops whatever the copy forgot — the otel overlay once lost all
-# five Mode A alert rules exactly that way. Since the fix, the one true
+# five Grafana alert rules exactly that way. Since the fix, the one true
 # grafana entrypoint is the shared file observability/grafana/entrypoint.sh.
 #
 # Invariants asserted here, pure text, no docker daemon needed:
@@ -40,8 +40,8 @@ for f in docker-compose*.yml; do
 done
 
 # 3. The k8s grafana Deployment runs the same shared script (mounted from the
-#    grafana-entrypoint ConfigMap) — it used to carry an inline reduced copy
-#    that, exactly like the otel overlay once did, lacked the alerting branch.
+#    grafana-entrypoint ConfigMap) rather than an inline copy that could lack
+#    the alerting branch.
 K8S=deploy/k8s/40-grafana.yaml
 if [ -f "$K8S" ]; then
   grep -qF '"/etc/po11y-grafana-entrypoint.sh"' "$K8S" \

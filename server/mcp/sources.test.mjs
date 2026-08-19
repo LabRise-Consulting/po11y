@@ -122,8 +122,9 @@ test('grafana: a write statement never reaches the network', async () => {
 });
 
 test('datatables: every request is a GET', async () => {
-  // makeDataTables is the second hand-built fetch path to n8n (in Mode B it
-  // targets the REMOTE n8n with N8N_READ_API_KEY). The GET-only invariant is
+  // makeDataTables is the second hand-built fetch path to n8n (on the
+  // read-only stack it targets the REMOTE n8n with N8N_READ_API_KEY). The
+  // GET-only invariant is
   // asserted for makeN8n above; without this twin assertion a write verb could
   // creep in here unnoticed.
   const calls = [];

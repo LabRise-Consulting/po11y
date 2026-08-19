@@ -88,9 +88,9 @@ export const actionKey = (card) => card?.action
  *    place; without it the POST answers 404 and the button can do nothing
  *    but report the failure, so the card becomes a link to n8n's own form
  *    page instead.
- *  - `cfg.n8nUrl` — where that form page lives. app.js used to hardcode
- *    `http://{host}:5678`, so with a remote n8n the Map tab's dialogs (which do
- *    read n8nUrl) and these cards disagreed about the same instance.
+ *  - `cfg.n8nUrl` — where that form page lives. Do not derive it from the
+ *    browser host: a remote n8n is not on `http://{host}:5678`, and the Map
+ *    tab's dialogs read n8nUrl, so a second source would disagree.
  *
  * @param {{forms?: Array<{name: string, sub?: string, path: string, fields?: number}>}} feed
  * @param {Array<object>} existing - cards already declared in config

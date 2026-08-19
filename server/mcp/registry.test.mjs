@@ -76,11 +76,10 @@ test('the five feeds are exposed as resources', () => {
 // names in config languages that cannot import it. These pins make "add a
 // feed, miss a layer" a test failure instead of a silent 404.
 //
-// nginx.conf itself no longer carries the feed blocks — the dashboard
-// entrypoint renders feeds-server.conf into /etc/nginx/feeds.conf, which
-// nginx.conf only `include`s (see docs/server.md and nginx.conf's own
-// feed-routing comment) — so this test reads the file that now actually
-// holds the aliases, not nginx.conf.
+// The dashboard entrypoint renders feeds-server.conf into
+// /etc/nginx/feeds.conf, which nginx.conf only `include`s (see docs/server.md
+// and nginx.conf's own feed-routing comment) — so this test reads
+// feeds-server.conf, not nginx.conf.
 const FEED_NAMES = FEEDS.map(([name]) => name).sort();
 const nginxLocations = (text) => [...text.matchAll(/location = \/([a-z-]+\.json)[\s\S]{0,80}?alias \/po11y-status\//g)]
   .map((m) => m[1]).sort();
@@ -98,22 +97,18 @@ test('deploy/nginx/feeds-server.conf proxies exactly the registry feeds (flat + 
   assert.deepEqual(regexes[0], FEED_NAMES);
 });
 
-// The k8s path never got a server Deployment and the volume-aliased feeds it
-// used to serve were removed along with Mode A's publisher workflows (see
-// deploy/k8s/README.md's "Status feeds do not work" section) — so, unlike
-// deploy/nginx/feeds-server.conf above, there is nothing here to pin the
-// feed list against. This guards the deletion staying deleted: a `location
-// = /status.json { alias ... }` block reappearing here would silently claim
-// a feed that nothing publishes.
+// The k8s path has no server Deployment (see deploy/k8s/README.md's "Status
+// feeds do not work" section), so, unlike deploy/nginx/feeds-server.conf
+// above, there is nothing here to pin the feed list against. This asserts an
+// absence: a `location = /status.json { alias ... }` block appearing here
+// would silently claim a feed that nothing publishes.
 test('the k8s nginx copy does not alias any feed to a status volume', () => {
   const k8s = readFileSync(new URL('../../deploy/k8s/02-configmaps.yaml', import.meta.url), 'utf8');
   assert.deepEqual(nginxLocations(k8s), []);
 });
 
-// server/http.mjs imports FEED_NAMES from here directly and re-exports it as
-// FEEDS — the MCP modules live under server/, so this is a real import
-// rather than the pinned copy it used to be. The assertion stays as the
-// guard that the re-export never drifts into a hand-written list again.
+// server/http.mjs imports FEED_NAMES from here and re-exports it as FEEDS.
+// This guards the re-export never drifting into a hand-written list.
 test('server/http.mjs FEEDS matches the registry feed list exactly', () => {
   assert.deepEqual([...SERVER_FEEDS].sort(), FEED_NAMES);
 });

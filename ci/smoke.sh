@@ -94,9 +94,7 @@ check_config() {
 
 # 3. GET /status.json → 200, .generated_at within the last 60s. BusyBox date
 # cannot parse ISO-8601, so the timestamp is converted to epoch via jq's
-# fromdateiso8601 (strip the .fff fraction first). .containers was Mode A's
-# docker-socket Code node (deleted with the publisher workflows) and is no
-# longer asserted here — an accepted regression of dropping Mode A.
+# fromdateiso8601 (strip the .fff fraction first).
 check_status_json() {
   code=$(curl_code GET /status.json)
   LAST="GET /status.json -> $code; body: $(snippet)"
@@ -146,9 +144,9 @@ check_ai_map_json() {
   jq -e '(.nodes | length) > 0' "$TMP" >/dev/null 2>&1 || return 1
 }
 
-# 6. GET /forms.json → 200 and well-formed. Which forms it lists now depends
-# entirely on what the operator has in n8n, so this no longer asserts a
-# specific path (that used to be maps-build-now, a Mode A form).
+# 6. GET /forms.json → 200 and well-formed. Which forms it lists depends
+# entirely on what the operator has in n8n, so this asserts shape, not a
+# specific path.
 check_forms_json() {
   code=$(curl_code GET /forms.json)
   LAST="GET /forms.json -> $code; body: $(snippet)"
@@ -255,8 +253,8 @@ wait_for 'po11y_sql runs as po11y_ro'           check_sql_role
 wait_for 'po11y_ro denied credentials/payloads' check_sql_denied_tables
 wait_for 'list-rows.mjs serves as javascript'   check_lib_module
 
-# 12. Prove the feeds actually come from the server — the only feed path since
-# Mode A's deletion. The x-po11y-source header is the load-bearing bit: it
+# 12. Prove the feeds actually come from the server — the only feed path.
+# The x-po11y-source header is the load-bearing bit: it
 # proves the request reached the server rather than a stale nginx alias.
 check_forms_server_source() {
   code=$(curl_code_hdr GET /forms.json)

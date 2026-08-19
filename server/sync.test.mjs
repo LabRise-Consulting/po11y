@@ -166,11 +166,9 @@ test('pollFill survives a failing running listing and keeps the finished window'
 });
 
 // po11y_poll_last_success_timestamp_seconds exists to say "the poll stopped
-// working". It used to be stamped unconditionally after pollFill, and
-// fetchExecutions swallowed every transport failure into [] — so an
-// unreachable n8n refreshed the stamp forever and Po11yPollStalled was
-// unfireable. These assert the store itself, not a call count: after a failed
-// poll the stored value must be the OLD one.
+// working". These assert the store itself, not a call count: after a failed
+// poll the stored value must be the OLD one (see syncExecutions in sync.mjs
+// for why the stamp is owned there).
 const AT_10 = Date.parse('2026-08-14T10:00:00.000Z');
 const AT_11 = Date.parse('2026-08-14T11:00:00.000Z');
 const oneExecution = () => jsonResponse({ data: [

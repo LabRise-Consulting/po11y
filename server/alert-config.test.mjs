@@ -21,7 +21,7 @@ test('env only: ALERTS_ENABLED=true switches alerting on', () => {
 test('env only: alerting is ON by default', () => {
   // Default-on: the watchdog costs no extra n8n calls and pushes nowhere
   // without ALERT_WEBHOOK_URL, so the safe default is the observable one —
-  // notifications.json exists instead of 404ing on a fresh Mode B.
+  // notifications.json exists instead of 404ing on a fresh read-only stack.
   assert.equal(loadAlertConfig({}).enabled, true);
 });
 

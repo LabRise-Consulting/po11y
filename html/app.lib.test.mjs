@@ -126,9 +126,9 @@ test('formCards links a form with inputs to n8n rather than posting it', () => {
 });
 
 test('formCards links field-less forms too when the /form/ proxy is off', () => {
-  // Mode B defaults ENABLE_FORM_PROXY=false, so nginx includes an empty
+  // The read-only stack defaults ENABLE_FORM_PROXY=false, so nginx includes an empty
   // form-proxy.conf and every in-place POST answers 404. A link to n8n's own
-  // form page is the honest fallback — the button used to just toast a 404.
+  // form page is the honest fallback.
   const cards = formCards(FEED, [], { formProxy: false, cfg: {}, hostname: 'box' });
   const rebuild = cards.find((c) => c.name === 'Rebuild map');
   assert.equal(rebuild.action, undefined, 'no in-place POST without a proxy to take it');
@@ -136,10 +136,9 @@ test('formCards links field-less forms too when the /form/ proxy is off', () => 
 });
 
 test('formCards honours cfg.n8nUrl for the form links', () => {
-  // Mode B points at an n8n somewhere else entirely; the hardcoded
-  // http://{host}:5678 sent Actions cards to the dashboard host, while the Map
-  // tab's dialogs (which do read n8nUrl) linked correctly. One config, two
-  // answers for the same n8n.
+  // The read-only stack points at an n8n somewhere else entirely, so a link
+  // derived from the browser host goes to the wrong place. The Map tab's
+  // dialogs read n8nUrl; these cards must agree with them.
   const cfg = { n8nUrl: 'https://n8n.example.test' };
   const cards = formCards(FEED, [], { formProxy: false, cfg, hostname: 'box' });
   assert.equal(cards.find((c) => c.name === 'Deploy').href,

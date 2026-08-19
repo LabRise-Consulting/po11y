@@ -157,10 +157,9 @@ test('fetchStatus counts crashed executions as errors, both totals and per-workf
   assert.equal(ex.byWorkflow.find((w) => w.id === '2').errors, 0);
 });
 
-// The dashboard's execution rows claim to say what is running "right now".
-// summarizeExecutions has always tracked the still-running executions for the
-// watchdog's `stuck` rule; the status projection used to drop them, so the
-// dashboard could only ever show counts that had already finished.
+// The dashboard's execution rows claim to say what is running "right now", so
+// the status projection must carry the still-running executions that
+// summarizeExecutions tracks for the watchdog's `stuck` rule.
 test('fetchStatus reports the per-workflow count of still-running executions', async () => {
   const recent = [
     { id: 'e1', workflowId: '1', workflowName: 'Alpha', status: 'running', startedAt: '2026-07-19T03:00:00Z' },
@@ -266,7 +265,7 @@ test('buildAll survives an ai-map throw the no-LLM retry cannot fix', async () =
 });
 
 // ---- makeLlm request fidelity -----------------------------------------------
-test('makeLlm sends stream:false — Mode A OmniRoute routes default to SSE without it', async () => {
+test('makeLlm sends stream:false — OmniRoute routes default to SSE without it', async () => {
   let body = null;
   const fetchFn = async (url, opts) => {
     body = JSON.parse(opts.body);
@@ -306,9 +305,8 @@ test('makeLlm reports a truncated answer as truncation, not as broken JSON', asy
 
 // ---- feed documents ----------------------------------------------------------
 //
-// The server is the sole publisher of map.json/forms.json since Mode A's
-// deletion (its Code-node source, workflows/core/maps.json, is gone). What
-// used to be a cross-mode drift guard is now a direct shape assertion.
+// The server is the sole publisher of map.json/forms.json, so these are direct
+// shape assertions.
 test('map.json entries carry the mermaid node id back to the raw n8n workflow', async () => {
   // site/map.html keys its dialog off entries[].nid and early-returns without
   // them — this is the payload that makes the Map tab clickable.

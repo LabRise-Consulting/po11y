@@ -3,10 +3,7 @@
 // references, plus best-effort webhook/form-call edges (an HTTP Request
 // whose URL contains another workflow's webhook or form path).
 //
-// Originally a pure extraction of the "Build + publish map.json" Code node
-// from Mode A's workflows/core/maps.json (deleted along with Mode A): same
-// traversal order, escaping, Set/sort semantics and output strings. The
-// caller owns I/O (reading the workflow list, writing map.json) and the
+// The caller owns I/O (reading the workflow list, writing map.json) and the
 // generated_at timestamp.
 
 /**

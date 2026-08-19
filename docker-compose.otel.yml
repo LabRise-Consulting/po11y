@@ -27,12 +27,10 @@ services:
     # Instead we mount Tempo's datasource and dashboard into the extras
     # directory that observability/grafana/entrypoint.sh folds into the tree.
     #
-    # This block deliberately does NOT re-declare `entrypoint`. Compose replaces
-    # an entrypoint instead of merging it, so the copy that used to live here
-    # dropped the base file's alerting branch: `-f docker-compose.yml -f
-    # docker-compose.otel.yml` booted with all five Grafana alert rules missing,
-    # with the alerting volume still mounted and unread. Volumes DO merge, which
-    # is why the extras mechanism works and an inline entrypoint does not.
+    # This block deliberately does NOT re-declare `entrypoint`: compose replaces
+    # an entrypoint instead of merging it, so an inline copy here silently drops
+    # the base file's alerting branch. Volumes DO merge, which is why the extras
+    # mechanism above works where an inline entrypoint does not.
     volumes:
       - ./deploy/otel/tempo-datasource.yml:/etc/po11y-grafana-extras/datasources/tempo.yml:ro
       - ./deploy/otel/n8n-traces-dashboard.json:/etc/po11y-grafana-extras/dashboards/n8n-traces.json:ro

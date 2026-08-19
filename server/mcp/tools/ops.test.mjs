@@ -110,9 +110,9 @@ test('incidents: a missing feed names the reason, not just the missing file', as
 });
 
 test('incidents: a feed that parsed to an object answers, rather than throwing a bare -32603', async () => {
-  // A hand-written Mode A Code node can publish {notifications: […]} where the
-  // watchdog writes a bare array; the truthiness guard alone lets that reach
-  // [...all] and throw.
+  // A hand-written publisher can put {notifications: […]} where the watchdog
+  // writes a bare array; the truthiness guard alone lets that reach [...all]
+  // and throw.
   const tool = incidentsTool({ feeds: feedsWith({ 'notifications.json': { notifications: [] } }) });
   const out = await tool.handler({});
   assert.match(out.error, /not a feed array/);
@@ -458,7 +458,7 @@ test('sql: rejects a write before touching the network', async () => {
   assert.equal(called, false);
 });
 
-test('sql: in Mode B it says the datasource is absent', async () => {
+test('sql: with no Grafana datasource it says so', async () => {
   const out = await sqlTool({ grafana: { available: () => false } }).handler({ sql: 'SELECT 1' });
   assert.match(out.reason, /GRAFANA_URL/);
 });

@@ -1,23 +1,11 @@
-# Po11y forward-auth overlay — real identity via oauth2-proxy (generic OIDC).
+# Po11y forward-auth overlay — OIDC identity via oauth2-proxy. OPT-IN; see
+# docs/forward-auth.md for what it replaces, and .env.example's "Forward auth
+# (optional overlay)" block for every variable and how to generate the cookie
+# secret.
 #
-# OPT-IN. The shared DASHBOARD_BASIC_AUTH gate stays the zero-config default;
-# it can say "a password was known", never "who". This overlay swaps that for
-# an OIDC login so every request carries a verified identity (email + groups) —
-# the thing that actually survives offboarding, and what /form/ authorization
-# builds on (see docs/forward-auth.md).
-#
-# Bring up ON TOP OF either base stack (the -f order matters — this file second):
+# Bring up ON TOP OF either base stack — the -f order matters, this file second:
 #   Bundled:    docker compose -f docker-compose.yml          -f docker-compose.auth.yml up -d
 #   Read-only:  docker compose -f docker-compose.readonly.yml -f docker-compose.auth.yml up -d
-#
-# It adds one service (oauth2-proxy) and flips FORWARD_AUTH=true on the existing
-# dashboard, which makes the dashboard entrypoint render the nginx auth_request
-# wiring (see nginx.conf's /oauth2/ locations + the entrypoint FORWARD_AUTH
-# branch). No new published ports: oauth2-proxy is reachable only on the compose
-# network, exclusively as nginx's auth_request upstream.
-#
-# See the "Forward auth (optional overlay)" block in .env.example for every var
-# and how to generate the cookie secret.
 
 services:
   oauth2-proxy:

@@ -34,11 +34,10 @@ PACKS=""
 # a volume that is no longer mounted.
 #
 # Deleting an EXAMPLE workflow counts too, and is easier to forget because
-# examples are optional: hn-notify's Code node used to fail silently (the image
-# pre-created /po11y-status and `fs` was an allowed builtin), and now throws
-# outright. A leftover copy on a live instance is still called by hn-tech-news
-# every 30 minutes, so it turns into a red workflow, a `failing` alert and a
-# webhook push rather than a no-op.
+# examples are optional: hn-notify's Code node throws outright. A leftover copy
+# on a live instance is still called by hn-tech-news every 30 minutes, so it
+# turns into a red workflow, a `failing` alert and a webhook push rather than a
+# no-op.
 #   po11yaimap000000  retired 2026-07 (ai-map + workflow-map merged into maps.json)
 #   po11yworkflowmap  retired 2026-08 (maps.json — the server builds the map now)
 #   po11ystatuspub00  retired 2026-08 (status-publish — the server owns the feeds)
@@ -79,7 +78,7 @@ get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/[[:space:]
 # Not a secret, but seeded on the same terms: .env.example carries it, and an
 # .env written by hand (or by CI) need not. Owner setup POSTs whatever this
 # returns, and n8n rejects an empty email with the same 400 it uses for "owner
-# already exists" — which used to be read as success. Default it instead.
+# already exists" — indistinguishable from success, so it gets a default too.
 [ -n "$(get_env N8N_OWNER_EMAIL)" ]        || set_env N8N_OWNER_EMAIL "admin@example.com"
 
 # Bundled OmniRoute gateway overlay — included unless OMNIROUTE_ENABLED=false.
@@ -343,12 +342,9 @@ fi
 
 # ---- 4b. ops API key -----------------------------------------------------------
 # The server reads n8n over the public API, and that API accepts nothing but a
-# key. The dashboard's feeds used to be published by n8n workflows using
-# their own internal credentials, so a default bootstrap produced a populated
-# dashboard with no key anywhere. The server owns every feed now, so without a
-# key a default stack comes up correct but empty: serving-only, no sync, no
-# build, `status.json` reporting generated_at null forever. Minting the key here
-# is what keeps "run bootstrap, get a dashboard" true.
+# key. Without one a default stack comes up correct but empty: serving-only, no
+# sync, no build, `status.json` reporting generated_at null forever. Minting the
+# key here is what keeps "run bootstrap, get a dashboard" true.
 #
 # Only when MCP_N8N_API_KEY is empty: an operator's own key — including a key
 # for a DIFFERENT n8n — always wins, and a re-run never rotates a working one.

@@ -6,15 +6,11 @@
 // signatures (sigs) let unchanged nodes keep their previous prose, so the
 // LLM only ever sees the workflows that actually changed.
 //
-// Originally a pure extraction of the "Build + publish ai-map.json" Code node
-// from Mode A's workflows/core/maps.json (deleted along with Mode A): the
-// skeleton, digest/sig computation, publish policy, differential-annotation
-// logic and fence-stripping JSON parse moved over verbatim. The caller owns
-// all I/O and time: it supplies the previous map (`prev`), the "Build now"
-// form state (`forced`), the wall clock (`now`), the AI config booleans
-// (`aiConfigured`/`model`) and the LLM transport (`llm`), and it stamps
-// `generated_at` + writes the file. The original `console.log` for an
-// unusable LLM reply becomes a `warnings` array on the returned summary.
+// The caller owns all I/O and time: it supplies the previous map (`prev`), the
+// "Build now" form state (`forced`), the wall clock (`now`), the AI config
+// booleans (`aiConfigured`/`model`) and the LLM transport (`llm`), and it
+// stamps `generated_at` + writes the file. An unusable LLM reply is reported
+// as a `warnings` array on the returned summary, not logged.
 
 /**
  * @typedef {Object} N8nNode

@@ -15,16 +15,9 @@ services:
       # Plain HTTP — acceptable on localhost / a private network only.
       - N8N_SECURE_COOKIE=false
       - WEBHOOK_URL=http://${BIND_ADDR:-127.0.0.1}:5678/
-      # No Code-node builtins are enabled. NODE_FUNCTION_ALLOW_BUILTIN=fs used
-      # to be set for the publisher workflows that wrote the dashboard's feeds
-      # to a shared volume; the server owns every feed now and no shipped
-      # workflow requires a builtin. $env is blocked in nodes so a workflow
-      # cannot read the DB / Grafana passwords out of the process environment.
+      # $env is blocked in nodes so a workflow cannot read the DB / Grafana
+      # passwords out of the process environment.
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=true
-      # NODES_EXCLUDE is deliberately NOT set: n8n >=2.0 disables Execute
-      # Command by default, and po11y no longer needs it. It was re-enabled
-      # instance-wide (NODES_EXCLUDE=[]) for one deleted workflow's `n8n
-      # export:workflow` step — the server reads workflows over the API.
       # --- datastore ---
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
@@ -51,13 +44,6 @@ services:
       - ./packs:/packs:ro
     depends_on:
       - postgres
-
-  # NOTE: there is no docker-proxy sidecar and no host Docker socket anywhere
-  # in this stack. The socket was mounted (read-only, through a proxy scoped to
-  # GET /containers/json) for one workflow that filled the dashboard's
-  # container card. That card is gone permanently — see docs/server.md's
-  # accepted regressions — so the mount is gone with it rather than being kept
-  # alive as attack surface for a feature that no longer exists.
 
   postgres:
     image: postgres:16-alpine
@@ -116,10 +102,9 @@ services:
       # observability/grafana/entrypoint.sh and alerting/rules.yml).
       # This is a credential — see docs/alerting.md.
       - GRAFANA_ALERT_WEBHOOK_URL=${GRAFANA_ALERT_WEBHOOK_URL:-}
-    # Shared by every compose file that runs Grafana. Do NOT inline this again:
-    # compose replaces an entrypoint rather than merging it, so a second copy in
-    # an overlay silently drops whatever the copy forgot (the otel overlay used
-    # to lose all five alert rules that way).
+    # Shared by every compose file that runs Grafana. Do NOT inline this as a
+    # literal `entrypoint:` in an overlay — compose replaces an entrypoint
+    # rather than merging it. See observability/grafana/entrypoint.sh.
     entrypoint: ["sh", "/etc/po11y-grafana-entrypoint.sh"]
     volumes:
       - ./observability/grafana/entrypoint.sh:/etc/po11y-grafana-entrypoint.sh:ro
