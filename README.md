@@ -4,13 +4,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/labrise-consulting/po11y)](https://github.com/labrise-consulting/po11y/releases)
 
-Po11y is a status dashboard and observability stack for [n8n](https://n8n.io), the workflow automation tool. It shows running workflows, system health, and inter-workflow dependencies, refreshed on a poll interval you set.
+Po11y is an open-source, self-hosted status dashboard and observability stack for [n8n](https://n8n.io), the workflow automation tool. It shows running workflows, system health, and inter-workflow dependencies, refreshed on a poll interval you set.
 
 There is no build step: the dashboard is static files on Nginx, with one `server` process behind it and Grafana for metrics. n8n needs no po11y workflows installed.
 
-Po11y is open-source (MIT licensed) and self-hosted. One default does send data off your server: the AI architecture map sends workflow digests through OmniRoute's `auto/best-free` route, which forwards them to whichever free-tier provider it picks, using none of your own API keys. Set `OMNIROUTE_ENABLED=false` for local heuristic descriptions, or point `AI_MAP_BASE_URL` at a local model. See [docs/ai-map.md](docs/ai-map.md).
-
-The bundled topology also switches n8n's own diagnostics off. The read-only topology changes nothing about the n8n you already run, including that setting.
+The read-only topology changes nothing about the n8n you already run.
 
 ## Quickstart: Bundled (with n8n)
 
@@ -65,6 +63,8 @@ The intro video demonstrates the complete stack: dashboard views, architecture m
 - **MCP Server**: Includes a read-only Model Context Protocol server at `/mcp/` for AI assistant integration. See [docs/mcp.md](docs/mcp.md).
 
 - **Bundled LLM gateway**: `bootstrap.sh` includes an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) gateway by default, exposing one OpenAI-compatible endpoint with provider routing and fallback. Po11y uses it for architecture map descriptions, but it is a general gateway: connect your providers once at `http://127.0.0.1:20128`, then point n8n AI nodes at `http://omniroute:20128/v1` and host tools such as VS Code at `http://127.0.0.1:20128/v1`. It binds to loopback only and its proxy takes no API key by default, so keep it off shared networks. See [docs/ai-map.md](docs/ai-map.md#using-omniroute-beyond-the-map).
+
+On a stack brought up by `bootstrap.sh`, the AI architecture map sends workflow digests through OmniRoute's `auto/best-free` route by default, which forwards them to whichever free-tier provider it picks, using none of your own API keys. Set `OMNIROUTE_ENABLED=false` for local heuristic descriptions, or point `AI_MAP_BASE_URL` at a local model. The read-only topology does not run `bootstrap.sh` and sends nothing to an LLM until you configure one. See [docs/ai-map.md](docs/ai-map.md).
 
 ## Deployment Topologies
 
@@ -174,6 +174,15 @@ can see it.
 ## Quickstart: Read-only (against an existing n8n)
 
 This topology monitors an external n8n instance without altering its configuration.
+
+### No LLM by default
+
+This topology sends nothing to an LLM unless you configure one. The bundled
+OmniRoute gateway is wired up by `bootstrap.sh`, which the commands below do
+not run, so the architecture map uses local heuristic descriptions. To enable
+LLM prose, start the gateway overlay and set the three `AI_MAP_*` variables in
+`.env` — the map calls an LLM only when all three are set. See
+[docs/ai-map.md](docs/ai-map.md).
 
 ### Prerequisites
 

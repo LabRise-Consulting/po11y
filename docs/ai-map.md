@@ -10,11 +10,27 @@ The Architecture tab always works because code builds its structure. An LLM is o
    - Connect a provider.
    - Set `AI_MAP_MODEL` in `.env` (for example, `anthropic/claude-haiku-4-5`) and re-run `./bootstrap.sh`.
 
-   On the read-only stack, start the overlay manually:
-   ```sh
-   docker compose -f docker-compose.readonly.yml -f docker-compose.omniroute.yml up -d
-   ```
-   Then set `AI_MAP_BASE_URL=http://omniroute:20128/v1` in `.env`.
+   On the read-only stack, wire it up by hand:
+
+   1. Fill the three gateway secrets in `.env`. Compose refuses to start
+      while they are empty, and `.env.example` ships them empty. Generate
+      values with:
+      ```sh
+      openssl rand -hex 32   # OMNIROUTE_JWT_SECRET
+      openssl rand -hex 32   # OMNIROUTE_API_KEY_SECRET
+      openssl rand -hex 16   # OMNIROUTE_ADMIN_PASSWORD
+      ```
+   2. Point the map at the gateway. Set all three — the map stays heuristic
+      unless every one is set:
+      ```sh
+      AI_MAP_BASE_URL=http://omniroute:20128/v1
+      AI_MAP_API_KEY=omniroute-local   # placeholder; the gateway needs no key
+      AI_MAP_MODEL=auto/best-free
+      ```
+   3. Start the stack with the overlay:
+      ```sh
+      docker compose -f docker-compose.readonly.yml -f docker-compose.omniroute.yml up -d
+      ```
 
 2. **External API endpoint**
    Set `AI_MAP_BASE_URL`, `AI_MAP_API_KEY`, and `AI_MAP_MODEL` in `.env`. Any OpenAI-compatible endpoint works (such as OpenAI, Anthropic, Mistral, or Ollama). Then restart the server: `docker compose up -d server`. Explicit settings override OmniRoute auto-wiring. Set `OMNIROUTE_ENABLED=false` to disable the OmniRoute container. The server refreshes descriptions daily or when you click **Build maps now**.
