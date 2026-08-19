@@ -144,6 +144,33 @@ test('fetchStatus builds the executions summary shape, sorted by count desc', as
   assert.deepEqual(ex.byWorkflow[1], { name: 'Beta', id: '2', count: 1, errors: 0, lastAt: '2026-07-19T01:30:00Z', running: 0 });
 });
 
+test('fetchStatus keeps every workflow in the window, not a top-N slice', async () => {
+  // 50 workflows, each with a distinct run count, so the dashboard's filter box
+  // can find the quietest one. A server-side top-10 made workflows 11..50
+  // unreachable: the client filters what it was sent.
+  const recent = [];
+  for (let i = 1; i <= 50; i++) {
+    for (let n = 0; n < 51 - i; n++) {
+      recent.push({
+        workflowId: String(i),
+        workflowName: `Workflow ${i}`,
+        status: 'success',
+        startedAt: '2026-07-19T01:00:00Z',
+      });
+    }
+  }
+  const fetchFn = async () => jsonRes({ data: recent });
+
+  const { status } = await fetchStatus(fetchFn, N8N, 'k', { now: Date.now() });
+  const ex = status.executions;
+  assert.equal(ex.byWorkflow.length, 50);
+  assert.equal(ex.byWorkflow[0].name, 'Workflow 1', 'busiest first');
+  assert.equal(ex.byWorkflow[49].name, 'Workflow 50', 'quietest last');
+  assert.ok(ex.byWorkflow.some((w) => w.name === 'Workflow 42'), 'a workflow past the display cap is present');
+  // Uncapped means the per-workflow counts add up to `recent` again.
+  assert.equal(ex.byWorkflow.reduce((n, w) => n + w.count, 0), ex.recent);
+});
+
 test('fetchStatus counts crashed executions as errors, both totals and per-workflow', async () => {
   const recent = [
     { workflowId: '1', workflowName: 'Alpha', status: 'crashed', startedAt: '2026-07-19T01:00:00Z' },
@@ -186,7 +213,7 @@ test('fetchStatus issues exactly ONE executions GET (recent window is the only s
   const paths = [];
   const fetchFn = async (url) => { paths.push(new URL(url).pathname + new URL(url).search); return jsonRes({ data: [] }); };
   await fetchStatus(fetchFn, N8N, 'k', {});
-  assert.deepEqual(paths, ['/api/v1/executions?limit=100']);
+  assert.deepEqual(paths, ['/api/v1/executions?limit=250']);
 });
 
 test('fetchStatus resolves names from the caller-supplied id->name map', async () => {
@@ -275,7 +302,7 @@ test('makeLlm sends stream:false — OmniRoute routes default to SSE without it'
   await llm('prompt');
   assert.equal(body.stream, false, 'without this res.json() throws on an SSE reply');
   assert.equal(body.model, 'auto/best-free');
-  assert.equal(body.max_tokens, 8000);
+  assert.equal(body.max_tokens, 16_000);
   assert.deepEqual(body.response_format, { type: 'json_object' });
 });
 
@@ -285,9 +312,9 @@ test('makeLlm takes the token budget from config so a reasoning model can be pai
     body = JSON.parse(opts.body);
     return jsonRes({ choices: [{ message: { content: '{}' } }] });
   };
-  const llm = makeLlm(fetchFn, { base: AI, key: 'k', model: 'm', maxTokens: 16_000 });
+  const llm = makeLlm(fetchFn, { base: AI, key: 'k', model: 'm', maxTokens: 24_000 });
   await llm('prompt');
-  assert.equal(body.max_tokens, 16_000);
+  assert.equal(body.max_tokens, 24_000);
 });
 
 test('makeLlm reports a truncated answer as truncation, not as broken JSON', async () => {
@@ -355,7 +382,7 @@ test('fetchExecutions returns the raw execution list via a GET', async () => {
   const out = await fetchExecutions(fetchFn, N8N, 'k');
   assert.equal(out.length, 1);
   assert.equal(seen[0].method, 'GET');
-  assert.match(seen[0].url, /\/api\/v1\/executions\?limit=100/);
+  assert.match(seen[0].url, /\/api\/v1\/executions\?limit=250/);
 });
 
 test('fetchExecutions returns an empty list when the executions API is disabled', async () => {
@@ -366,8 +393,10 @@ test('fetchExecutions returns an empty list when the executions API is disabled'
 test('fetchExecutions honors a caller-supplied window size', async () => {
   const paths = [];
   const fetchFn = async (url) => { paths.push(new URL(url).search); return jsonRes({ data: [] }); };
-  await fetchExecutions(fetchFn, N8N, 'k', 250);
-  assert.deepEqual(paths, ['?limit=250']);
+  // Deliberately not 250: that is the default now, so it would pass without
+  // the caller's value ever being read.
+  await fetchExecutions(fetchFn, N8N, 'k', 120);
+  assert.deepEqual(paths, ['?limit=120']);
 });
 
 test('fetchExecutions clamps the window to the n8n API cap of 250', async () => {
@@ -387,8 +416,8 @@ test('fetchExecutions floors a nonsensical window to 1', async () => {
 test('fetchStatus fallback fetch uses the same caller-supplied window size', async () => {
   const paths = [];
   const fetchFn = async (url) => { paths.push(new URL(url).search); return jsonRes({ data: [] }); };
-  await fetchStatus(fetchFn, N8N, 'k', { limit: 250 });
-  assert.deepEqual(paths, ['?limit=250']);
+  await fetchStatus(fetchFn, N8N, 'k', { limit: 120 });
+  assert.deepEqual(paths, ['?limit=120']);
 });
 
 // ---- apiGetPaged (shared pager) ----------------------------------------------

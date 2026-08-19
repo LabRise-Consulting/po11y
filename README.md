@@ -208,7 +208,7 @@ docker compose -f docker-compose.readonly.yml up -d
 | `N8N_METRICS_TARGET` | Yes | `host:port` for n8n `/metrics` endpoint |
 | `GRAFANA_ADMIN_PASSWORD` | Yes | Grafana admin password |
 | `SERVER_POLL_INTERVAL` | No | Server poll interval in seconds (default: `30`) |
-| `EXECUTIONS_LIMIT` | No | Recent execution window size (default: `100`, max: `250`) |
+| `EXECUTIONS_LIMIT` | No | Recent execution window size (default: `250`, which is n8n's maximum) |
 
 The poll interval sets how fresh the dashboard is, and it also sets what the
 dashboard can see at all. Po11y knows a workflow is running only if a poll
@@ -219,7 +219,9 @@ it as stuck. Decrease `SERVER_POLL_INTERVAL` if your workflows are short and you
 want to see them run. Each decrease adds two more n8n API requests per interval,
 one for the finished executions and one for the running executions. Also make
 sure that `EXECUTIONS_LIMIT` stays larger than the number of executions that
-complete in one interval.
+complete in one interval. The default is already n8n's maximum, so an instance
+that completes more than 250 executions per interval must decrease
+`SERVER_POLL_INTERVAL`.
 
 ## Feature Comparison
 

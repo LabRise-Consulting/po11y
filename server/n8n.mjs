@@ -20,7 +20,13 @@ import { summarizeExecutions } from './watchdog.mjs';
 // own fallback fetch — one number, so the two requests cannot quietly diverge.
 // Overridable per call (daemon: EXECUTIONS_LIMIT env), capped at 250 because
 // that is the hard `limit` maximum of n8n's executions API.
-const EXECUTIONS_LIMIT = 100;
+//
+// The default IS that cap. The window is what bounds every count the dashboard
+// shows, so a smaller one buys nothing but blind spots: an instance with fifty
+// workflows spends a 100-execution window in two polls, and anything that aged
+// out is invisible to status.json and to the `failing` rule. One GET per poll
+// either way, and the entries are metadata only.
+const EXECUTIONS_LIMIT = 250;
 const EXECUTIONS_LIMIT_MAX = 250;
 
 /** Clamp a caller-supplied executions window to what the n8n API accepts. */
@@ -146,8 +152,9 @@ export async function fetchAllWorkflows(fetchFn, baseUrl, apiKey) {
  * (An earlier version sourced `errors` from a separate error-only query that
  * reached past the recent 100; both counts capped at the API limit of 100 and
  * rendered side by side, which read as a 100% failure rate.) byWorkflow is the
- * recent window aggregated per workflow (top ~10 by count desc, so the
- * per-workflow counts sum to `recent`).
+ * recent window aggregated per workflow, sorted by count desc and NOT
+ * truncated: the dashboard shows the busiest few and expands on demand, and a
+ * server-side top-N would make its filter box unable to find workflow #11.
  *
  * The executions API can be disabled on an instance; on ANY failure this
  * returns { status: {}, warning: <string> } so the daemon still publishes a
@@ -182,8 +189,7 @@ export async function fetchStatus(fetchFn, baseUrl, apiKey, { names = null, exec
     const byWorkflow = [...summarizeExecutions(recent, { names }).values()]
       .map(({ name, id, count, errors, lastAt, running }) =>
         ({ name, id, count, errors, lastAt, running: running.length }))
-      .sort((a, b) => b.count - a.count || String(a.name).localeCompare(String(b.name)))
-      .slice(0, 10);
+      .sort((a, b) => b.count - a.count || String(a.name).localeCompare(String(b.name)));
 
     const errors = recent.reduce((n, e) => n + (isFailed(e) ? 1 : 0), 0);
     return {
@@ -202,18 +208,22 @@ export async function fetchStatus(fetchFn, baseUrl, apiKey, { names = null, exec
  * AI_MAP_BASE_URL/AI_MAP_API_KEY/AI_MAP_MODEL. This is the ONLY non-GET the
  * core issues, and it never targets the n8n host.
  *
- * The budget defaults to 8000, not 3000, because a reasoning model spends the
+ * The budget defaults to 16000, not 3000, because a reasoning model spends the
  * SAME allowance on its hidden thinking as on the answer. The bundled default
  * route (`auto/best-free`) resolves to one, and 3000 left it enough room to
  * think and then stop mid-string — so the map degraded to heuristic text on a
- * stock install and stayed there. Raise it further with AI_MAP_MAX_TOKENS if a
- * larger instance still truncates.
+ * stock install and stayed there. The answer also grows with the instance: it
+ * carries one line per node plus a summary per workflow, so a fifty-workflow
+ * map needs several times what a five-workflow map does. A ceiling is not a
+ * spend — an API bills the tokens the model actually writes — so the default
+ * is set to clear a large instance rather than to fit a small one. Raise it
+ * further with AI_MAP_MAX_TOKENS if one still truncates.
  *
  * @param {typeof fetch} fetchFn
  * @param {{ base: string, key: string, model: string, maxTokens?: number }} cfg
  * @returns {(prompt: string) => Promise<string>}
  */
-export function makeLlm(fetchFn, { base, key, model, maxTokens = 8000 }) {
+export function makeLlm(fetchFn, { base, key, model, maxTokens = 16000 }) {
   const url = `${String(base).replace(/\/$/, '')}/chat/completions`;
   return async (prompt) => {
     const res = await fetchFn(url, {

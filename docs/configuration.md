@@ -74,6 +74,11 @@ Written by the po11y `server`, from its own store, on every deployment.
 `status.json` always carries this `executions` object with run metrics. It
 never carries a container list — see [docs/server.md](server.md#accepted-regressions).
 
+`byWorkflow` holds every workflow that appears in the recent window, busiest
+first, with no top-N truncation — so the per-workflow counts sum to `recent`,
+and consumers can search the whole set. The dashboard shows the first ten and
+offers a "show all" button; its filter box searches all of them.
+
 `running` is how many executions of that workflow were still in flight at the
 last poll, and the dashboard renders it as a cyan dot and an "N running" pill.
 Two things bound it:
@@ -118,7 +123,7 @@ Array of notifications sorted newest-first.
 
 #### Watchdog Rules
 
-The watchdog evaluates these rules against recent executions (`EXECUTIONS_LIMIT`, default `100`). The po11y server runs them against its own store, from the same variables, on every deployment.
+The watchdog evaluates these rules against recent executions (`EXECUTIONS_LIMIT`, default `250`). The po11y server runs them against its own store, from the same variables, on every deployment.
 
 | Rule | Description | Default Budget |
 |------|-------------|----------------|
@@ -173,7 +178,7 @@ Before writing rules against these:
 
 ### Sizing the Execution Window
 
-The server retrieves up to `EXECUTIONS_LIMIT` executions per poll (default `100`, maximum `250`). Ensure `EXECUTIONS_LIMIT` is greater than or equal to the expected number of executions completed during one `SERVER_POLL_INTERVAL`. If execution volume exceeds `EXECUTIONS_LIMIT`, increase `EXECUTIONS_LIMIT` or decrease `SERVER_POLL_INTERVAL`.
+The server retrieves up to `EXECUTIONS_LIMIT` executions per poll. The default is `250`, which is also the maximum that n8n's API accepts. Ensure `EXECUTIONS_LIMIT` is greater than or equal to the expected number of executions completed during one `SERVER_POLL_INTERVAL`. Executions above the window are invisible to `status.json` and to the `failing` rule. Because the default is already the maximum, an instance that exceeds it must decrease `SERVER_POLL_INTERVAL`. Decrease `EXECUTIONS_LIMIT` only to give a slow n8n a smaller response to build.
 
 ### Watchdog Internal State
 

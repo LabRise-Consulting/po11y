@@ -63,7 +63,7 @@ const SYNC_RETRY_INTERVAL = num(process.env.SYNC_RETRY_INTERVAL, 15, 'SYNC_RETRY
 // rule can never see it either. 30s halves that blind spot for the short
 // workflows most instances actually run, at two extra GETs per minute.
 const POLL_INTERVAL = num(process.env.POLL_INTERVAL, 30, 'POLL_INTERVAL');
-const EXECUTIONS_LIMIT = num(process.env.EXECUTIONS_LIMIT, 100, 'EXECUTIONS_LIMIT');
+const EXECUTIONS_LIMIT = num(process.env.EXECUTIONS_LIMIT, 250, 'EXECUTIONS_LIMIT');
 // Generous by design: a full workflow sync pages the whole instance, and this
 // bounds a single request, not the tick.
 const N8N_TIMEOUT_MS = num(process.env.N8N_TIMEOUT_MS, 30_000, 'N8N_TIMEOUT_MS');
@@ -152,7 +152,7 @@ if (!SYNC_ENABLED && HEARTBEAT.url) {
   console.error('server: ALERT_HEARTBEAT_URL is set but sync is disabled — no ping can ever be sent; '
     + 'set the ops key (MCP_N8N_API_KEY on the bundled stack) or unset the heartbeat');
 }
-const AI_MAX_TOKENS = num(process.env.AI_MAP_MAX_TOKENS, 8000, 'AI_MAP_MAX_TOKENS');
+const AI_MAX_TOKENS = num(process.env.AI_MAP_MAX_TOKENS, 16000, 'AI_MAP_MAX_TOKENS');
 const llm = aiConfigured
   ? makeLlm(fetch, { base: AI_BASE, key: AI_KEY, model: AI_MODEL, maxTokens: AI_MAX_TOKENS })
   : null;

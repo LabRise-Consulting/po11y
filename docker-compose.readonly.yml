@@ -14,9 +14,9 @@
 #                        degrade gracefully to an empty Grafana tab)
 #   SERVER_POLL_INTERVAL seconds between polls (default 30 — lower it further to
 #                        catch workflows that finish inside one interval)
-#   EXECUTIONS_LIMIT     recent-executions window per poll (default 100, max
-#                        250 — n8n's API cap; see "Sizing the executions
-#                        window" in docs/configuration.md)
+#   EXECUTIONS_LIMIT     recent-executions window per poll (default 250, which
+#                        is n8n's API cap; see "Sizing the executions window"
+#                        in docs/configuration.md)
 #   BIND_ADDR / DASHBOARD_PORT / DASHBOARD_BASIC_AUTH / GRAFANA_ADMIN_PASSWORD
 #                        reused verbatim from the bundled stack (see .env.example)
 #   ENABLE_FORM_PROXY / FORM_PROXY_UPSTREAM   see the dashboard service + nginx
@@ -166,7 +166,7 @@ services:
       SYNC_RETRY_INTERVAL: ${SERVER_SYNC_RETRY_INTERVAL:-15}
       POLL_INTERVAL: ${SERVER_POLL_INTERVAL:-30}
       N8N_TIMEOUT_MS: ${N8N_TIMEOUT_MS:-30000}
-      EXECUTIONS_LIMIT: ${EXECUTIONS_LIMIT:-100}
+      EXECUTIONS_LIMIT: ${EXECUTIONS_LIMIT:-250}
       PO11Y_RETENTION_DAYS: ${PO11Y_RETENTION_DAYS:-30}
       PO11Y_PACK: ${PO11Y_PACK:-}
       PO11Y_SCOPE: ${PO11Y_SCOPE:-default}

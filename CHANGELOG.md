@@ -8,6 +8,18 @@ Notable changes to Po11y. Format follows
 
 ### Changed
 
+- Two defaults are sized for a large instance instead of a small one.
+  `EXECUTIONS_LIMIT` now defaults to `250`, which is the maximum n8n's
+  executions API accepts: the window bounds every count the dashboard shows, so
+  a smaller one buys nothing but blind spots — fifty workflows spend a
+  100-execution window in two polls, and whatever aged out is invisible to
+  `status.json` and to the `failing` rule. It is still one GET per poll, of
+  metadata only. `AI_MAP_MAX_TOKENS` now defaults to `16000`, because the
+  annotation answer grows with the instance (one line per node, one summary per
+  workflow) and a reasoning model spends the same budget on its hidden
+  thinking; a ceiling is not a spend, so it is set to clear a large map rather
+  than to fit a small one.
+
 - The feature comparison now states its scope, links every project it names, and
   carries the date it was compiled along with an invitation to correct it. Three
   cells were wrong when checked against the projects' own documentation: n8n
@@ -46,6 +58,17 @@ Notable changes to Po11y. Format follows
   headings use one capitalisation style.
 
 ### Fixed
+
+- The Overview's execution filter reaches every workflow. `status.json` sliced
+  `byWorkflow` to the ten busiest before it left the server, and the filter box
+  searches the array it was sent, so on an instance with more workflows than
+  that, typing the name of the eleventh-busiest returned "no match" for a
+  workflow that exists and is running. The cap now lives in the dashboard:
+  `byWorkflow` carries every workflow in the recent window, busiest first, so
+  its counts sum to `recent` again and any consumer can search the whole set.
+  The Overview still shows ten rows and gains the "show all N" toggle the
+  notification feed already uses. Alerting was never affected — the watchdog
+  reads its own untruncated fold.
 
 - Alert rules now evaluate production executions only. n8n stamps every run
   with the mode that started it, and the two hand-run modes (`manual`,

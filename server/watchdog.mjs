@@ -25,9 +25,8 @@ const newer = (a, b) => (!a ? b : !b ? a : new Date(a) > new Date(b) ? a : b);
 /**
  * Fold a raw execution list into a per-workflow summary.
  *
- * Every workflow that appears is kept — no top-N truncation. status.json's
- * `byWorkflow` slices to 10 for display, and alerting off that list would mean
- * workflow #11 could fail forever in silence.
+ * Every workflow that appears is kept — no top-N truncation. Alerting off a
+ * truncated list would mean workflow #11 could fail forever in silence.
  *
  * `lastAt` and `lastOkAt` are tracked separately: a workflow failing every five
  * minutes has a very fresh `lastAt`, so a staleness check built on it would
