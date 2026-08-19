@@ -1,0 +1,90 @@
+# Po11y CLA check — asks first-time contributors to sign CLA.md before their
+# pull request is merged.
+#
+# How it works: on every pull request the action compares each commit author
+# against the signature ledger. Anyone missing from it gets a bot comment and a
+# red status check. They reply once with the exact sign-off phrase, the action
+# re-runs, appends them to the ledger, and the check goes green. That signature
+# is permanent — every later pull request from the same account passes without
+# a prompt.
+#
+# The check is deliberately NOT a required check in branch protection, so a
+# maintainer can always merge an unsigned pull request. It informs; it does not
+# gate.
+#
+# `pull_request_target` (not `pull_request`) is required: the action must write
+# the signature ledger back to this repository, and a fork's `pull_request` run
+# only ever gets a read-only token. `pull_request_target` runs the workflow
+# definition from the base branch with a writable token — safe here precisely
+# because this workflow never checks out or executes the fork's code. Do not
+# add an `actions/checkout` of `github.event.pull_request.head.sha` to this
+# file; that is the exact pattern that turns `pull_request_target` into
+# arbitrary code execution with a writable token.
+#
+# The signature ledger lives on `main`, so each new signature adds one bot
+# commit there. The action writes it through the contents API, which cannot
+# create a branch and cannot push to a protected one. So if `main` ever gets
+# branch protection, move the ledger: create an unprotected `cla-signatures`
+# branch by hand first (the action will not create it — it 404s on a missing
+# branch), then point `branch:` below at it.
+#
+# Action version is pinned to a commit SHA rather than a tag, matching the
+# image-pinning policy in ci.yml: a tag can be moved, a SHA cannot.
+
+name: CLA
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+# Spelled out because a repository whose default workflow permissions are
+# read-only would otherwise fail on the ledger write.
+#   actions: write        re-runs the check after someone signs
+#   contents: write       commits the signature ledger
+#   pull-requests: write  posts the "please sign" comment
+#   statuses: write       sets the red/green check
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    name: Check CLA signatures
+    runs-on: ubuntu-24.04
+    steps:
+      - name: CLA assistant
+        # Two triggers land here, so filter: react to pull request events, and
+        # to comments only when they are the sign-off phrase or a `recheck`.
+        # Every other issue comment in the repository is ignored.
+        #
+        # The phrase below must stay byte-identical to the action's default
+        # sign-off text. Changing one requires changing the other, which is why
+        # `custom-pr-sign-comment` is deliberately left unset.
+        if: >-
+          (github.event.comment.body == 'recheck' ||
+          github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') ||
+          github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PERSONAL_ACCESS_TOKEN is only needed when the ledger lives in
+          # another repository. It does not, so the built-in token suffices and
+          # there is no secret to provision.
+        with:
+          path-to-document: https://github.com/LabRise-Consulting/po11y/blob/main/CLA.md
+          path-to-signatures: signatures/version1/cla.json
+          branch: main
+          # `*[bot]` matches GitHub App accounts, which always end in `[bot]`
+          # (dependabot[bot], renovate[bot]). A bot cannot post a signing
+          # comment, so without this its pull requests would sit red forever.
+          allowlist: scholtalbers,*[bot]
+          # Locks the conversation on a merged pull request so a contributor
+          # cannot delete the comment that recorded their signature. Set to
+          # false if you would rather keep merged pull requests open for
+          # discussion — the JSON ledger is the durable record either way, and
+          # locking only hardens the corroborating evidence.
+          lock-pullrequest-aftermerge: true

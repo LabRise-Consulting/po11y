@@ -2,6 +2,11 @@
 
 We welcome issues, bug reports, and pull requests. Please report security vulnerabilities privately according to [SECURITY.md](SECURITY.md).
 
+Before your first pull request is merged, sign the
+[Contributor License Agreement](CLA.md). A bot comments on the pull request
+with the one line you reply to sign it. You sign once, and every later pull
+request passes the check automatically.
+
 ## Running checks locally
 
 You can run all CI checks locally without starting the Docker stack:
