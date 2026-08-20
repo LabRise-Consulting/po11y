@@ -14,7 +14,7 @@
 # the one script that stands between `cp .env.example .env` and a stack whose
 # optional overlays start.
 #
-# Requires: curl, openssl (host side).
+# Requires: curl for the probes, and openssl or /dev/urandom to seed secrets.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -179,15 +179,25 @@ printf '\nsecrets   %s\n' "$ENV_FILE"
 if [ "$WRITE" = no ]; then
   note "--check: not writing"
 else
-  command -v openssl >/dev/null || { echo "preflight: openssl required (or pass --check)"; exit 1; }
+  # openssl is bootstrap.sh's generator, but this script runs on hosts that
+  # never install one — a minimal container, a locked-down box — and refusing
+  # to seed there would leave compose unable to start over a missing random
+  # number. /dev/urandom is the same entropy source openssl reads anyway.
+  rand_hex() { # rand_hex BYTES
+    if command -v openssl >/dev/null; then
+      openssl rand -hex "$1"
+    else
+      od -An -vtx1 -N "$1" /dev/urandom | tr -d ' \n'
+    fi
+  }
   seeded=""
   seed() { # seed KEY VALUE
     [ -n "$(get_env "$1")" ] || { set_env "$1" "$2"; seeded="$seeded $1"; }
   }
-  seed GRAFANA_ADMIN_PASSWORD   "$(openssl rand -hex 16)"
-  seed OMNIROUTE_JWT_SECRET     "$(openssl rand -hex 32)"
-  seed OMNIROUTE_API_KEY_SECRET "$(openssl rand -hex 32)"
-  seed OMNIROUTE_ADMIN_PASSWORD "$(openssl rand -hex 16)"
+  seed GRAFANA_ADMIN_PASSWORD   "$(rand_hex 16)"
+  seed OMNIROUTE_JWT_SECRET     "$(rand_hex 32)"
+  seed OMNIROUTE_API_KEY_SECRET "$(rand_hex 32)"
+  seed OMNIROUTE_ADMIN_PASSWORD "$(rand_hex 16)"
   if [ -n "$seeded" ]; then
     note "generated:$seeded"
   else
