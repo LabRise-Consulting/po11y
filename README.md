@@ -36,7 +36,7 @@ By default, services bind to `127.0.0.1`. To expose services on a local network 
 
 ## Core Features
 
-▶ **[Watch the video overview](https://github.com/labrise-consulting/po11y/releases/download/v0.1.0/intro.mp4)**
+https://github.com/user-attachments/assets/0e77f4f9-4119-41e7-a59b-c20b56d2afc5
 
 The video walks the whole stack end to end.
 

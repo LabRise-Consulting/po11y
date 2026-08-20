@@ -4,81 +4,7 @@ Notable changes to Po11y. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-
-- Two defaults are sized for a large instance instead of a small one.
-  `EXECUTIONS_LIMIT` now defaults to `250`, which is the maximum n8n's
-  executions API accepts: the window bounds every count the dashboard shows, so
-  a smaller one buys nothing but blind spots — fifty workflows spend a
-  100-execution window in two polls, and whatever aged out is invisible to
-  `status.json` and to the `failing` rule. It is still one GET per poll, of
-  metadata only. `AI_MAP_MAX_TOKENS` now defaults to `16000`, because the
-  annotation answer grows with the instance (one line per node, one summary per
-  workflow) and a reasoning model spends the same budget on its hidden
-  thinking; a ceiling is not a spend, so it is set to clear a large map rather
-  than to fit a small one.
-
-- The feature comparison now states its scope, links every project it names, and
-  carries the date it was compiled along with an invitation to correct it. Three
-  cells were wrong when checked against the projects' own documentation: n8n
-  Manager's licence was listed as unstated when it is MIT and ships in
-  `thenguyenvn90/n8n-toolkit`, and both of FlowPulse's "undisclosed" cells are
-  documented by the vendor. A fourth, n8n-trace's alerting, could not be
-  verified from its README at all. Describing a project as secretive when it
-  publishes the detail is the one thing a comparison table must not do. The
-  table is now limited to self-hosted open-source projects, a boundary that can
-  be stated and checked rather than left implicit, and each row leads with how
-  the tool reads n8n — the property that decides what it can see, and the one
-  least likely to go stale between their releases.
-
-- The README states two claims accurately that it previously overstated. n8n's
-  diagnostics are switched off by the bundled topology only, which was written
-  as though it were true everywhere, and the read-only topology cannot change a
-  setting on an instance it does not manage. "Real-time visibility" was also
-  promised in the opening line and then withdrawn a screen later by the poll
-  interval section, which explains that a workflow shorter than one interval is
-  never shown as running at all.
-- The privacy note names where the digests actually go — OmniRoute's
-  `auto/best-free` route — instead of "a keyless free-tier third-party
-  provider". A reader cannot weigh a privacy default whose recipient is
-  unnamed.
-- The published container images are now in the README. CI has pushed
-  `ghcr.io/labrise-consulting/po11y/server` on every tag since the move to
-  GitHub Actions, but only `docs/ci.md` and this changelog said so, so a reader
-  had no way to learn they could pull the server rather than build it. The
-  entry also records what is deliberately not published, and that the bundled
-  topology still needs the repository.
-- Smaller README corrections: the bundled quickstart states its prerequisites,
-  as the read-only one already did; `--pack` explains that `/workflows/` and
-  `/packs/` paths are read inside the container while any other path is a host
-  directory; the two map bullets name the tabs they describe, which the UI
-  labels differently; CI, licence and release badges are at the top; and the
-  headings use one capitalisation style.
-
-### Fixed
-
-- The Overview's execution filter reaches every workflow. `status.json` sliced
-  `byWorkflow` to the ten busiest before it left the server, and the filter box
-  searches the array it was sent, so on an instance with more workflows than
-  that, typing the name of the eleventh-busiest returned "no match" for a
-  workflow that exists and is running. The cap now lives in the dashboard:
-  `byWorkflow` carries every workflow in the recent window, busiest first, so
-  its counts sum to `recent` again and any consumer can search the whole set.
-  The Overview still shows ten rows and gains the "show all N" toggle the
-  notification feed already uses. Alerting was never affected — the watchdog
-  reads its own untruncated fold.
-
-- Alert rules now evaluate production executions only. n8n stamps every run
-  with the mode that started it, and the two hand-run modes (`manual`,
-  `evaluation`) were counted like any other: failed editor runs could raise a
-  `failing` alert while debugging, and — worse — one manual success refreshed
-  the staleness budget of a schedule that had been dead for days. Sub-workflow
-  runs (`integrated`) still count, since for many sub-workflows that is the
-  only way they run. The dashboard's execution summary stays unfiltered.
-
-## [0.1.0] - 2026-08-18
+## [0.1.0] - 2026-08-20
 
 First tagged release, and the first public one. Everything below is the
 project's development to this point, collapsed into one entry — which is why
@@ -197,6 +123,25 @@ and the README calls the deployments **bundled** and **read-only**.
   attribution despite being MIT-licensed.
 
 ### Fixed
+
+- The Overview's execution filter reaches every workflow. `status.json` sliced
+  `byWorkflow` to the ten busiest before it left the server, and the filter box
+  searches the array it was sent, so on an instance with more workflows than
+  that, typing the name of the eleventh-busiest returned "no match" for a
+  workflow that exists and is running. The cap now lives in the dashboard:
+  `byWorkflow` carries every workflow in the recent window, busiest first, so
+  its counts sum to `recent` again and any consumer can search the whole set.
+  The Overview still shows ten rows and gains the "show all N" toggle the
+  notification feed already uses. Alerting was never affected — the watchdog
+  reads its own untruncated fold.
+
+- Alert rules now evaluate production executions only. n8n stamps every run
+  with the mode that started it, and the two hand-run modes (`manual`,
+  `evaluation`) were counted like any other: failed editor runs could raise a
+  `failing` alert while debugging, and — worse — one manual success refreshed
+  the staleness budget of a schedule that had been dead for days. Sub-workflow
+  runs (`integrated`) still count, since for many sub-workflows that is the
+  only way they run. The dashboard's execution summary stays unfiltered.
 
 - A cold `bootstrap.sh` could leave the architecture map and the workflow map
   empty for ten minutes. The workflow sync runs its first tick the moment the
@@ -356,6 +301,60 @@ and the README calls the deployments **bundled** and **read-only**.
 
 ### Changed
 
+- The README plays the video overview inline. GitHub renders a player only for
+  files uploaded as markdown attachments, so a 1920x1080 re-encode is uploaded
+  that way and embedded. The repository still carries no video, and neither does
+  the release: the file lives on GitHub's attachment store, not in the clone.
+
+- Two defaults are sized for a large instance instead of a small one.
+  `EXECUTIONS_LIMIT` now defaults to `250`, which is the maximum n8n's
+  executions API accepts: the window bounds every count the dashboard shows, so
+  a smaller one buys nothing but blind spots — fifty workflows spend a
+  100-execution window in two polls, and whatever aged out is invisible to
+  `status.json` and to the `failing` rule. It is still one GET per poll, of
+  metadata only. `AI_MAP_MAX_TOKENS` now defaults to `16000`, because the
+  annotation answer grows with the instance (one line per node, one summary per
+  workflow) and a reasoning model spends the same budget on its hidden
+  thinking; a ceiling is not a spend, so it is set to clear a large map rather
+  than to fit a small one.
+
+- The feature comparison now states its scope, links every project it names, and
+  carries the date it was compiled along with an invitation to correct it. Three
+  cells were wrong when checked against the projects' own documentation: n8n
+  Manager's licence was listed as unstated when it is MIT and ships in
+  `thenguyenvn90/n8n-toolkit`, and both of FlowPulse's "undisclosed" cells are
+  documented by the vendor. A fourth, n8n-trace's alerting, could not be
+  verified from its README at all. Describing a project as secretive when it
+  publishes the detail is the one thing a comparison table must not do. The
+  table is now limited to self-hosted open-source projects, a boundary that can
+  be stated and checked rather than left implicit, and each row leads with how
+  the tool reads n8n — the property that decides what it can see, and the one
+  least likely to go stale between their releases.
+
+- The README states two claims accurately that it previously overstated. n8n's
+  diagnostics are switched off by the bundled topology only, which was written
+  as though it were true everywhere, and the read-only topology cannot change a
+  setting on an instance it does not manage. "Real-time visibility" was also
+  promised in the opening line and then withdrawn a screen later by the poll
+  interval section, which explains that a workflow shorter than one interval is
+  never shown as running at all.
+- The privacy note names where the digests actually go — OmniRoute's
+  `auto/best-free` route — instead of "a keyless free-tier third-party
+  provider". A reader cannot weigh a privacy default whose recipient is
+  unnamed.
+- The published container images are now in the README. CI has pushed
+  `ghcr.io/labrise-consulting/po11y/server` on every tag since the move to
+  GitHub Actions, but only `docs/ci.md` and this changelog said so, so a reader
+  had no way to learn they could pull the server rather than build it. The
+  entry also records what is deliberately not published, and that the bundled
+  topology still needs the repository.
+- Smaller README corrections: the bundled quickstart states its prerequisites,
+  as the read-only one already did; `--pack` explains that `/workflows/` and
+  `/packs/` paths are read inside the container while any other path is a host
+  directory; the two map bullets name the tabs they describe, which the UI
+  labels differently; CI, licence and release badges are at the top; and the
+  headings use one capitalisation style.
+
 - `SERVER_POLL_INTERVAL` now defaults to **30 s**, down from 60 s. The interval
   is not only how stale the dashboard can be — it is the resolution of the
   live-run view. A workflow that finishes in less than one interval can start
@@ -504,9 +503,9 @@ and the README calls the deployments **bundled** and **read-only**.
 - `docs/video/` and `docs/intro.mp4` removed and stripped from history. The
   rendered video was 25 MB of a 78 MB clone, and the renderer it was built with
   is not MIT-licensed, so it does not belong in an MIT repo's dependency tree.
-  That source lives in a separate repository; the rendered mp4 ships as a
-  release asset the README links, so it costs the clone nothing.
+  That source lives in a separate repository; the rendered video is uploaded to
+  GitHub as a markdown attachment the README embeds, so it costs the clone
+  nothing.
 - `docs/superpowers/` (local planning output) removed and stripped from history.
 
-[Unreleased]: https://github.com/labrise-consulting/po11y/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/labrise-consulting/po11y/releases/tag/v0.1.0
+[0.1.0]: https://github.com/LabRise-Consulting/po11y/releases/tag/v0.1.0
