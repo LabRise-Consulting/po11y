@@ -282,3 +282,53 @@ test('/metrics is absent when the context supplies no renderer, rather than answ
   const res = await route(req('GET', '/metrics'), ctx());
   assert.equal(res.status, 404);
 });
+
+// ---- POST /rebuild ----------------------------------------------------------
+// The dashboard "Rebuild map" action. It converges on the same forced rebuild
+// SIGHUP triggers, so the two cannot drift.
+
+test('POST /rebuild accepts, and forces exactly one rebuild', async () => {
+  let calls = 0;
+  const res = await route(req('POST', '/rebuild'), ctx({ forceRebuild: () => { calls += 1; } }));
+  assert.equal(res.status, 202);
+  assert.equal(calls, 1);
+  assert.deepEqual(JSON.parse(res.body), { status: 'accepted' });
+});
+
+test('a second /rebuild inside the floor is refused, and forces nothing', async () => {
+  let calls = 0;
+  const c = ctx({ forceRebuild: () => { calls += 1; }, now: () => 1_000_000 });
+  assert.equal((await route(req('POST', '/rebuild'), c)).status, 202);
+  const res = await route(req('POST', '/rebuild'), c);
+  assert.equal(res.status, 429);
+  assert.equal(calls, 1, 'the refused call must not reach the builder');
+  const body = JSON.parse(res.body);
+  assert.equal(body.error, 'too soon');
+  assert.ok(body.retry_after > 0 && body.retry_after <= 60, `retry_after out of range: ${body.retry_after}`);
+});
+
+test('/rebuild is available again once the floor has passed', async () => {
+  let calls = 0;
+  let clock = 1_000_000;
+  const c = ctx({ forceRebuild: () => { calls += 1; }, now: () => clock });
+  await route(req('POST', '/rebuild'), c);
+  clock += 60_000;
+  assert.equal((await route(req('POST', '/rebuild'), c)).status, 202);
+  assert.equal(calls, 2);
+});
+
+test('/rebuild is POST-only: a link or a crawler cannot fire a build', async () => {
+  let calls = 0;
+  const c = ctx({ forceRebuild: () => { calls += 1; } });
+  for (const method of ['GET', 'HEAD', 'PUT', 'DELETE']) {
+    const res = await route(req(method, '/rebuild'), c);
+    assert.equal(res.status, 405, `${method} should be refused`);
+  }
+  assert.equal(calls, 0);
+});
+
+test('/rebuild ignores any body it is sent', async () => {
+  const c = ctx({ forceRebuild: () => {} });
+  const res = await route(req('POST', '/rebuild', JSON.stringify({ scope: 'other' })), c);
+  assert.equal(res.status, 202);
+});

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { esc, safeUrl, withHost, ago, refreshMs, actionKey, formCards,
+  withRebuildCard, rebuildMessage,
   scopeKeys, pickScope, feedUrl, scopedSrc, withTab, metricsRangeLabel,
   execDot, runningText,
   routeSlug, parseHash, resolveRoute, routeHash } from './app.lib.js';
@@ -367,4 +368,46 @@ test('runningText names the count, and says nothing when none are running', () =
   assert.equal(runningText(3), '3 running');
   assert.equal(runningText(0), '');
   assert.equal(runningText(undefined), '');
+});
+
+// ---- rebuild action ---------------------------------------------------------
+
+test('withRebuildCard puts the built-in card first in an existing Actions group', () => {
+  const cards = withRebuildCard({ Actions: [{ name: 'New workflow', href: '/x' }], Monitoring: [] });
+  assert.equal(cards.Actions[0].post, '/rebuild');
+  assert.equal(cards.Actions[1].name, 'New workflow');
+  assert.equal(cards.Monitoring.length, 0, 'other groups are untouched');
+});
+
+test('withRebuildCard creates an Actions group when the config has none', () => {
+  const cards = withRebuildCard({ Monitoring: [{ name: 'n8n', href: '/n' }] });
+  assert.equal(cards.Actions[0].post, '/rebuild');
+  assert.deepEqual(Object.keys(cards), ['Actions', 'Monitoring'], 'Actions leads the groups');
+});
+
+test('withRebuildCard tolerates a missing or empty config, and never mutates the input', () => {
+  assert.equal(withRebuildCard(undefined).Actions[0].post, '/rebuild');
+  const input = { Actions: [] };
+  const out = withRebuildCard(input);
+  assert.equal(input.Actions.length, 0, 'the caller config is left alone');
+  assert.equal(out.Actions.length, 1);
+});
+
+test('withRebuildCard is idempotent — a re-render cannot stack two buttons', () => {
+  const once = withRebuildCard({ Actions: [] });
+  const twice = withRebuildCard(once);
+  assert.equal(twice.Actions.filter((c) => c.post === '/rebuild').length, 1);
+});
+
+test('rebuildMessage reads each server answer the route can give', () => {
+  assert.deepEqual(rebuildMessage(202), { text: 'Rebuild map: rebuilding…', ok: true });
+  assert.deepEqual(rebuildMessage(429, { retry_after: 12 }),
+    { text: 'Rebuild map: just ran — retry in 12s', ok: false });
+  assert.deepEqual(rebuildMessage(405), { text: 'Rebuild map: failed (HTTP 405)', ok: false });
+  assert.deepEqual(rebuildMessage(404), { text: 'Rebuild map: unavailable on this server', ok: false });
+});
+
+test('rebuildMessage survives a 429 with no retry_after rather than printing undefined', () => {
+  assert.deepEqual(rebuildMessage(429, {}), { text: 'Rebuild map: just ran — retry shortly', ok: false });
+  assert.deepEqual(rebuildMessage(429, null), { text: 'Rebuild map: just ran — retry shortly', ok: false });
 });

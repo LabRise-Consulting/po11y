@@ -34,6 +34,7 @@ Setting `N8N_METRICS=true` on a remote n8n instance exposes `/metrics` on its ma
 - **Dashboard authentication**: Set `DASHBOARD_BASIC_AUTH=user:password` to protect dashboard endpoints, static files, and proxy routes.
 - **MCP endpoint security**: `/mcp/` shares the dashboard's authentication guards. On the bundled stack, `po11y_sql` executes queries under the read-only database role `po11y_ro`, which denies access to sensitive tables like `credentials_entity` and `execution_data`. Set `MCP_GRAFANA_URL=` in `.env` to disable `po11y_sql`.
 - **Server `/metrics` endpoint**: Exposed on port `8081` within the internal Docker Compose network without public port mappings.
+- **`POST /rebuild`**: The dashboard's **Rebuild map** action. It shares the dashboard's authentication guards, exactly like `/mcp/`, and carries no token of its own: it accepts no body and writes nothing to the store, so it cannot forge executions or silence alerts. Its cost is compute — and LLM spend where `AI_MAP_*` is configured — which a one-minute floor between forced builds bounds. On a `BIND_ADDR` outside loopback, set `DASHBOARD_BASIC_AUTH` (or the forward-auth overlay) as this document already advises; that is what gates this route too.
 
 ## Read authorization scope
 

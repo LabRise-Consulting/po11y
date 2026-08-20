@@ -4,9 +4,19 @@ Po11y runs one process, `server`, in every deployment. It polls (and
 optionally ingests) n8n executions into its own SQLite store, and serves the
 dashboard's feeds — status, map, forms, ai-map and notifications — directly
 from that store. It also serves `/metrics` for Prometheus, the MCP endpoint
-(`/mcp/`), and the Data Table read proxy (`/n8n-table/`), and it is the
-process that pushes alerts to `ALERT_WEBHOOK_URL` and pings
-`ALERT_HEARTBEAT_URL`.
+(`/mcp/`), the Data Table read proxy (`/n8n-table/`), and `POST /rebuild`
+behind the dashboard's **Rebuild map** action, and it is the process that
+pushes alerts to `ALERT_WEBHOOK_URL` and pings `ALERT_HEARTBEAT_URL`.
+
+`POST /rebuild` forces what `SIGHUP` forces — a full rebuild including the
+ai-map, which otherwise refreshes daily — through the same function, so the
+button and the signal cannot drift. It answers `202` when accepted and `429`
+with a `retry_after` inside the one-minute floor between forced builds. That
+floor is what makes the route safe to leave untokened: a forced build re-runs
+every builder and, where `AI_MAP_*` is set, spends LLM calls. Unlike `/ingest`
+it takes no body and writes nothing to the store, so it cannot forge an
+execution or silence an alert; it shares whatever guards the dashboard has, as
+`/mcp/` does.
 
 **The server is not optional.** It is load-bearing for every deployment:
 

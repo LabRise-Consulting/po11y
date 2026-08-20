@@ -115,6 +115,57 @@ export function formCards(feed, existing = [], { formProxy = true, cfg = {}, hos
   return out;
 }
 
+// ---- rebuild action ---------------------------------------------------------
+
+/** The built-in "Rebuild map" card. Not config-driven on purpose: every po11y
+ * has the endpoint, including deployments whose config.json was written by
+ * hand before this existed, so it ships in the code rather than the template.
+ */
+export const REBUILD_CARD = Object.freeze({
+  name: 'Rebuild map',
+  sub: 'Re-read n8n and rebuild the Map and Architecture feeds now',
+  post: '/rebuild',
+});
+
+/**
+ * Config cards with the built-in rebuild card in front of the Actions group,
+ * creating that group when the config has none. Returns a fresh object: the
+ * dashboard re-renders from `cfg` repeatedly, and mutating it would stack a
+ * button per render.
+ *
+ * @param {object|undefined} cards - config `cards` ({ "<group>": link[] })
+ * @returns {object}
+ */
+export function withRebuildCard(cards = {}) {
+  const groups = cards && typeof cards === 'object' ? cards : {};
+  const actions = (groups.Actions || []).filter((c) => c?.post !== REBUILD_CARD.post);
+  return { Actions: [REBUILD_CARD, ...actions], ...Object.fromEntries(
+    Object.entries(groups).filter(([k]) => k !== 'Actions'),
+  ) };
+}
+
+/**
+ * How each answer from POST /rebuild reads in the toast. 429 is the expected
+ * one — the server holds a floor between forced builds — so it says when to
+ * come back rather than reporting a failure.
+ *
+ * @param {number} status
+ * @param {{retry_after?: number}|null} [body]
+ * @returns {{text: string, ok: boolean}}
+ */
+export function rebuildMessage(status, body = null) {
+  if (status === 202) return { text: `${REBUILD_CARD.name}: rebuilding…`, ok: true };
+  if (status === 429) {
+    const s = Number(body?.retry_after);
+    return {
+      text: `${REBUILD_CARD.name}: just ran — ${s > 0 ? `retry in ${s}s` : 'retry shortly'}`,
+      ok: false,
+    };
+  }
+  if (status === 404) return { text: `${REBUILD_CARD.name}: unavailable on this server`, ok: false };
+  return { text: `${REBUILD_CARD.name}: failed (HTTP ${status})`, ok: false };
+}
+
 // ---- scopes -----------------------------------------------------------------
 
 /**

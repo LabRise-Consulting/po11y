@@ -21,6 +21,14 @@ import { FEED_NAMES } from './mcp/sources.mjs';
 export const FEEDS = new Set(FEED_NAMES);
 const SCOPE_RE = /^[a-z0-9-]+$/;
 const DEFAULT_MAX_BODY = 1_000_000;
+// Floor between two forced rebuilds. A forced build re-runs every builder and,
+// where AI_MAP_* is configured, spends LLM calls, so the action needs a rate
+// limit even though it is harmless to the store. index.mjs's single-flight
+// already coalesces overlapping builds; this is what stops a serial hammer.
+const REBUILD_FLOOR_MS = 60_000;
+// Keyed by ctx rather than held in a module-level variable so two servers in
+// one process (the tests) cannot rate-limit each other.
+const lastRebuild = new WeakMap();
 const JSON_HEADERS = { 'content-type': 'application/json', 'cache-control': 'no-store' };
 const FEED_HEADERS = { ...JSON_HEADERS, 'x-po11y-source': 'po11y-server' };
 
@@ -42,6 +50,7 @@ const bearer = (headers) => {
  * @param {{method: string, url: string, body: (string|null), headers?: object}} req
  * @param {{db: object, feeds: () => object, scope: string, health: () => object,
  *   ingestToken: string, maxBodyBytes?: number,
+ *   forceRebuild?: () => void, now?: () => number,
  *   mcpDispatch?: (msg: object) => Promise<object|null>,
  *   metricsText?: () => string,
  *   n8nBase?: string, readKey?: string, fetchFn?: typeof fetch}} ctx
@@ -88,6 +97,26 @@ export async function route(req, ctx) {
     const rows = events.flatMap((e) => parseEvent(e));
     upsertExecutions(ctx.db, rows);
     return { status: 204, body: '', headers: {} };
+  }
+
+  // The dashboard's "Rebuild map" action, and the only other way to force what
+  // SIGHUP forces. Unlike /ingest this needs no token: it takes no body and
+  // writes nothing to the store, so it cannot forge a success or silence an
+  // alert — the only thing it spends is compute. It therefore shares the
+  // dashboard's auth guards the way /mcp/ does, and is bounded by the floor
+  // above. POST-only so no link, prefetch or crawler can fire a build.
+  if (path === '/rebuild') {
+    if (!ctx.forceRebuild) return notFound();
+    if (req.method !== 'POST') return json(405, { error: 'POST only' }, { ...JSON_HEADERS, allow: 'POST' });
+
+    const now = (ctx.now ?? Date.now)();
+    const since = now - (lastRebuild.get(ctx) ?? -Infinity);
+    if (since < REBUILD_FLOOR_MS) {
+      return json(429, { error: 'too soon', retry_after: Math.ceil((REBUILD_FLOOR_MS - since) / 1000) });
+    }
+    lastRebuild.set(ctx, now);
+    ctx.forceRebuild();
+    return json(202, { status: 'accepted' });
   }
 
   // MCP over streamable HTTP, folded in from the retired mcp container. The

@@ -336,15 +336,17 @@ function refresh() {
   return inFlight;
 }
 
-// Forced ai-map rebuild — the dashboard's "Build maps now" action, and the
-// SIGHUP handler below. The force is consumed only by a build that
-// SUCCEEDS, so a rebuild that dies fetching nothing keeps it armed.
+// Forced ai-map rebuild — the dashboard's "Rebuild map" action (POST /rebuild)
+// and the SIGHUP handler below, both through this one function so the two
+// cannot drift. The force is consumed only by a build that SUCCEEDS, so a
+// rebuild that dies fetching nothing keeps it armed.
 let forceAiMap = false;
-process.on('SIGHUP', () => {
+function forceRebuild(why) {
   forceAiMap = true;
-  console.error('server: SIGHUP — forcing a full ai-map rebuild');
+  console.error(`server: ${why} — forcing a full ai-map rebuild`);
   refresh();
-});
+}
+process.on('SIGHUP', () => forceRebuild('SIGHUP'));
 
 let refreshTimer = null;
 function scheduleRefresh(delayMs = 2000) {
@@ -423,6 +425,7 @@ const ctx = {
   health: () => health,
   ingestToken: INGEST_TOKEN,
   maxBodyBytes: MAX_BODY,
+  forceRebuild: () => forceRebuild('POST /rebuild'),
   feeds: () => cached,
   mcpDispatch,
   // n8nUp follows the same unknown-is-down rule as the alert engine: before the
