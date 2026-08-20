@@ -8,7 +8,7 @@
 // packs — operator input, but still input — are evaluated through
 // openReadOnlyDb() so a mistyped statement cannot empty the store.
 import { DatabaseSync } from 'node:sqlite';
-import { FAILED_STATUSES } from './exec-status.mjs';
+import { FAILED_STATUSES, FINISHED_STATUSES } from './exec-status.mjs';
 
 // The failed-status set as a SQL literal list, composed from the ONE
 // definition rather than spelled out again. exec-status.mjs exists because
@@ -20,10 +20,19 @@ import { FAILED_STATUSES } from './exec-status.mjs';
 //
 // The statuses are an in-repo frozen constant, never user input, but the guard
 // costs nothing and pins the assumption that makes the interpolation safe.
-const FAILED_SQL = FAILED_STATUSES.map((s) => {
-  if (!/^[a-z]+$/.test(s)) throw new Error(`db: FAILED_STATUSES entry ${JSON.stringify(s)} is not a safe SQL literal`);
+const sqlList = (statuses, name) => statuses.map((s) => {
+  if (!/^[a-z]+$/.test(s)) throw new Error(`db: ${name} entry ${JSON.stringify(s)} is not a safe SQL literal`);
   return `'${s}'`;
 }).join(', ');
+
+const FAILED_SQL = sqlList(FAILED_STATUSES, 'FAILED_STATUSES');
+const FINISHED_SQL = sqlList(FINISHED_STATUSES, 'FINISHED_STATUSES');
+// Finished and not failed. Derived rather than spelled out, so a new terminal
+// status added to FINISHED_STATUSES lands on the right side of this on its own.
+const SUCCEEDED_SQL = sqlList(
+  FINISHED_STATUSES.filter((s) => !FAILED_STATUSES.includes(s)),
+  'FINISHED_STATUSES minus FAILED_STATUSES',
+);
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS executions (
@@ -124,13 +133,92 @@ BEGIN
   INSERT INTO workflow_error_totals (workflow_id, total) VALUES (new.workflow_id, 1)
   ON CONFLICT(workflow_id) DO UPDATE SET total = total + 1;
 END;
+
+-- Monotonic finished-execution counter, per workflow: the denominator the
+-- error counter never had. Without it a reader can see "4 failures" and not
+-- whether that is 4 out of 5 or 4 out of 4000.
+--
+-- A SECOND TABLE, not a column on workflow_error_totals: adding a column to a
+-- table that already exists on every deployment needs a migration step this
+-- schema has never had, and \`CREATE TABLE IF NOT EXISTS\` with the new column
+-- would silently do nothing to those stores. A new table is created on the
+-- next open, everywhere, with no version bookkeeping.
+--
+-- The same monotonicity argument as the error counter applies unchanged:
+-- pruneExecutions deletes rows past PO11Y_RETENTION_DAYS, so counting over the
+-- executions table would fall as history ages out and Prometheus would read
+-- the decrease as a counter reset.
+CREATE TABLE IF NOT EXISTS workflow_execution_totals (
+  workflow_id TEXT PRIMARY KEY,
+  total       INTEGER NOT NULL DEFAULT 0
+);
+
+-- The same two-trigger, exactly-once shape as the failure pair above, over
+-- FINISHED_STATUSES instead. Every guard there is load-bearing for the same
+-- reason here, so the two must not drift: db.test.mjs asserts each pair's SQL
+-- against the constant it is composed from.
+DROP TRIGGER IF EXISTS executions_finished_insert;
+CREATE TRIGGER executions_finished_insert
+AFTER INSERT ON executions
+WHEN new.status IN (${FINISHED_SQL}) AND COALESCE(new.workflow_id, '') <> ''
+BEGIN
+  INSERT INTO workflow_execution_totals (workflow_id, total) VALUES (new.workflow_id, 1)
+  ON CONFLICT(workflow_id) DO UPDATE SET total = total + 1;
+END;
+
+DROP TRIGGER IF EXISTS executions_finished_update;
+CREATE TRIGGER executions_finished_update
+AFTER UPDATE ON executions
+WHEN new.status IN (${FINISHED_SQL})
+ AND COALESCE(new.workflow_id, '') <> ''
+ AND (COALESCE(old.status, '') NOT IN (${FINISHED_SQL}) OR COALESCE(old.workflow_id, '') = '')
+BEGIN
+  INSERT INTO workflow_execution_totals (workflow_id, total) VALUES (new.workflow_id, 1)
+  ON CONFLICT(workflow_id) DO UPDATE SET total = total + 1;
+END;
 `;
+
+// Seed workflow_execution_totals the one time it is created, on a store that
+// already has failures counted in workflow_error_totals.
+//
+// Starting the denominator at zero is not a slow start, it is a wrong answer:
+// with 4 failures already counted, the first finished run reads
+// 1 - 4/1 = -300% success, and it stays negative for as long as it takes the
+// new counter to overtake the old one. Seeding from the failures already
+// counted plus the successes still retained keeps errors <= executions from
+// the first scrape.
+//
+// It is pessimistic by exactly the successes that have already been pruned:
+// those runs happened, po11y no longer holds them, and there is nowhere to
+// recover them from. Understating the success rate of a store older than its
+// retention window is the safe direction to be wrong in.
+function backfillExecutionTotals(db) {
+  db.exec(`
+    INSERT INTO workflow_execution_totals (workflow_id, total)
+    SELECT workflow_id, SUM(n) FROM (
+      SELECT workflow_id, total AS n FROM workflow_error_totals
+      UNION ALL
+      SELECT workflow_id, COUNT(*) AS n FROM executions
+        WHERE status IN (${SUCCEEDED_SQL}) AND COALESCE(workflow_id, '') <> ''
+        GROUP BY workflow_id
+    )
+    WHERE COALESCE(workflow_id, '') <> ''
+    GROUP BY workflow_id
+  `);
+}
 
 export function openDb(path) {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA busy_timeout = 5000');
+  // Asked BEFORE the schema runs, because the schema is what creates it. A
+  // brand-new store takes this path too and backfills from nothing, which is
+  // the same answer by a longer route.
+  const isNewCounter = !db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_execution_totals'",
+  ).get();
   db.exec(SCHEMA);
+  if (isNewCounter) backfillExecutionTotals(db);
   return db;
 }
 
@@ -317,6 +405,12 @@ export function setKv(db, k, v) {
 /** Monotonic failed-execution totals, keyed by workflow id. */
 export function errorTotals(db) {
   const rows = db.prepare('SELECT workflow_id, total FROM workflow_error_totals').all();
+  return new Map(rows.map((r) => [String(r.workflow_id), Number(r.total) || 0]));
+}
+
+/** Monotonic finished-execution totals, keyed by workflow id. */
+export function executionTotals(db) {
+  const rows = db.prepare('SELECT workflow_id, total FROM workflow_execution_totals').all();
   return new Map(rows.map((r) => [String(r.workflow_id), Number(r.total) || 0]));
 }
 

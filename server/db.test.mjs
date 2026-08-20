@@ -6,10 +6,10 @@ import { tmpdir } from 'node:os';
 import {
   openDb, openReadOnlyDb, upsertExecutions, recentExecutions,
   pruneExecutions, getKv, setKv, recordTableCount, pruneDatatableCounts,
-  upsertWorkflows, allWorkflows, errorTotals, lastSuccessByWorkflow,
+  upsertWorkflows, allWorkflows, errorTotals, executionTotals, lastSuccessByWorkflow,
   oldestRunningByWorkflow,
 } from './db.mjs';
-import { FAILED_STATUSES } from './exec-status.mjs';
+import { FAILED_STATUSES, FINISHED_STATUSES } from './exec-status.mjs';
 
 const exec = (id, over = {}) => ({
   id, workflowId: 'wf1', workflowName: 'Ingest', status: 'success',
@@ -288,20 +288,172 @@ test('the counter triggers are built from FAILED_STATUSES, not a fourth copy of 
   const db = openDb(':memory:');
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all()
     .map((r) => r.name);
-  assert.deepEqual(names, ['executions_failed_insert', 'executions_failed_update']);
+  assert.deepEqual(names, [
+    'executions_failed_insert', 'executions_failed_update',
+    'executions_finished_insert', 'executions_finished_update',
+  ]);
 
-  const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger'").all()
-    .map((r) => r.sql).join('\n');
-  // Every quoted lowercase literal in these two triggers is a status literal;
-  // the only other quoted strings are the COALESCE ''s, which do not match.
-  const quoted = [...sql.matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
-  for (const status of FAILED_STATUSES) {
-    assert.ok(quoted.includes(status), `trigger SQL does not mention FAILED_STATUSES entry '${status}'`);
+  const sqlOf = (name) => db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+  ).get(name).sql;
+  // Every quoted lowercase literal in these triggers is a status literal; the
+  // only other quoted strings are the COALESCE ''s, which do not match.
+  const statusesIn = (name) => new Set([...sqlOf(name).matchAll(/'([a-z]+)'/g)].map((m) => m[1]));
+
+  for (const name of ['executions_failed_insert', 'executions_failed_update']) {
+    const quoted = statusesIn(name);
+    for (const status of FAILED_STATUSES) {
+      assert.ok(quoted.has(status), `${name} does not mention FAILED_STATUSES entry '${status}'`);
+    }
+    for (const status of quoted) {
+      assert.ok(FAILED_STATUSES.includes(status),
+        `${name} mentions '${status}', which is not in FAILED_STATUSES — the list has diverged again`);
+    }
   }
-  for (const status of new Set(quoted)) {
-    assert.ok(FAILED_STATUSES.includes(status),
-      `trigger SQL mentions '${status}', which is not in FAILED_STATUSES — the list has diverged again`);
+
+  for (const name of ['executions_finished_insert', 'executions_finished_update']) {
+    const quoted = statusesIn(name);
+    for (const status of FINISHED_STATUSES) {
+      assert.ok(quoted.has(status), `${name} does not mention FINISHED_STATUSES entry '${status}'`);
+    }
+    for (const status of quoted) {
+      assert.ok(FINISHED_STATUSES.includes(status),
+        `${name} mentions '${status}', which is not in FINISHED_STATUSES — the list has diverged again`);
+    }
   }
+});
+
+// --- finished-execution counter ---------------------------------------------
+//
+// The denominator under the error counter. It has to count the same population
+// the error counter does, or the ratio of the two is not a failure rate of
+// anything: same exactly-once trigger design, same monotonicity across prunes,
+// and a status set that CONTAINS every failed status.
+
+test('a finished execution increments the workflow execution total exactly once', () => {
+  const db = openDb(':memory:');
+  upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'success', startedAt: '2026-08-14T10:00:00.000Z' }]);
+  upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'success', startedAt: '2026-08-14T10:00:00.000Z' }]);
+  assert.deepEqual([...executionTotals(db)], [['w1', 1]]);
+});
+
+test('a running execution is counted when it finishes, not before', () => {
+  const db = openDb(':memory:');
+  upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'running' }]);
+  assert.deepEqual([...executionTotals(db)], [], 'a run in flight has not finished');
+  upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'success' }]);
+  assert.deepEqual([...executionTotals(db)], [['w1', 1]]);
+});
+
+// The invariant that makes errors/executions meaningful: every failure is also
+// a finished execution, so the ratio can never exceed 1.
+test('success, error and crashed all count as finished, so errors are a subset', () => {
+  const db = openDb(':memory:');
+  upsertExecutions(db, [
+    { id: 'e1', workflowId: 'w1', status: 'success' },
+    { id: 'e2', workflowId: 'w1', status: 'error' },
+    { id: 'e3', workflowId: 'w1', status: 'crashed' },
+  ]);
+  assert.deepEqual([...executionTotals(db)], [['w1', 3]]);
+  assert.deepEqual([...errorTotals(db)], [['w1', 2]]);
+});
+
+// canceled is a human stopping the run — exec-status.mjs calls it an intent,
+// not a fault. Counting it in the denominator would make every cancellation
+// look like a small drop in success rate.
+test('a canceled execution is not counted — it never finished on its own', () => {
+  const db = openDb(':memory:');
+  upsertExecutions(db, [
+    { id: 'e1', workflowId: 'w1', status: 'canceled' },
+    { id: 'e2', workflowId: 'w1', status: 'waiting' },
+    { id: 'e3', workflowId: 'w1', status: 'new' },
+  ]);
+  assert.deepEqual([...executionTotals(db)], []);
+});
+
+test('pruning executions does not decrease the execution total', () => {
+  const db = openDb(':memory:');
+  upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'success', createdAt: '2026-01-01T00:00:00.000Z' }]);
+  pruneExecutions(db, '2026-06-01T00:00:00.000Z');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM executions').get().n, 0, 'row really was pruned');
+  assert.deepEqual([...executionTotals(db)], [['w1', 1]], 'the counter survives the prune');
+});
+
+test('an execution with no workflow id joins the execution total once the poll fills the id in', () => {
+  const db = openDb(':memory:');
+  upsertExecutions(db, [{ id: 'e1', workflowId: null, status: 'success' }]);
+  assert.deepEqual([...executionTotals(db)], [], 'no workflow to attribute it to yet');
+  upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'success' }]);
+  assert.deepEqual([...executionTotals(db)], [['w1', 1]]);
+});
+
+// The upgrade path, and the reason this counter cannot simply start at zero.
+// workflow_error_totals is already populated on every existing store; a fresh
+// denominator starting from 0 means the first finished run computes
+// 1 - 4/1 = -300% success. The table is therefore backfilled the one time it
+// is created, from the failures already counted plus the successes still
+// retained, which keeps errors <= executions from the very first scrape.
+test('an existing store backfills the execution counter rather than starting it at zero', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'po11y-backfill-'));
+  const path = join(dir, 'store.db');
+  try {
+    let db = openDb(path);
+    upsertExecutions(db, [
+      { id: 'e1', workflowId: 'w1', status: 'error' },
+      { id: 'e2', workflowId: 'w1', status: 'crashed' },
+      { id: 'e3', workflowId: 'w1', status: 'success' },
+      { id: 'e4', workflowId: 'w2', status: 'success' },
+    ]);
+    assert.deepEqual([...errorTotals(db)], [['w1', 2]]);
+
+    // Rewind to a store written before this counter existed.
+    db.exec('DROP TRIGGER executions_finished_insert');
+    db.exec('DROP TRIGGER executions_finished_update');
+    db.exec('DROP TABLE workflow_execution_totals');
+    db.close();
+
+    db = openDb(path);
+    const runs = executionTotals(db);
+    assert.equal(runs.get('w1'), 3, 'two counted failures plus the one retained success');
+    assert.equal(runs.get('w2'), 1);
+    for (const [id, errors] of errorTotals(db)) {
+      assert.ok((runs.get(id) || 0) >= errors,
+        `${id}: ${errors} errors against ${runs.get(id)} executions would put the failure rate above 100%`);
+    }
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the backfill runs once, not on every open', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'po11y-backfill-once-'));
+  const path = join(dir, 'store.db');
+  try {
+    let db = openDb(path);
+    upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'success' }]);
+    db.close();
+
+    db = openDb(path);
+    assert.deepEqual([...executionTotals(db)], [['w1', 1]], 'a reopen must not re-count retained rows');
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The mirror of the error counter's guard test: suppressing the re-seen row
+// must not also suppress the next genuine run.
+test('two runs of the same workflow increment the execution total twice', () => {
+  const db = openDb(':memory:');
+  upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'running' }]);
+  upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'success' }]);
+  upsertExecutions(db, [{ id: 'e1', workflowId: 'w1', status: 'success' }]);
+  assert.deepEqual([...executionTotals(db)], [['w1', 1]], 're-seeing a finished run must not count');
+
+  upsertExecutions(db, [{ id: 'e2', workflowId: 'w1', status: 'running' }]);
+  upsertExecutions(db, [{ id: 'e2', workflowId: 'w1', status: 'error' }]);
+  assert.deepEqual([...executionTotals(db)], [['w1', 2]]);
 });
 
 test('crashed counts as failed, success does not', () => {

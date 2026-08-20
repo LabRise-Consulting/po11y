@@ -10,7 +10,7 @@
 // moved over unchanged: the series names, label sets, types and HELP
 // strings are a contract that observability/alerts.yml and every operator
 // query already depend on.
-import { allWorkflows, errorTotals, lastSuccessByWorkflow, oldestRunningByWorkflow } from './db.mjs';
+import { allWorkflows, errorTotals, executionTotals, lastSuccessByWorkflow, oldestRunningByWorkflow } from './db.mjs';
 
 /** Escape a label value per the exposition format. Backslash MUST go first. */
 export function escapeLabelValue(v) {
@@ -31,6 +31,7 @@ export function buildSnapshot(db, {
   now = Date.now(), n8nUp = 0, pollLastSuccessMs = null, aiMapLlmUp = null,
 } = {}) {
   const totals = errorTotals(db);
+  const runs = executionTotals(db);
   const lastOk = lastSuccessByWorkflow(db);
   const running = oldestRunningByWorkflow(db, now);
 
@@ -42,6 +43,7 @@ export function buildSnapshot(db, {
       id,
       name: w.name || id,
       errorsTotal: totals.get(id) || 0,
+      executionsTotal: runs.get(id) || 0,
       lastOkAtMs: lastOk.get(id) ?? null,
       runningSeconds: running.get(id) || 0,
     });
@@ -85,6 +87,7 @@ const META = [
   ['po11y_n8n_up', 'gauge', 'Whether the last poll reached the n8n API (1) or not (0).'],
   ['po11y_poll_last_success_timestamp_seconds', 'gauge', 'Unix time of the last successful poll.'],
   ['po11y_workflow_errors_total', 'counter', 'Failed (error or crashed) executions observed for a workflow.'],
+  ['po11y_workflow_executions_total', 'counter', 'Executions observed finishing for a workflow, successful or failed. The denominator under po11y_workflow_errors_total.'],
   ['po11y_workflow_last_success_timestamp_seconds', 'gauge', 'Unix time of a workflow\'s last successful execution.'],
   ['po11y_workflow_running_seconds', 'gauge', 'Age of the oldest currently-running execution of a workflow, in seconds.'],
   ['po11y_ai_map_llm_up', 'gauge', 'Whether the last ai-map build got LLM prose (1) or fell back to the heuristic (0). Absent when no LLM is configured.'],
@@ -111,6 +114,9 @@ export function renderMetrics(snap) {
 
   lines.push(meta.get('po11y_workflow_errors_total'));
   for (const w of workflows) lines.push(`po11y_workflow_errors_total${labels(w)} ${w.errorsTotal || 0}`);
+
+  lines.push(meta.get('po11y_workflow_executions_total'));
+  for (const w of workflows) lines.push(`po11y_workflow_executions_total${labels(w)} ${w.executionsTotal || 0}`);
 
   lines.push(meta.get('po11y_workflow_last_success_timestamp_seconds'));
   for (const w of workflows) {

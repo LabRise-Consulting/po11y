@@ -14,7 +14,7 @@ You can run all CI checks locally without starting the Docker stack:
 ```sh
 # Unit tests
 node --test "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" \
-  "server/**/*.test.mjs"
+  "server/**/*.test.mjs" "observability/**/*.test.mjs"
 
 # The same tests with the coverage floor CI applies. The command exits 1 if
 # coverage falls below a threshold. Use whole numbers: node truncates a
@@ -22,19 +22,22 @@ node --test "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" \
 node --test --experimental-test-coverage --test-coverage-lines=95 \
   --test-coverage-branches=80 --test-coverage-functions=90 \
   "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" \
-  "server/**/*.test.mjs"
+  "server/**/*.test.mjs" "observability/**/*.test.mjs"
 
 # Shell script linting — the same list the `lint` job passes
 shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh \
   ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh \
   scripts/backup-store.sh ci/check-dashboard-entrypoint.sh \
-  deploy/nginx/dashboard-entrypoint.sh
+  deploy/nginx/dashboard-entrypoint.sh scripts/readonly-preflight.sh \
+  ci/check-readonly-preflight.sh ci/check-env-example.sh
 
 # The rest of the `lint` job: expired-liability markers, and the two guards
 # that keep an overlay from silently replacing a shared entrypoint
 sh ci/check-expired-markers.sh bootstrap.sh
 sh ci/check-grafana-entrypoint.sh
 sh ci/check-dashboard-entrypoint.sh
+sh ci/check-readonly-preflight.sh
+sh ci/check-env-example.sh
 
 # Compose config validation — both compose files
 docker compose -f docker-compose.yml config -q

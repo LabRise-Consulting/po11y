@@ -25,7 +25,7 @@ execution or silence an alert; it shares whatever guards the dashboard has, as
   down with it. CI asserts all three.
 - it is the alert pusher and the heartbeat sender — `ALERT_WEBHOOK_URL` and
   `ALERT_HEARTBEAT_URL` are configured on this service and nowhere else.
-- it is the only source of `po11y_workflow_errors_total` and the other four
+- it is the only source of `po11y_workflow_errors_total` and the other five
   Prometheus series Grafana and the alerting rules depend on.
 
 n8n needs no po11y workflows installed: the server talks to n8n's public
@@ -116,6 +116,15 @@ rationale), but a brand-new store — first boot, or a restore from an older
 backup — starts that table empty. Prometheus reads that as a genuine counter
 reset. It is one, and Prometheus handles it correctly; do not "fix" it with
 a `max()` guard.
+
+**`po11y_workflow_executions_total` understates an old store's history.** The
+denominator was added after the error counter, so on an existing store it is
+seeded once from the failures already counted plus the successes still
+retained. Successes pruned past `PO11Y_RETENTION_DAYS` before that seeding are
+gone and cannot be recovered, so the success rate reads low until the counter
+has run for one full retention window. The alternative — starting it at zero —
+puts the success rate below zero for as long as the old error count exceeds
+the new run count, so this is the accepted regression rather than the bug.
 
 ## Push versus poll
 

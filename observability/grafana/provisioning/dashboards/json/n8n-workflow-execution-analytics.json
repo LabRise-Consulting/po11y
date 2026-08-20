@@ -324,7 +324,7 @@
           "format": "table",
           "hide": false,
           "range": true,
-          "rawSql": "SELECT ROUND(100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS value FROM execution_entity WHERE $__timeFilter(\"startedAt\");",
+          "rawSql": "SELECT ROUND(100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS value FROM execution_entity WHERE $__timeFilter(\"startedAt\") AND status IN ('success', 'error', 'crashed');",
           "refId": "A"
         }
       ],
@@ -1077,7 +1077,7 @@
           "format": "table",
           "hide": false,
           "range": true,
-          "rawSql": "SELECT\n  w.\"name\" AS workflow_name,\n  w.\"active\",\n  COUNT(*) AS executions,\n  ROUND(100.0 * SUM(CASE WHEN e.\"status\" = 'success' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS success_rate,\n  MAX(e.\"startedAt\") AS last_execution\nFROM execution_entity e\nJOIN workflow_entity w ON e.\"workflowId\" = w.\"id\"\nWHERE $__timeFilter(e.\"startedAt\")\nGROUP BY e.\"workflowId\", w.\"name\", w.\"active\"\nORDER BY executions DESC\nLIMIT 10;",
+          "rawSql": "SELECT\n  w.\"name\" AS workflow_name,\n  w.\"active\",\n  COUNT(*) AS executions,\n  ROUND(100.0 * SUM(CASE WHEN e.\"status\" = 'success' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS success_rate,\n  MAX(e.\"startedAt\") AS last_execution\nFROM execution_entity e\nJOIN workflow_entity w ON e.\"workflowId\" = w.\"id\"\nWHERE $__timeFilter(e.\"startedAt\")\n  AND e.\"status\" IN ('success', 'error', 'crashed')\nGROUP BY e.\"workflowId\", w.\"name\", w.\"active\"\nORDER BY executions DESC\nLIMIT 10;",
           "refId": "A"
         }
       ],
@@ -1580,7 +1580,7 @@
           "format": "table",
           "hide": false,
           "range": true,
-          "rawSql": "SELECT\n  w.\"name\" AS workflow_name,\n  e.\"workflowId\" AS \"workflowId\",\n  COUNT(*) FILTER (WHERE e.\"status\" IN ('error', 'crashed')) AS failures,\n  COUNT(*) AS total_executions,\n  ROUND(100.0 * SUM(CASE WHEN e.\"status\" IN ('error', 'crashed') THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS failure_rate_pct,\n  MAX(e.\"startedAt\") AS last_failure\nFROM execution_entity e\nLEFT JOIN workflow_entity w ON w.\"id\" = e.\"workflowId\"\nWHERE $__timeFilter(e.\"startedAt\")\nGROUP BY e.\"workflowId\", w.\"name\"\nHAVING COUNT(*) FILTER (WHERE e.\"status\" IN ('error', 'crashed')) > 0\nORDER BY failures DESC\nLIMIT 10;",
+          "rawSql": "SELECT\n  w.\"name\" AS workflow_name,\n  e.\"workflowId\" AS \"workflowId\",\n  COUNT(*) FILTER (WHERE e.\"status\" IN ('error', 'crashed')) AS failures,\n  COUNT(*) AS total_executions,\n  ROUND(100.0 * SUM(CASE WHEN e.\"status\" IN ('error', 'crashed') THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS failure_rate_pct,\n  MAX(e.\"startedAt\") AS last_failure\nFROM execution_entity e\nLEFT JOIN workflow_entity w ON w.\"id\" = e.\"workflowId\"\nWHERE $__timeFilter(e.\"startedAt\")\n  AND e.\"status\" IN ('success', 'error', 'crashed')\nGROUP BY e.\"workflowId\", w.\"name\"\nHAVING COUNT(*) FILTER (WHERE e.\"status\" IN ('error', 'crashed')) > 0\nORDER BY failures DESC\nLIMIT 10;",
           "refId": "A"
         }
       ],

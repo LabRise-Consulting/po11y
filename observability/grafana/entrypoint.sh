@@ -41,7 +41,15 @@ fi
 
 # Grafana interpolates ${VAR} in provisioning YAML but NOT in dashboard JSON,
 # so the n8n deep-link host is sedded into the rendered copy.
-sed -i "s|__WEB_BIND_ADDR__|${BIND_ADDR:-127.0.0.1}|g" "$DST"/dashboards/json/*.json
+#
+# N8N_LINK_HOST, not BIND_ADDR, because those are two different questions that
+# only look alike on the bundled stack. BIND_ADDR is the address this stack
+# PUBLISHES on; this is the address a reader's browser reaches n8n at. The
+# read-only topology pulls them apart — n8n is on another machine entirely —
+# and there BIND_ADDR was unusable for the links: setting it to the remote host
+# makes docker try to bind ports this box does not own. Defaults to BIND_ADDR,
+# so the bundled stack behaves exactly as before.
+sed -i "s|__WEB_BIND_ADDR__|${N8N_LINK_HOST:-${BIND_ADDR:-127.0.0.1}}|g" "$DST"/dashboards/json/*.json
 sed -i "s|/etc/grafana/provisioning/|$DST/|g" "$DST/dashboards/dashboards.yml"
 
 # Alerting rules are bundled-stack only, so they are mounted from a directory

@@ -19,6 +19,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 ENV_FILE="${ENV_FILE:-.env}"
+CONFIG_FILE="${CONFIG_FILE:-config.json}"
 # curl is only needed for the two network probes: with --metrics-file the
 # exposition comes off disk, so a host without curl can still lint a fixture.
 HAVE_CURL=yes
@@ -203,6 +204,92 @@ else
   else
     note "already set — nothing generated"
   fi
+fi
+
+# ---- config.json seeding ----------------------------------------------------
+# The dashboard's n8n links live in config.json, which nginx serves straight to
+# the browser — no envsubst, no templating. Nothing connected it to .env, so a
+# correct N8N_API_URL still left `"baseUrl": ""`, and {host} then resolved to
+# the browser's own hostname: the box running the dashboard, not the n8n being
+# watched. Same discipline as the secrets above — only when empty.
+printf '\nconfig    %s\n' "$CONFIG_FILE"
+LINK_URL="$(get_env N8N_PUBLIC_URL)"
+[ -n "$LINK_URL" ] || LINK_URL="$(get_env N8N_API_URL)"
+export CONFIG_FILE LINK_URL
+if [ "$WRITE" = no ]; then
+  note "--check: not writing"
+elif [ ! -f "$CONFIG_FILE" ]; then
+  note "not found — cp config.readonly.example.json config.json first"
+elif [ -z "$LINK_URL" ]; then
+  note "N8N_PUBLIC_URL and N8N_API_URL are both empty — no host to link to"
+elif ! command -v python3 >/dev/null; then
+  note "python3 not installed — set baseUrl in $CONFIG_FILE by hand"
+else
+  # Rewritten by regex, not by json.dump: the shipped config is hand-formatted
+  # (one card per line) and reserialising it would bury a two-word change in a
+  # whole-file diff. The result is parsed before it is written.
+  python3 <<'SEED_CONFIG'
+import json, os, re, sys
+from urllib.parse import urlsplit
+
+path, raw = os.environ['CONFIG_FILE'], os.environ['LINK_URL']
+
+
+def say(msg):
+    print('  %s' % msg)
+
+
+url = urlsplit(raw)
+host = url.hostname or ''
+if not host:
+    say('could not read a host out of %s — set baseUrl by hand' % raw)
+    sys.exit(0)
+
+text = open(path, encoding='utf-8').read()
+try:
+    cfg = json.loads(text)
+except ValueError as e:
+    say('not valid JSON (%s) — left alone' % e)
+    sys.exit(0)
+
+# The bundled config has no baseUrl: po11y owns that n8n and serves it from the
+# same host the dashboard is on, so {host} is already right.
+if 'baseUrl' not in cfg:
+    say('no baseUrl key — bundled config, nothing to seed')
+    sys.exit(0)
+if cfg.get('baseUrl'):
+    say('already set — nothing written')
+    sys.exit(0)
+
+# baseUrl carries the host alone; n8nUrl carries the shape around it. Splitting
+# them is what lets {host} also address other services on that same box.
+bracketed = '[{host}]' if ':' in host else '{host}'
+n8n_url = '%s://%s%s' % (url.scheme or 'http', bracketed,
+                         ':%d' % url.port if url.port else '')
+
+out, n = re.subn(r'("baseUrl"\s*:\s*)""',
+                 lambda m: m.group(1) + json.dumps(host), text, count=1)
+if not n:
+    say('baseUrl is not empty in the file — left alone')
+    sys.exit(0)
+
+wrote = 'baseUrl=%s' % host
+if 'n8nUrl' in cfg and cfg.get('n8nUrl') != n8n_url:
+    out, k = re.subn(r'("n8nUrl"\s*:\s*)"[^"]*"',
+                     lambda m: m.group(1) + json.dumps(n8n_url), out, count=1)
+    if k:
+        wrote += ' n8nUrl=%s' % n8n_url
+
+try:
+    json.loads(out)
+except ValueError as e:
+    say('rewrite would not parse (%s) — left alone' % e)
+    sys.exit(1)
+
+with open(path, 'w', encoding='utf-8') as fh:
+    fh.write(out)
+say('wrote: %s' % wrote)
+SEED_CONFIG
 fi
 
 # ---- verdict ----------------------------------------------------------------

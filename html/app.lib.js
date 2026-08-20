@@ -26,22 +26,51 @@ export const safeUrl = (u) => {
   return /^(https?:\/\/|\/)/i.test(s) ? esc(s) : '#';
 };
 
+/** The monitored n8n's host: config `baseUrl` when set, else the browser's. */
+const hostOf = (cfg, hostname) =>
+  (typeof cfg.baseUrl === 'string' && cfg.baseUrl) ? cfg.baseUrl : hostname;
+
 /**
- * Substitute the two host placeholders that let one config work from every
+ * The n8n base URL every n8n link is built from — scheme, host and port.
+ *
+ * `baseUrl` alone cannot carry a remote that is not `http://<host>:5678`: an
+ * n8n behind TLS on the default port needs a different scheme and no port at
+ * all. `n8nUrl` holds that whole shape, `{host}` included, and this is the one
+ * place it is resolved. The trailing slash goes so `{n8n}/form/x` cannot
+ * double it.
+ *
+ * @param {{ n8nUrl?: string, baseUrl?: string }} cfg
+ * @param {string} hostname
+ */
+export const n8nBase = (cfg = {}, hostname = '') =>
+  String(cfg.n8nUrl || 'http://{host}:5678')
+    .replaceAll('{host}', hostOf(cfg, hostname))
+    .replaceAll('{self}', hostname)
+    .replace(/\/$/, '');
+
+/**
+ * Substitute the three host placeholders that let one config work from every
  * device that can reach the box.
  *
- * `{host}` is the monitored n8n: config `baseUrl` wins when set, otherwise the
- * browser's own hostname. `{self}` is always the browser's own hostname — the
- * box serving this dashboard. They differ on the read-only topology, where n8n
- * lives elsewhere but Prometheus and Grafana run alongside the dashboard, so a
- * `{host}`-built link to a local service would point at the remote n8n's host.
+ * `{host}` is the monitored n8n's host: config `baseUrl` wins when set,
+ * otherwise the browser's own hostname. `{self}` is always the browser's own
+ * hostname — the box serving this dashboard. They differ on the read-only
+ * topology, where n8n lives elsewhere but Prometheus and Grafana run alongside
+ * the dashboard, so a `{host}`-built link to a local service would point at
+ * the remote n8n's host.
+ *
+ * `{n8n}` is the whole n8n base URL rather than just its host, so a config
+ * never has to hardcode `http://` and `:5678` around `{host}` — which is what
+ * kept a TLS or non-default-port n8n from ever being linkable. Prefer it for
+ * every n8n link; `{host}` stays for anything else on that host.
  *
  * @param {string} u
- * @param {{ baseUrl?: string }} cfg
+ * @param {{ n8nUrl?: string, baseUrl?: string }} cfg
  * @param {string} hostname
  */
 export const withHost = (u, cfg = {}, hostname = '') => String(u ?? '')
-  .replaceAll('{host}', (typeof cfg.baseUrl === 'string' && cfg.baseUrl) ? cfg.baseUrl : hostname)
+  .replaceAll('{n8n}', n8nBase(cfg, hostname))
+  .replaceAll('{host}', hostOf(cfg, hostname))
   .replaceAll('{self}', hostname);
 
 /** Coarse "how long ago", in the largest unit that stays readable. */
@@ -104,7 +133,7 @@ export const actionKey = (card) => card?.action
  */
 export function formCards(feed, existing = [], { formProxy = true, cfg = {}, hostname = '' } = {}) {
   const have = new Set(existing.map(actionKey).filter(Boolean));
-  const base = withHost(cfg.n8nUrl || 'http://{host}:5678', cfg, hostname).replace(/\/$/, '');
+  const base = n8nBase(cfg, hostname);
   const out = [];
   for (const f of feed?.forms || []) {
     if (have.has(f.path)) continue;

@@ -52,4 +52,26 @@ if [ -f "$K8S" ]; then
     && fail "$K8S: inline copy of the grafana entrypoint is back — use the shared script"
 fi
 
+# 4. BIND_ADDR is the address the stack PUBLISHES on. It was also the host
+#    sedded into the dashboards' n8n deep links, and on the read-only topology
+#    those two are different machines: the n8n being watched is remote, so
+#    making the links resolve meant setting BIND_ADDR to a host this box cannot
+#    bind, and the stack then fails to start. N8N_LINK_HOST separates them, and
+#    still defaults to BIND_ADDR so the bundled stack is unchanged.
+grep -q 'N8N_LINK_HOST:-.*BIND_ADDR' observability/grafana/entrypoint.sh \
+  || fail 'entrypoint.sh: the n8n deep-link host must honour N8N_LINK_HOST, defaulting to BIND_ADDR'
+
+for f in docker-compose*.yml; do
+  block=$(awk '/^  grafana:$/{on=1; next} on && /^  [a-zA-Z0-9_-]+:/{on=0} on' "$f")
+  [ -n "$block" ] || continue
+  printf '%s\n' "$block" | grep -q 'BIND_ADDR=' || continue
+  printf '%s\n' "$block" | grep -q 'N8N_LINK_HOST=' \
+    || fail "$f: grafana takes BIND_ADDR but not N8N_LINK_HOST — its n8n deep links cannot leave the publish address"
+done
+
+if [ -f "$K8S" ]; then
+  grep -q 'N8N_LINK_HOST' "$K8S" \
+    || fail "$K8S: grafana does not take N8N_LINK_HOST"
+fi
+
 echo 'check-grafana-entrypoint: ok'

@@ -1,6 +1,6 @@
 # Po11y CI — the pipeline for the stack. Jobs:
-#   test           node's built-in test runner over the html/, site/, lib/
-#                  and server/ unit tests
+#   test           node's built-in test runner over the html/, site/, lib/,
+#                  server/ and observability/ unit tests
 #   lint           shellcheck over every shell script
 #   interlock      bootstrap.sh must refuse a non-loopback bind with exit 78
 #   compose-config daemonless `docker compose config` of both compose files,
@@ -93,7 +93,8 @@ jobs:
             --test-coverage-branches=80 \
             --test-coverage-functions=90 \
             "html/**/*.test.mjs" "site/**/*.test.mjs" \
-            "lib/**/*.test.mjs" "server/**/*.test.mjs" > coverage.log 2>&1 || status=$?
+            "lib/**/*.test.mjs" "server/**/*.test.mjs" \
+            "observability/**/*.test.mjs" > coverage.log 2>&1 || status=$?
           cat coverage.log
           {
             echo '### Coverage'
@@ -109,9 +110,14 @@ jobs:
     if: github.event_name != 'schedule'
     container: koalaman/shellcheck-alpine:v0.10.0
     steps:
-      - run: apk add --no-cache git
+      # git for actions/checkout. python3 and openssl are what
+      # scripts/readonly-preflight.sh uses to seed config.json and the .env
+      # secrets, and ci/check-readonly-preflight.sh asserts both actually
+      # happen — the image ships neither, so name them here rather than
+      # inherit whatever a dependency happens to pull in.
+      - run: apk add --no-cache git python3 openssl
       - uses: actions/checkout@v5
-      - run: shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh scripts/readonly-preflight.sh ci/check-readonly-preflight.sh
+      - run: shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh scripts/readonly-preflight.sh ci/check-readonly-preflight.sh ci/check-env-example.sh
       # Fail if any dated '# REMOVE AFTER YYYY-MM' liability in bootstrap.sh is past.
       - run: sh ci/check-expired-markers.sh bootstrap.sh
       # Guard the A3 bug class: an overlay re-inlining grafana's entrypoint
@@ -119,6 +125,10 @@ jobs:
       - run: sh ci/check-grafana-entrypoint.sh
       - run: sh ci/check-dashboard-entrypoint.sh
       - run: sh ci/check-readonly-preflight.sh
+      # One variable, one assignment: a key declared in both the bundled and
+      # the read-only section is honoured by compose (last wins) and dropped
+      # by readonly-preflight.sh (first wins), or the other way round.
+      - run: sh ci/check-env-example.sh
 
   interlock:
     # Proves the exposure interlock stays wired: bootstrap.sh with a

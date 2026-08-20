@@ -8,6 +8,55 @@ Notable changes to Po11y. Format follows
 
 ### Added
 
+- `po11y_workflow_executions_total`, a per-workflow counter of executions
+  observed *finishing* — the denominator the error counter never had. Without
+  it a reader could see "4 failures" and not whether that was 4 out of 5 or 4
+  out of 4000; on a real instance those turned out to be one workflow failing
+  40% of its runs sitting next to one failing 0.54% of them. Counted by the
+  same exactly-once trigger pair as the failure counter, over a
+  `FINISHED_STATUSES` set derived from `FAILED_STATUSES` so every failed status
+  is a finished status by construction and `errors / executions` is a rate
+  bounded by 1. `canceled` is in neither: a human stopped the run, so it
+  reached no verdict, and counting it in the denominator would make every
+  cancellation read as a dip in success rate.
+
+  The table is seeded once, the first time it is created, from the failures
+  already counted plus the successes still retained. A store that predates the
+  counter would otherwise compute `1 - 4/1 = -300%` success on its first
+  finished run, and stay negative until the new counter overtook the old one.
+  It is pessimistic by exactly the successes already pruned past
+  `PO11Y_RETENTION_DAYS`, which is the safe direction and is documented in
+  `docs/server.md` alongside the other accepted regressions.
+- **po11y Execution Health** Grafana dashboard (`po11y-executions`), built on
+  po11y's own Prometheus exporter rather than on n8n's database: failed
+  executions, how many workflows are failing, what is running now, failures
+  over time by workflow, the ten worst offenders, time since each workflow's
+  last success, and poll freshness. The read-only Metrics row embeds it. That
+  row had shown CPU, memory and event-loop latency and nothing about
+  executions, because the only dashboard covering that ground —
+  **n8n Workflow & Execution Analytics** — queries a Postgres the read-only
+  topology has no connection to, so a read-only operator could not see that a
+  workflow was failing without opening n8n. The numbers were already being
+  scraped; nothing was drawing them. It leads with a success rate, and ranks
+  workflows by failure *rate* next to raw count — the two read very
+  differently. Per-node timings remain a database question: po11y sees
+  executions, not the nodes inside them.
+- `N8N_LINK_HOST`, the host the Grafana dashboards' n8n deep links point at.
+  It defaults to `BIND_ADDR`, so the bundled stack is unchanged.
+- `{n8n}` placeholder in `config.json` `href`/`src` fields, resolving to the
+  whole `n8nUrl` — scheme and port included — with any trailing slash removed.
+  Both config templates now build their n8n links from it.
+- `ci/check-env-example.sh`: fails if any variable is assigned twice in
+  `.env.example`. Compose reads that file last-wins and
+  `readonly-preflight.sh` reads it first-wins, so a duplicate means the
+  operator's value is honoured by one and silently dropped by the other.
+- The node test runner now also covers `observability/**`, with
+  `observability/grafana/dashboards.test.mjs` asserting that every panel a
+  config template embeds exists in the dashboard it names, that the read-only
+  template embeds no Postgres-backed panel, and that the po11y dashboard
+  queries only metrics `server/metrics.mjs` actually exports. A wrong panel id
+  renders as an empty box with no error anywhere, which is indistinguishable
+  from "no data yet".
 - `scripts/readonly-preflight.sh`, the read-only topology's stand-in for
   `bootstrap.sh`. It checks that the n8n public API accepts the key and that
   `/metrics` is reachable, then names every `N8N_METRICS_INCLUDE_*` flag the
@@ -60,6 +109,47 @@ Notable changes to Po11y. Format follows
 
 ### Fixed
 
+- The bundled **n8n Workflow & Execution Analytics** dashboard computed three
+  of its four percentages over every execution status, so `running`, `waiting`
+  and `canceled` runs counted against the workflow and every rate read low
+  whenever anything was in flight. Its own "Daily success rate trend" already
+  restricted the population to `success`, `error` and `crashed`, so the two
+  success rates on that dashboard disagreed with each other on the same screen:
+  8 successes, 1 error and 1 still running showed 80% on one panel and 88.9% on
+  the other. "Success rate", "Most executed workflows" and "Workflows with most
+  failures" now use the same finished-execution population. The two table
+  panels are constrained as a whole rather than only in the ratio, so
+  `successes / executions` and `failures / total_executions` equal the
+  percentage displayed beside them. `observability/grafana/dashboards.test.mjs`
+  asserts it against `FINISHED_STATUSES` from `server/exec-status.mjs`, so the
+  Grafana SQL and the server's own counters cannot drift apart.
+- Every n8n link on the read-only dashboard pointed at the box serving the
+  dashboard instead of at the n8n being watched. `config.json` is served to
+  the browser as a static file — no envsubst, no templating — and nothing
+  connected it to `.env`, so a correct `N8N_API_URL` still left
+  `"baseUrl": ""` and `{host}` fell back to the browser's own hostname. The
+  read-only template's `lede` told operators to go and set it by hand.
+  `readonly-preflight.sh` now fills `baseUrl` and `n8nUrl` in from
+  `N8N_PUBLIC_URL` (or `N8N_API_URL`), on the same terms as the secrets it
+  already seeds: only when empty, never overwriting.
+- The Grafana dashboards' n8n deep links could not be made to resolve on the
+  read-only topology. The host was sedded in from `BIND_ADDR`, which is also
+  the address the stack publishes on; with a remote n8n those are different
+  machines, so pointing the links at n8n meant binding to an address the box
+  does not own and the stack failed to start. `docker-compose.readonly.yml`
+  had documented the first half of that. `N8N_LINK_HOST` separates the two.
+- `N8N_PUBLIC_URL` was assigned twice in `.env.example`, once in each stack's
+  section. Compose takes the last, `readonly-preflight.sh`'s `get_env` takes
+  the first, so setting it where a read-only operator would look left compose
+  using the other, empty one. One assignment now, cross-referenced from the
+  other section and guarded by `ci/check-env-example.sh`.
+- `config.json` templates hardcoded `http://{host}:5678` for n8n links, which
+  no `baseUrl` can correct for an n8n behind TLS or on another port. They use
+  `{n8n}` now, which takes its whole shape from `n8nUrl`.
+- `docs/ai-map.md` gave the OmniRoute card as `http://{host}:20128/`. The
+  gateway runs beside the dashboard, not on the n8n host, so on the read-only
+  topology that card pointed at the remote. `{self}`, as the bundled config
+  template has always had it.
 - The OmniRoute overlay could not start on a read-only stack. Its three
   secrets are `:?`-required and were generated only by `bootstrap.sh`, which
   that topology never runs, so the documented LLM architecture map needed a

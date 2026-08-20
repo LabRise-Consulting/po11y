@@ -203,8 +203,10 @@ docker compose -f docker-compose.readonly.yml up -d
 `readonly-preflight.sh` is this topology's stand-in for `bootstrap.sh`. It
 verifies the API key and the `/metrics` endpoint, names any upstream
 `N8N_METRICS_INCLUDE_*` flag that is off (with the po11y surface each one
-feeds), and generates `GRAFANA_ADMIN_PASSWORD` plus the OmniRoute secrets the
-optional gateway overlay requires. It writes only variables that are empty, so
+feeds), generates `GRAFANA_ADMIN_PASSWORD` plus the OmniRoute secrets the
+optional gateway overlay requires, and fills `baseUrl` and `n8nUrl` into
+`config.json` so the dashboard's n8n links point at the remote rather than at
+the box serving the dashboard. It writes only values that are empty, so
 re-running it is safe. Pass `--check` to report without writing.
 
 ### Key Environment Variables
@@ -215,6 +217,7 @@ re-running it is safe. Pass `--check` to report without writing.
 | `N8N_API_KEY` | Yes | Read-only API key |
 | `N8N_PUBLIC_URL` | No | Base URL a reader opens, used for links in tool results and alerts (default: `N8N_API_URL`) |
 | `N8N_METRICS_TARGET` | Yes | `host:port` for n8n `/metrics` endpoint |
+| `N8N_LINK_HOST` | No | Host the Grafana dashboards' n8n deep links point at (default: `BIND_ADDR`, which is this box — set it to the remote n8n's host) |
 | `GRAFANA_ADMIN_PASSWORD` | Yes | Grafana admin password — `readonly-preflight.sh` generates one when empty |
 | `SERVER_POLL_INTERVAL` | No | Server poll interval in seconds (default: `30`) |
 | `EXECUTIONS_LIMIT` | No | Recent execution window size (default: `250`, which is n8n's maximum) |
@@ -254,6 +257,15 @@ Execution Analytics** dashboard and four of the five Grafana alert rules query
 n8n's Postgres, which this topology does not connect to, and the MCP `po11y_sql`
 tool reads through that same datasource. The server's watchdog covers the same
 alerting ground over the API.
+
+Execution health itself is not out of reach, though: the server exports it to
+Prometheus, and the **po11y Execution Health** dashboard (`po11y-executions`) is
+what the read-only Metrics row embeds — failed executions, which workflows are
+failing, what is running now, and how long since each workflow last succeeded.
+It carries a success rate too, because the server exports the denominator
+(`po11y_workflow_executions_total`) alongside the failure counter. What stays a
+database question is per-node timing: po11y sees executions, not the nodes
+inside them.
 
 ## Feature Comparison
 

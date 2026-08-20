@@ -18,15 +18,25 @@ See [`config.example.json`](../config.example.json). All fields are optional.
 | `staleAfterMin` | Minutes before status data is flagged as stale (default `5`). |
 | `statusHint` | Text displayed while `status.json` is loading or missing. |
 | `baseUrl` | Hostname substituted for `{host}` in links. See details below. |
-| `n8nUrl` | n8n instance URL for workflow and form links (default `http://{host}:5678`). |
+| `n8nUrl` | n8n base URL, substituted for `{n8n}` in links and used for form links (default `http://{host}:5678`). |
 | `formProxy` | Enables the `/form/` proxy endpoint (default `true`; set `false` on the read-only stack unless forward-auth is enabled). When `false`, fieldless form triggers link directly to n8n form pages. |
 | `scopes` | Enables multi-team scope selectors: `{ "<scope>": "Display name" }`. Keys must match `[a-z0-9-]+`. |
 
-### Hostname substitution (`{host}`, `{self}` and `baseUrl`)
+### Host substitution (`{n8n}`, `{host}`, `{self}` and `baseUrl`)
 
-Occurrences of `{host}` in `href` and `src` fields are replaced with the browser's hostname. Set `baseUrl` to a specific hostname if deep links (such as n8n editor links) should point to a different host than the dashboard. Relative path links like `/grafana` do not use `{host}`.
+Three placeholders are substituted in `href` and `src` fields. Relative path links like `/grafana` use none of them.
 
-`{self}` is always the browser's hostname, and ignores `baseUrl`. Use it for services that run beside the dashboard, such as Prometheus. This matters on the read-only topology: `baseUrl` points at the remote n8n there, so a `{host}` link to a local service resolves to the remote host and fails.
+| Placeholder | Resolves to | Use it for |
+|---|---|---|
+| `{n8n}` | The whole `n8nUrl`, scheme and port included, with any trailing slash removed | Every link to n8n |
+| `{host}` | `baseUrl` when set, otherwise the browser's hostname | Other services on the n8n host |
+| `{self}` | The browser's hostname, always — `baseUrl` is ignored | Services beside the dashboard, such as Prometheus |
+
+Prefer `{n8n}` for n8n links. `{host}` carries a host and nothing else, so a link built as `http://{host}:5678/workflow/new` hardcodes both the scheme and the port: an n8n behind TLS, or on any other port, cannot be reached that way however correct `baseUrl` is. `{n8n}` takes its whole shape from `n8nUrl`, so `"n8nUrl": "https://n8n.example.com"` moves every n8n link at once.
+
+`{self}` versus `{host}` matters on the read-only topology: `baseUrl` points at the remote n8n there, so a `{host}` link to a local service resolves to the remote host and fails.
+
+On the read-only topology, `./scripts/readonly-preflight.sh` fills `baseUrl` and `n8nUrl` in from `N8N_PUBLIC_URL` (or `N8N_API_URL`) the first time it runs, and never overwrites a value you set yourself. Without it both stay empty and every n8n link resolves to the box serving the dashboard.
 
 ### Multi-team views (`scopes`)
 
@@ -165,6 +175,7 @@ The po11y server exposes Prometheus metrics at `server:8081/metrics`, on every d
 | `po11y_n8n_up` | Gauge | None | `1` if n8n API is reachable, else `0`. |
 | `po11y_poll_last_success_timestamp_seconds` | Gauge | None | Unix timestamp of the last successful poll. |
 | `po11y_workflow_errors_total` | Counter | `workflow_id`, `workflow_name` | Total failed executions recorded for a workflow, persisted in the store. |
+| `po11y_workflow_executions_total` | Counter | `workflow_id`, `workflow_name` | Total executions recorded finishing for a workflow, successful or failed. The denominator under `po11y_workflow_errors_total`. |
 | `po11y_workflow_last_success_timestamp_seconds` | Gauge | `workflow_id`, `workflow_name` | Unix timestamp of the last successful run for a workflow. Omitted if a workflow has no recorded success. |
 | `po11y_workflow_running_seconds` | Gauge | `workflow_id`, `workflow_name` | Duration in seconds of the current longest-running execution (`0` if none). |
 | `po11y_ai_map_llm_up` | Gauge | None | `1` if the last ai-map build got LLM prose, `0` if it fell back to heuristic descriptions. Absent when no LLM is configured, and until a build has actually called one. |
@@ -175,6 +186,15 @@ Before writing rules against these:
 - **It is absent, not `0`, when no LLM is configured.** A deployment running `OMNIROUTE_ENABLED=false` with no `AI_MAP_*` has no LLM to be down, and a `0` there would leave `Po11yAiMapLlmDegraded` firing forever on a correctly configured stack.
 
 - **`po11y_workflow_errors_total` is persisted and monotonic.** The count lives in a SQLite table, incremented once per failed execution and never decremented, so it survives process restarts and retention pruning. This replaced an in-memory accumulator that reset to zero on every restart — a reset Prometheus believed, several times a week. Expect one discontinuity the first time a deployment runs on the new counter (the table starts empty), then a flatter, more honest line than before. **A store restored from an older backup rewinds the counter** — that is a genuine counter reset, and Prometheus handles it correctly. Do not paper over it with a `max()` guard.
+- **`po11y_workflow_executions_total` is the denominator, and it is not "all executions".** It counts runs that reached a verdict of their own — `success`, `error` and `crashed`. `canceled` is in neither this counter nor the error counter: a human stopped the run, so it never reached one, and counting it here would make every cancellation read as a dip in success rate. `new`, `running` and `waiting` have not finished at all. Every failed status is also a finished status by construction, so `errors / executions` is a rate bounded by 1:
+
+  ```promql
+  100 * (1 - sum(po11y_workflow_errors_total) / sum(po11y_workflow_executions_total))   # success rate, %
+  100 * po11y_workflow_errors_total / po11y_workflow_executions_total                   # failure rate per workflow, %
+  ```
+
+  Both are `sum()/sum()` rather than an average of per-workflow rates on purpose: a workflow that ran twice must not weigh the same as one that ran two thousand times.
+- **The denominator is backfilled once, and it is pessimistic on an old store.** A store that predates this counter already has failures in `workflow_error_totals`, so starting the new table at zero would compute `1 - 4/1 = -300%` on the first finished run. The table is therefore seeded the one time it is created, from the failures already counted plus the successes still retained. Successes already pruned past `PO11Y_RETENTION_DAYS` cannot be recovered, so a store older than its retention window understates its success rate until the counter has run for one full window. Understating it is the safe direction.
 - **A workflow that has never succeeded exports no `last_success` series.** Zero-filling would mean 1970, so every staleness rule would fire on workflows that simply have not run yet. Use the `failing` rule for that case, or `absent()` to alert on it explicitly.
 - **During an n8n outage the server keeps serving the last known per-workflow series** and only sets `po11y_n8n_up` to `0`. Clearing them would restart every Prometheus `for:` duration and turn one outage into flapping alerts on recovery. The cost is that an outage also trips the staleness and stuck rules, which is what the shipped Alertmanager inhibit rule collapses.
 
