@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb, getKv } from './db.mjs';
-import { alertNotifications, unreachableNotifications, n8nReachable } from './alerts.mjs';
+import { alertNotifications, unreachableNotifications, aiMapNotifications, n8nReachable } from './alerts.mjs';
 
 const NOW = Date.parse('2026-08-11T06:00:00.000Z');
 const WF = [{ id: 'wf1', name: 'Ingest', active: true, nodes: [], connections: {} }];
@@ -161,4 +161,51 @@ test('a sub-workflow run still counts as production', () => {
   const db = openDb(':memory:');
   const sub = failing().map((e) => ({ ...e, mode: 'integrated' }));
   assert.equal(call(db, { executions: sub }).notifications.length, 1, 'a sub-workflow that only ever runs as a child must still alert');
+});
+
+// ---- ai-map degradation -----------------------------------------------------
+
+const aiMap = (db, over = {}) => aiMapNotifications(db, {
+  degraded: 'LLM POST -> 503', cfg: CFG, now: NOW, renotifyMin: 360, ...over,
+});
+
+test('a degraded ai-map reaches the notifications feed', () => {
+  const db = openDb(':memory:');
+  const { notifications, fire } = aiMap(db);
+  assert.equal(notifications.length, 1);
+  assert.equal(fire[0].rule, 'ai-map-degraded');
+  assert.equal(notifications[0].status, 'info');
+  assert.match(notifications[0].message, /503/);
+});
+
+test('it notifies once, not on every rebuild', () => {
+  const db = openDb(':memory:');
+  assert.equal(aiMap(db).notifications.length, 1);
+  assert.deepEqual(aiMap(db, { now: NOW + 60_000 }), { notifications: [], fire: [] });
+});
+
+test('a build that gets its prose back publishes the recovery', () => {
+  const db = openDb(':memory:');
+  aiMap(db);
+  const back = aiMap(db, { degraded: null, now: NOW + 120_000 });
+  assert.equal(back.fire.length, 1);
+  assert.equal(back.fire[0].kind, 'resolved');
+  assert.match(back.notifications[0].title, /Architecture map recovered/);
+});
+
+test('a healthy ai-map with nothing open says nothing at all', () => {
+  const db = openDb(':memory:');
+  assert.deepEqual(aiMap(db, { degraded: null }), { notifications: [], fire: [] });
+});
+
+test('the ai-map pass cannot resolve open workflow alerts', () => {
+  const db = openDb(':memory:');
+  assert.equal(call(db).notifications.length, 1); // opens failing:wf1
+  aiMap(db, { now: NOW + 60_000 });
+  assert.ok(getKv(db, 'alert-state').includes('failing:wf1'), 'workflow alert must survive the scoped pass');
+});
+
+test('alerts disabled means no ai-map notification either', () => {
+  const db = openDb(':memory:');
+  assert.deepEqual(aiMap(db, { cfg: { ...CFG, enabled: false } }), { notifications: [], fire: [] });
 });

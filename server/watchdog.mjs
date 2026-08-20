@@ -199,6 +199,44 @@ export function unreachableAlert(err, { baseUrl = '' } = {}) {
 }
 
 /**
+ * The "the map published, but without its prose" alert.
+ *
+ * Same shape as unreachableAlert (and for the same reason): an instance-level
+ * condition with no workflow behind it, so reconcileAlerts() gives it dedupe,
+ * renotify and recovery for free, and alertsToNotifications() renders it as
+ * text rather than a button that 404s.
+ *
+ * `info`, not `failure`: the architecture map is still correct — structure and
+ * edges are computed, never generated — and only the descriptions fell back to
+ * the heuristic seed. Matches the severity of the Prometheus rule over
+ * po11y_ai_map_llm_up (observability/alerts.yml).
+ *
+ * The reason is scrubbed of AI_MAP_BASE_URL the way unreachableAlert scrubs the
+ * n8n base: this string is published into notifications.json and pushed to a
+ * chat webhook, and a gateway URL is an internal hostname like any other.
+ *
+ * @param {any} reason - the transport failure the build reported
+ * @param {{ aiBase?: string }} [opts]
+ * @returns {object} an alert in the same shape evaluateAlerts returns
+ */
+export function aiMapDegradedAlert(reason, { aiBase = '' } = {}) {
+  let detail = String(reason?.message || reason || 'unknown error');
+  const root = String(aiBase || '');
+  for (const form of new Set([root, root.replace(/\/$/, '')])) {
+    if (form) detail = detail.split(form).join('the LLM gateway');
+  }
+  return {
+    rule: 'ai-map-degraded',
+    workflowId: '',
+    workflowName: 'Architecture map',
+    severity: 'info',
+    title: 'Architecture map degraded',
+    message: `The LLM could not be reached — ${detail}. The map is still correct; its descriptions are heuristic until the next successful build.`,
+    since: null,
+  };
+}
+
+/**
  * The deepest n8n URL this alert can justify, or null.
  *
  * One definition shared by the feed and the chat push, so the two can never
@@ -306,11 +344,18 @@ export function alertsToNotifications(fire, { now = Date.now(), baseUrl = '' } =
   const root = String(baseUrl || '').replace(/\/$/, '');
   return (Array.isArray(fire) ? fire : []).map((a) => {
     const resolved = a.kind === 'resolved';
+    // The feed contract's three statuses (docs/configuration.md) map onto the
+    // alert's own severity, so a degradation renders as one rather than as an
+    // outage. Anything unrecognised stays 'failure': the rules that predate
+    // severity carry none, and under-reporting a real failure is the worse
+    // direction to guess in.
+    const status = resolved ? 'success'
+      : (['failure', 'info', 'success'].includes(a.severity) ? a.severity : 'failure');
     const n = {
       ts,
       title: resolved ? `${a.workflowName} recovered` : a.title,
       message: a.message,
-      status: resolved ? 'success' : 'failure',
+      status,
     };
     // Only emit a link we can actually build — a half-formed href is worse
     // than none, because the dashboard renders it as a live button.

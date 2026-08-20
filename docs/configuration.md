@@ -214,6 +214,19 @@ Fieldless forms (`fields: 0`) fire directly via POST requests through `/form/`. 
 
 ### `/ai-map.json`
 
+Alongside the map, `llm` records why the prose reads the way it does:
+
+```json
+"llm": { "configured": true, "ok": false, "error": "LLM POST -> 503" }
+```
+
+`configured` is whether all three `AI_MAP_*` variables are set. `ok` is `null`
+when they are not — an unconfigured stack is neither healthy nor degraded — and
+otherwise `false` when an LLM was configured but the published text is
+heuristic. `error` carries the transport failure, scrubbed of the gateway URL.
+A degraded build also publishes an `info` notification through the watchdog, so
+it appears in the dashboard's notifications feed rather than only in the log.
+
 Rendered by [`site/ai-map.html`](../site/ai-map.html). Contains structured diagram data and AI-generated node descriptions.
 
 ```json
