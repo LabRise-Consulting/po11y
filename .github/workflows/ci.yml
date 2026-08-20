@@ -73,7 +73,35 @@ jobs:
       - uses: actions/checkout@v5
       # Directory-scoped node test runner. Node expands the ** glob itself (it
       # is quoted so the shell leaves it alone).
-      - run: node --test "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" "server/**/*.test.mjs"
+      #
+      # Coverage runs in the same pass, and the thresholds are a floor, not a
+      # target: they sit below the current numbers so an ordinary change never
+      # trips them, and a drop that large means test files were deleted rather
+      # than that a line went uncovered. Keep them whole numbers — node
+      # truncates a fractional threshold, so `99.9` silently gates at 99. Node counts only the files the tests
+      # import, so html/app.js (DOM wiring, no test) does not drag the number
+      # down — the logic it calls lives in html/app.lib.js, which is covered.
+      #
+      # The report goes to the run summary as well as the log: a number nobody
+      # reads is a number nobody notices falling.
+      - name: test with coverage
+        run: |
+          set -e
+          status=0
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=95 \
+            --test-coverage-branches=80 \
+            --test-coverage-functions=90 \
+            "html/**/*.test.mjs" "site/**/*.test.mjs" \
+            "lib/**/*.test.mjs" "server/**/*.test.mjs" > coverage.log 2>&1 || status=$?
+          cat coverage.log
+          {
+            echo '### Coverage'
+            echo '```'
+            sed -n '/start of coverage report/,/end of coverage report/p' coverage.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
 
   lint:
     name: lint

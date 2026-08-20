@@ -33,3 +33,7 @@ docs/superpowers/
 # the manifests check locally) so the validation stops depending on
 # raw.githubusercontent.com being reachable on every run.
 .kubeconform-cache/
+
+# Written by the CI test job (and by anyone running the same command locally)
+# so the coverage report can be replayed into the run summary.
+coverage.log

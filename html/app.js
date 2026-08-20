@@ -30,6 +30,7 @@
 import { esc, safeUrl, ago, refreshMs, formCards, withHost as withHostOf,
   scopeKeys as scopeKeysOf, pickScope, feedUrl as feedUrlOf,
   scopedSrc as scopedSrcOf, withTab, metricsRangeLabel, execDot, runningText,
+  execRows,
   resolveRoute, routeHash }
   from './app.lib.js';
 
@@ -506,9 +507,9 @@ function renderContainers() {
 // ---- executions -------------------------------------------------------------
 // { executions: { recent, errors, byWorkflow: [{ name, id, count, errors, lastAt, running }] } }
 // — see server/n8n.mjs. byWorkflow carries every workflow in the recent
-// window, busiest first; only the display is capped, so the filter box can
-// reach a workflow that never makes the visible few. Same mechanism as
-// renderContainers, plus the show-all toggle the notification feed uses.
+// window, busiest first. execRows (app.lib.js) decides which of them show:
+// it filters first and caps second, so the filter box reaches a workflow that
+// never makes the visible few. Same show-all toggle the notification feed uses.
 const EXEC_LIMIT = 10;
 let execExpanded = false;
 
@@ -517,15 +518,14 @@ function renderExecutions() {
   if (!el || !lastStatus) return;
   const ex = lastStatus.executions || {};
   const f = filters['sec-executions'];
-  const rows = (ex.byWorkflow || []).filter((w) =>
-    !f || String(w.name ?? '').toLowerCase().includes(f));
-  if (!rows.length) { el.innerHTML = `<p class="empty">${f ? 'no match' : 'no executions yet'}</p>`; return; }
-  const shown = execExpanded ? rows : rows.slice(0, EXEC_LIMIT);
+  const { rows, total, hasMore } = execRows(ex.byWorkflow, f,
+    { limit: EXEC_LIMIT, expanded: execExpanded });
+  if (!total) { el.innerHTML = `<p class="empty">${f ? 'no match' : 'no executions yet'}</p>`; return; }
   // status.json is written by a separate process (the po11y server), so these
   // counters are external data like every other field here — esc() them even
   // though the server only ever writes numbers.
   const summary = `<p class="updated">${esc(ex.recent ?? 0)} recent · ${esc(ex.errors ?? 0)} errors</p>`;
-  let html = summary + shown.map((w) => {
+  let html = summary + rows.map((w) => {
     const dot = execDot(w);
     const errPart = w.errors
       ? `<b class="err">${esc(w.errors)} errors</b>`
@@ -538,9 +538,9 @@ function renderExecutions() {
       <div><b>${esc(w.name)}</b> <span class="updated">${w.lastAt ? esc(ago(w.lastAt)) : 'never'}</span>
       <p>${esc(w.count ?? 0)} runs · ${errPart}${runPart}</p></div></div>`;
   }).join('');
-  if (rows.length > EXEC_LIMIT) {
+  if (hasMore) {
     html += `<button class="more" id="exec-toggle">${execExpanded
-      ? 'show less' : `show all ${rows.length}`}</button>`;
+      ? 'show less' : `show all ${total}`}</button>`;
   }
   el.innerHTML = html;
   $('exec-toggle')?.addEventListener('click', () => {

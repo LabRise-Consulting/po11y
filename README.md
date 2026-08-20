@@ -1,6 +1,7 @@
 <img src="html/logo.svg" alt="Po11y" width="215">
 
 [![CI](https://github.com/labrise-consulting/po11y/actions/workflows/ci.yml/badge.svg)](https://github.com/labrise-consulting/po11y/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-lines%20%E2%89%A5%2095%25-brightgreen)](https://github.com/labrise-consulting/po11y/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/labrise-consulting/po11y)](https://github.com/labrise-consulting/po11y/releases)
 
