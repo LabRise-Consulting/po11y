@@ -31,6 +31,7 @@
 // app.lib.js so they can be unit-tested (node --test "html/**/*.test.mjs");
 // everything DOM-shaped stays here.
 import { esc, safeUrl, ago, refreshMs, formCards, withHost as withHostOf,
+  withRebuildCard, rebuildMessage,
   scopeKeys as scopeKeysOf, pickScope, feedUrl as feedUrlOf,
   scopedSrc as scopedSrcOf, withTab, metricsRangeLabel, execDot, runningText,
   resolveRoute, routeHash }
@@ -367,7 +368,10 @@ function buildChrome() {
   // /form/ nginx proxy; everything else is a plain link card. Every card
   // gets a hover tooltip: config "tip" wins, else "name — sub".
   const tip = (l) => esc(l.tip || (l.sub ? `${l.name} — ${l.sub}` : l.name));
-  const card = (l, id) => l.action
+  const card = (l, id) => l.post
+    ? `<button class="card action" data-post="${esc(l.post)}" data-name="${esc(l.name)}" title="${tip(l)}">
+        <h3>${esc(l.name)}</h3><p>${esc(l.sub || '')}</p></button>`
+    : l.action
     ? `<button class="card action" data-form="${esc(l.action)}" data-name="${esc(l.name)}" title="${tip(l)}">
         <h3>${esc(l.name)}</h3><p>${esc(l.sub || '')}</p></button>`
     : `<a class="card"${id ? ` id="${id}"` : ''} href="${safeUrl(withHost(l.href))}" title="${tip(l)}">
@@ -375,6 +379,38 @@ function buildChrome() {
   Object.values(cfg.cards || {}).forEach((links, i) => {
     $(`cards-${i}`).innerHTML = links.map((l, j) => card(l, l.up ? `card-${i}-${j}` : '')).join('');
   });
+  // The rebuild action. 202 means accepted, not finished — the build runs on
+  // the server's own tick — so the stamp on map.json is what says it landed.
+  // Give up watching after a minute and leave the button usable: the feed
+  // refresh below picks the new map up regardless.
+  ov.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-post]');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    const stampOf = async () => {
+      try { return (await (await fetch('/map.json', { cache: 'no-store' })).json())?.generated_at ?? null; }
+      catch { return null; }
+    };
+    const before = await stampOf();
+    try {
+      const r = await fetch(btn.dataset.post, { method: 'POST' });
+      let body = null;
+      try { body = await r.json(); } catch { /* an empty or non-JSON body is fine */ }
+      const msg = rebuildMessage(r.status, body);
+      toast(msg.text, msg.ok);
+      if (msg.ok) {
+        for (let i = 0; i < 30; i += 1) {
+          await new Promise((res) => setTimeout(res, 2000));
+          const now = await stampOf();
+          if (now && now !== before) { toast(`${btn.dataset.name}: updated`, true); break; }
+        }
+      }
+    } catch {
+      toast(`${btn.dataset.name}: failed — po11y server unreachable`, false);
+    }
+    btn.disabled = false;
+  });
+
   ov.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-form]');
     if (!btn || btn.disabled) return;
@@ -652,6 +688,11 @@ function renderNotifications() {
     // rather than two things, one of them wrong.
     cfg.staleAfterMin = Infinity;
   }
+  // The built-in rebuild action, folded in before anything reads cfg.cards:
+  // the sidebar, the section blocks, the card render and the live stat re-poll
+  // all index groups positionally (cards-<i>, card-<i>-<j>), so adding a group
+  // at render time only would shift those ids out from under each other.
+  cfg.cards = withRebuildCard(cfg.cards);
   initScope();
   // Auto-discovered form triggers (forms.json, published by the po11y server)
   // become Actions cards; config-declared cards win on

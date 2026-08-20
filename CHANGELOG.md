@@ -37,6 +37,26 @@ Notable changes to Po11y. Format follows
 - `ai-map.json` carries an `llm` block — `{ configured, ok, error }` — and the
   Architecture page's footer reads `by heuristic — LLM unavailable (…)` rather
   than `by heuristic`, which had looked like a choice.
+- **Rebuild map** action on the dashboard, first in the Actions group, backed
+  by a new `POST /rebuild` on the server. It forces what `SIGHUP` forces — a
+  full rebuild including the ai-map, which otherwise only refreshes daily —
+  through the same function, so the button and the signal cannot drift. The
+  card ships in `app.js` rather than the config templates, so deployments whose
+  `config.json` was written by hand get it without an edit.
+
+  The route answers `202` when accepted and `429` with a `retry_after` inside a
+  one-minute floor between forced builds; a forced build re-runs every builder
+  and, where `AI_MAP_*` is configured, spends LLM calls. It is POST-only, so no
+  link, prefetch or crawler can fire a build. It carries no token: unlike
+  `/ingest` it accepts no body and writes nothing to the store, so it cannot
+  forge an execution or silence an alert, and it shares whatever guards the
+  dashboard has, as `/mcp/` does.
+
+  Until now the only way to force a rebuild was `docker kill -s HUP
+  po11y-server`, and the `Build maps now` action the docs still described was
+  an n8n workflow (`po11yworkflowmap`) retired in 2026-08 — `bootstrap.sh`
+  deletes it from live instances. `docs/ai-map.md` described a button that no
+  longer existed; it exists again.
 
 ### Fixed
 

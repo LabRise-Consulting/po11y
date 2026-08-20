@@ -29,7 +29,7 @@ The Architecture tab always works because code builds its structure. An LLM is o
       ```
 
 2. **External API endpoint**
-   Set `AI_MAP_BASE_URL`, `AI_MAP_API_KEY`, and `AI_MAP_MODEL` in `.env`. Any OpenAI-compatible endpoint works (such as OpenAI, Anthropic, Mistral, or Ollama). Then restart the server: `docker compose up -d server`. Explicit settings override OmniRoute auto-wiring. Set `OMNIROUTE_ENABLED=false` to disable the OmniRoute container. The server refreshes descriptions daily or when you click **Build maps now**.
+   Set `AI_MAP_BASE_URL`, `AI_MAP_API_KEY`, and `AI_MAP_MODEL` in `.env`. Any OpenAI-compatible endpoint works (such as OpenAI, Anthropic, Mistral, or Ollama). Then restart the server: `docker compose up -d server`. Explicit settings override OmniRoute auto-wiring. Set `OMNIROUTE_ENABLED=false` to disable the OmniRoute container. The server refreshes descriptions daily or when you click **Rebuild map** on the dashboard.
 
    **`127.0.0.1` in this URL means the server container, not your machine.** An
    endpoint you reach on the host — a local Ollama, or an SSH tunnel to a
@@ -106,5 +106,5 @@ If you require a key, you must also give that key to the map. Bootstrap writes t
 - The LLM is called only when a workflow changes.
 - Node content signatures (`sigs`) track changes per node. Unchanged nodes reuse existing descriptions, so requests contain only changed workflows.
 - If no workflows change, no LLM calls are made.
-- Clicking **Build maps now** forces a full refresh. Send `SIGHUP` to the server to force a re-annotation from the command line: `docker kill -s HUP po11y-server`.
+- Clicking **Rebuild map** in the dashboard's Actions group forces a full refresh. It is rate-limited to one forced build a minute. From the command line, `SIGHUP` does the same thing: `docker kill -s HUP po11y-server`.
 - Local Ollama and heuristic modes cost nothing.
