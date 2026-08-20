@@ -1,0 +1,13 @@
+# n8n /metrics with N8N_METRICS=true and every N8N_METRICS_INCLUDE_* flag left
+# at its default (off) — the exposition a fresh remote n8n serves. No
+# workflow_id label, no workflow_info gauge, no form or webhook families.
+# HELP n8n_version_info n8n version info.
+# TYPE n8n_version_info gauge
+n8n_version_info{version="v2.29.8",major="2",minor="29",patch="8"} 1
+# HELP n8n_workflow_execution_duration_seconds Duration of workflow executions
+# TYPE n8n_workflow_execution_duration_seconds histogram
+n8n_workflow_execution_duration_seconds_count{status="success",mode="trigger"} 64
+n8n_workflow_execution_duration_seconds_sum{status="success",mode="trigger"} 128.5
+# HELP n8n_process_resident_memory_bytes Resident memory size in bytes.
+# TYPE n8n_process_resident_memory_bytes gauge
+n8n_process_resident_memory_bytes 350363648

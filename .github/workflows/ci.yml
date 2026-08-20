@@ -83,13 +83,14 @@ jobs:
     steps:
       - run: apk add --no-cache git
       - uses: actions/checkout@v5
-      - run: shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh
+      - run: shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh scripts/readonly-preflight.sh ci/check-readonly-preflight.sh
       # Fail if any dated '# REMOVE AFTER YYYY-MM' liability in bootstrap.sh is past.
       - run: sh ci/check-expired-markers.sh bootstrap.sh
       # Guard the A3 bug class: an overlay re-inlining grafana's entrypoint
       # silently drops the alert rules (compose replaces, never merges).
       - run: sh ci/check-grafana-entrypoint.sh
       - run: sh ci/check-dashboard-entrypoint.sh
+      - run: sh ci/check-readonly-preflight.sh
 
   interlock:
     # Proves the exposure interlock stays wired: bootstrap.sh with a

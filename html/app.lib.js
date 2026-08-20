@@ -27,16 +27,22 @@ export const safeUrl = (u) => {
 };
 
 /**
- * Substitute the `{host}` placeholder that lets one config work from every
- * device that can reach the box: config `baseUrl` wins when set, otherwise the
- * browser's own hostname.
+ * Substitute the two host placeholders that let one config work from every
+ * device that can reach the box.
+ *
+ * `{host}` is the monitored n8n: config `baseUrl` wins when set, otherwise the
+ * browser's own hostname. `{self}` is always the browser's own hostname — the
+ * box serving this dashboard. They differ on the read-only topology, where n8n
+ * lives elsewhere but Prometheus and Grafana run alongside the dashboard, so a
+ * `{host}`-built link to a local service would point at the remote n8n's host.
  *
  * @param {string} u
  * @param {{ baseUrl?: string }} cfg
  * @param {string} hostname
  */
 export const withHost = (u, cfg = {}, hostname = '') => String(u ?? '')
-  .replaceAll('{host}', (typeof cfg.baseUrl === 'string' && cfg.baseUrl) ? cfg.baseUrl : hostname);
+  .replaceAll('{host}', (typeof cfg.baseUrl === 'string' && cfg.baseUrl) ? cfg.baseUrl : hostname)
+  .replaceAll('{self}', hostname);
 
 /** Coarse "how long ago", in the largest unit that stays readable. */
 export const ago = (iso, now = Date.now()) => {

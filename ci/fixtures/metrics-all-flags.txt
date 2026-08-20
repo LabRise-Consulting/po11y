@@ -1,0 +1,23 @@
+# Trimmed n8n /metrics exposition with every N8N_METRICS_INCLUDE_* flag po11y
+# reads turned on. Sample values are arbitrary; only the family names and the
+# workflow_id label matter to scripts/readonly-preflight.sh.
+# HELP n8n_version_info n8n version info.
+# TYPE n8n_version_info gauge
+n8n_version_info{version="v2.29.8",major="2",minor="29",patch="8"} 1
+# HELP n8n_workflow_info Info about workflows
+# TYPE n8n_workflow_info gauge
+n8n_workflow_info{workflow_id="orchmrpoller0000",workflow_name="06 - MR poller",active="true"} 1
+# HELP n8n_workflow_execution_duration_seconds Duration of workflow executions
+# TYPE n8n_workflow_execution_duration_seconds histogram
+n8n_workflow_execution_duration_seconds_count{status="success",mode="trigger",workflow_id="orchmrpoller0000"} 64
+n8n_workflow_execution_duration_seconds_sum{status="success",mode="trigger",workflow_id="orchmrpoller0000"} 128.5
+# HELP n8n_form_submission_duration_seconds Duration of form submissions
+# TYPE n8n_form_submission_duration_seconds histogram
+n8n_form_submission_duration_seconds_count{workflow_id="orchfmapdigest00",form_path="orch-fmap-now",status_code="200"} 3
+# HELP n8n_webhook_request_duration_seconds Duration of webhook requests
+# TYPE n8n_webhook_request_duration_seconds histogram
+n8n_webhook_request_duration_seconds_count{workflow_id="orchfmapdigest00",method="POST",webhook_path="hook",status_code="200"} 7
+# HELP n8n_process_resident_memory_bytes Resident memory size in bytes.
+# TYPE n8n_process_resident_memory_bytes gauge
+n8n_process_resident_memory_bytes 350363648
+n8n_active_workflow_count 14
