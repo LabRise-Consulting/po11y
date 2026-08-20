@@ -89,9 +89,16 @@ printf '%s\n' "$out" | grep -q 'not writing' || fail '--check did not say it was
 cp "$TMP/env" "$TMP/env.seed"
 ENV_FILE="$TMP/env.seed" sh scripts/readonly-preflight.sh \
   --metrics-file ci/fixtures/metrics-minimal.txt >/dev/null 2>&1 || true
-for key in OMNIROUTE_JWT_SECRET OMNIROUTE_API_KEY_SECRET OMNIROUTE_ADMIN_PASSWORD; do
-  grep -q "^$key=..*" "$TMP/env.seed" || fail "seeding did not set $key"
+# Length is asserted, not just presence: the /dev/urandom fallback used where
+# openssl is absent (the lint container, a minimal host) must produce the same
+# 32/64 hex characters, not an empty string from a missing tool.
+for key in OMNIROUTE_JWT_SECRET OMNIROUTE_API_KEY_SECRET; do
+  val=$(grep "^$key=" "$TMP/env.seed" | cut -d= -f2-)
+  [ ${#val} -eq 64 ] || fail "seeding did not set $key to 32 bytes of hex (got '${val}')"
 done
+val=$(grep '^OMNIROUTE_ADMIN_PASSWORD=' "$TMP/env.seed" | cut -d= -f2-)
+[ ${#val} -eq 32 ] || fail "seeding did not set OMNIROUTE_ADMIN_PASSWORD to 16 bytes of hex (got '${val}')"
+case "$val" in *[!0-9a-f]*) fail "generated secret is not hex: '$val'" ;; esac
 grep -q '^GRAFANA_ADMIN_PASSWORD=fixture$' "$TMP/env.seed" \
   || fail 'seeding overwrote an already-set GRAFANA_ADMIN_PASSWORD'
 first="$(cat "$TMP/env.seed")"
