@@ -15,7 +15,10 @@
       { "name": "n8n", "sub": "workflow editor", "href": "http://{host}:5678/",
         "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}" },
       { "name": "System health", "sub": "n8n process metrics", "href": "/grafana/d/adv6qmb" },
-      { "name": "Prometheus", "sub": "raw metrics", "href": "http://{host}:9090/" }
+      { "name": "Form executions", "sub": "form-trigger submissions", "href": "/grafana/d/n8n-form-executions" },
+      { "name": "Webhook executions", "sub": "webhook calls — needs N8N_METRICS_INCLUDE_WEBHOOK_METRICS upstream", "href": "/grafana/d/n8n-webhook-executions" },
+      { "name": "Grafana", "sub": "all dashboards", "href": "/grafana/" },
+      { "name": "Prometheus", "sub": "raw metrics", "href": "http://{self}:9090/" }
     ]
   },
   "tabs": [
@@ -24,7 +27,7 @@
   ],
   "sections": {
     "executions": "Workflow executions",
-    "notifications": "Alerts"
+    "notifications": "Notifications"
   },
   "metrics": {
     "heading": "Metrics",

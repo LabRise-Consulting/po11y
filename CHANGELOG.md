@@ -4,6 +4,41 @@ Notable changes to Po11y. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `scripts/readonly-preflight.sh`, the read-only topology's stand-in for
+  `bootstrap.sh`. It checks that the n8n public API accepts the key and that
+  `/metrics` is reachable, then names every `N8N_METRICS_INCLUDE_*` flag the
+  remote has off together with the po11y surface each one feeds — a read-only
+  operator cannot set those flags themselves, so the script's job is telling
+  them exactly what to ask the remote's admin for. Verdicts read each metric's
+  `# TYPE` declaration rather than its samples: n8n registers a metric when its
+  flag is on, but a histogram carries no series until the first request it
+  measures, so a correctly configured instance that has served no webhook call
+  yet would otherwise be reported as missing the flag. It also generates
+  `GRAFANA_ADMIN_PASSWORD` and the three OmniRoute secrets, writing only
+  variables that are still empty. `ci/check-readonly-preflight.sh` asserts the
+  verdicts in both directions against two fixture expositions.
+- Monitoring cards for the Form and Webhook execution dashboards, plus a
+  Grafana card for the dashboard list, in both config templates. Grafana
+  provisions four dashboards; the templates linked one.
+
+### Fixed
+
+- The OmniRoute overlay could not start on a read-only stack. Its three
+  secrets are `:?`-required and were generated only by `bootstrap.sh`, which
+  that topology never runs, so the documented LLM architecture map needed a
+  hand-run `openssl` before compose would come up. `readonly-preflight.sh`
+  seeds them.
+- Links to Prometheus resolved to the monitored n8n's host rather than the box
+  serving the dashboard. `{host}` follows `config.json`'s `baseUrl`, which on
+  the read-only topology points at a remote n8n, so `http://{host}:9090/` left
+  the local Prometheus unreachable from its own card. New `{self}` placeholder
+  always resolves to the browser's hostname; both config templates use it for
+  Prometheus, and the bundled one for OmniRoute.
+
 ## [0.1.0] - 2026-08-20
 
 First tagged release, and the first public one. Everything below is the

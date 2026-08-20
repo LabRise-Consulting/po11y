@@ -13,13 +13,9 @@ The Architecture tab always works because code builds its structure. An LLM is o
    On the read-only stack, wire it up by hand:
 
    1. Fill the three gateway secrets in `.env`. Compose refuses to start
-      while they are empty, and `.env.example` ships them empty. Generate
-      values with:
-      ```sh
-      openssl rand -hex 32   # OMNIROUTE_JWT_SECRET
-      openssl rand -hex 32   # OMNIROUTE_API_KEY_SECRET
-      openssl rand -hex 16   # OMNIROUTE_ADMIN_PASSWORD
-      ```
+      while they are empty, and `.env.example` ships them empty.
+      `./scripts/readonly-preflight.sh` generates all three (and leaves any
+      value you already set alone).
    2. Point the map at the gateway. Set all three — the map stays heuristic
       unless every one is set:
       ```sh

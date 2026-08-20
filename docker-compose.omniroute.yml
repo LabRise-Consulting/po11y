@@ -1,7 +1,8 @@
 # Bundled OmniRoute LLM gateway (https://github.com/diegosouzapw/OmniRoute):
 # one OpenAI-compatible endpoint with provider routing/fallback, so the AI map
 # prose works without a per-provider key in po11y. Overlay — bootstrap includes
-# it unless OMNIROUTE_ENABLED=false in .env. On the read-only stack, add it by hand:
+# it unless OMNIROUTE_ENABLED=false in .env. On the read-only stack, the three
+# secrets below come from ./scripts/readonly-preflight.sh; then add the overlay:
 #   docker compose -f docker-compose.readonly.yml -f docker-compose.omniroute.yml up -d
 # Providers (keys / OAuth) are configured once in the dashboard at
 # http://127.0.0.1:20128 (password: OMNIROUTE_ADMIN_PASSWORD in .env).
@@ -23,10 +24,10 @@ services:
       - PORT=20128
       - DATA_DIR=/app/data
       # Session signing + at-rest encryption of stored provider keys.
-      - JWT_SECRET=${OMNIROUTE_JWT_SECRET:?run ./bootstrap.sh (or set in .env)}
-      - API_KEY_SECRET=${OMNIROUTE_API_KEY_SECRET:?run ./bootstrap.sh (or set in .env)}
+      - JWT_SECRET=${OMNIROUTE_JWT_SECRET:?run ./bootstrap.sh — or ./scripts/readonly-preflight.sh on the read-only stack}
+      - API_KEY_SECRET=${OMNIROUTE_API_KEY_SECRET:?run ./bootstrap.sh — or ./scripts/readonly-preflight.sh on the read-only stack}
       # First-boot dashboard password; changeable later in the dashboard.
-      - INITIAL_PASSWORD=${OMNIROUTE_ADMIN_PASSWORD:?run ./bootstrap.sh (or set in .env)}
+      - INITIAL_PASSWORD=${OMNIROUTE_ADMIN_PASSWORD:?run ./bootstrap.sh — or ./scripts/readonly-preflight.sh on the read-only stack}
     volumes:
       - omniroute_data:/app/data
 

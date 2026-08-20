@@ -22,9 +22,11 @@ See [`config.example.json`](../config.example.json). All fields are optional.
 | `formProxy` | Enables the `/form/` proxy endpoint (default `true`; set `false` on the read-only stack unless forward-auth is enabled). When `false`, fieldless form triggers link directly to n8n form pages. |
 | `scopes` | Enables multi-team scope selectors: `{ "<scope>": "Display name" }`. Keys must match `[a-z0-9-]+`. |
 
-### Hostname substitution (`{host}` and `baseUrl`)
+### Hostname substitution (`{host}`, `{self}` and `baseUrl`)
 
 Occurrences of `{host}` in `href` and `src` fields are replaced with the browser's hostname. Set `baseUrl` to a specific hostname if deep links (such as n8n editor links) should point to a different host than the dashboard. Relative path links like `/grafana` do not use `{host}`.
+
+`{self}` is always the browser's hostname, and ignores `baseUrl`. Use it for services that run beside the dashboard, such as Prometheus. This matters on the read-only topology: `baseUrl` points at the remote n8n there, so a `{host}` link to a local service resolves to the remote host and fails.
 
 ### Multi-team views (`scopes`)
 

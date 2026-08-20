@@ -22,7 +22,10 @@
 // "{host}" in any href/src is replaced with the browser's current hostname,
 // so one config works from every device that can reach the box. Set
 // config.json's "baseUrl" (a bare host, not a URL prefix) to substitute a
-// different host instead — e.g. a remote n8n on the read-only stack.
+// different host instead — e.g. a remote n8n on the read-only stack. "{self}"
+// ignores baseUrl and always resolves to the browser's hostname: it is the box
+// serving this dashboard, so links to Prometheus and Grafana keep working when
+// baseUrl points n8n somewhere else.
 
 // Pure helpers (escaping, url policy, scope routing, range labels, …) live in
 // app.lib.js so they can be unit-tested (node --test "html/**/*.test.mjs");

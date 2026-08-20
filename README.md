@@ -187,16 +187,24 @@ LLM prose, start the gateway overlay and set the three `AI_MAP_*` variables in
 ### Prerequisites
 
 1. An n8n API key with read permissions (`workflow:list`, `workflow:read`, `execution:list`, `execution:read`).
-2. (Optional) Set `N8N_METRICS=true` on the remote n8n instance to enable Prometheus metric scraping. See [docs/security.md](docs/security.md#upstream-n8n_metrics-considerations).
+2. (Optional) Set `N8N_METRICS=true` on the remote n8n instance to enable Prometheus metric scraping, along with the `N8N_METRICS_INCLUDE_*` flags `./scripts/readonly-preflight.sh` reports as missing. See [docs/security.md](docs/security.md#upstream-n8n_metrics-considerations).
 
 ### Setup Commands
 
 ```sh
 git clone https://github.com/labrise-consulting/po11y && cd po11y
-cp .env.example .env                         # Configure N8N_API_URL, N8N_API_KEY, N8N_METRICS_TARGET, GRAFANA_ADMIN_PASSWORD
+cp .env.example .env                         # Configure N8N_API_URL, N8N_API_KEY, N8N_METRICS_TARGET
 cp config.readonly.example.json config.json   # Read-only configuration template
+./scripts/readonly-preflight.sh              # Check the remote, seed the generated secrets
 docker compose -f docker-compose.readonly.yml up -d
 ```
+
+`readonly-preflight.sh` is this topology's stand-in for `bootstrap.sh`. It
+verifies the API key and the `/metrics` endpoint, names any upstream
+`N8N_METRICS_INCLUDE_*` flag that is off (with the po11y surface each one
+feeds), and generates `GRAFANA_ADMIN_PASSWORD` plus the OmniRoute secrets the
+optional gateway overlay requires. It writes only variables that are empty, so
+re-running it is safe. Pass `--check` to report without writing.
 
 ### Key Environment Variables
 
@@ -206,9 +214,10 @@ docker compose -f docker-compose.readonly.yml up -d
 | `N8N_API_KEY` | Yes | Read-only API key |
 | `N8N_PUBLIC_URL` | No | Base URL a reader opens, used for links in tool results and alerts (default: `N8N_API_URL`) |
 | `N8N_METRICS_TARGET` | Yes | `host:port` for n8n `/metrics` endpoint |
-| `GRAFANA_ADMIN_PASSWORD` | Yes | Grafana admin password |
+| `GRAFANA_ADMIN_PASSWORD` | Yes | Grafana admin password — `readonly-preflight.sh` generates one when empty |
 | `SERVER_POLL_INTERVAL` | No | Server poll interval in seconds (default: `30`) |
 | `EXECUTIONS_LIMIT` | No | Recent execution window size (default: `250`, which is n8n's maximum) |
+| `PO11Y_RETENTION_DAYS` | No | How long po11y keeps executions in its own store (default: `30`) |
 
 The poll interval sets how fresh the dashboard is, and it also sets what the
 dashboard can see at all. Po11y knows a workflow is running only if a poll
@@ -222,6 +231,28 @@ sure that `EXECUTIONS_LIMIT` stays larger than the number of executions that
 complete in one interval. The default is already n8n's maximum, so an instance
 that completes more than 250 executions per interval must decrease
 `SERVER_POLL_INTERVAL`.
+
+### Getting more out of it
+
+Two settings decide how much history the dashboard has. `EXECUTIONS_LIMIT`
+(default `250`, n8n's maximum) is how much po11y reads per poll, and
+`PO11Y_RETENTION_DAYS` (default `30`) is how long po11y keeps it. The store
+outlives n8n's own pruning: once an execution is in po11y's SQLite, shrinking
+`EXECUTIONS_DATA_MAX_AGE` upstream does not remove it.
+
+Three optional pieces need no database and are off by default:
+
+| Add | How | What it gives |
+|---|---|---|
+| LLM prose on the architecture map | `docker compose -f docker-compose.readonly.yml -f docker-compose.omniroute.yml up -d`, then set `AI_MAP_BASE_URL`, `AI_MAP_API_KEY`, `AI_MAP_MODEL` | Written per-workflow descriptions instead of heuristic labels. See [docs/ai-map.md](docs/ai-map.md) |
+| Alertmanager | `docker compose -f docker-compose.readonly.yml -f docker-compose.alerts.yml up -d` | Prometheus rules and routing, alongside the server's own watchdog. See [docs/alerting.md](docs/alerting.md) |
+| Data table views | `PO11Y_DATATABLES` | Read-only browsing of n8n Data Tables. See [docs/configuration.md](docs/configuration.md) |
+
+What stays out of reach without direct database access: the **n8n Workflow &
+Execution Analytics** dashboard and four of the five Grafana alert rules query
+n8n's Postgres, which this topology does not connect to, and the MCP `po11y_sql`
+tool reads through that same datasource. The server's watchdog covers the same
+alerting ground over the API.
 
 ## Feature Comparison
 

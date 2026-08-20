@@ -58,6 +58,21 @@ test('withHost replaces every occurrence, and tolerates nullish input', () => {
   assert.equal(withHost(undefined, {}, 'h'), '');
 });
 
+test('withHost resolves {self} to the browser hostname even when baseUrl is set', () => {
+  assert.equal(withHost('http://{self}:9090/', { baseUrl: 'n8n.remote' }, 'box.local'),
+    'http://box.local:9090/');
+});
+
+test('withHost keeps {host} and {self} apart in one string', () => {
+  assert.equal(withHost('{host}|{self}', { baseUrl: 'n8n.remote' }, 'box.local'),
+    'n8n.remote|box.local');
+});
+
+test('withHost replaces every {self} occurrence, and tolerates a missing hostname', () => {
+  assert.equal(withHost('{self}/{self}', { baseUrl: 'n8n.remote' }, 'h'), 'h/h');
+  assert.equal(withHost('http://{self}:9090/', {}, ''), 'http://:9090/');
+});
+
 // ---- ago --------------------------------------------------------------------
 test('ago reports minutes, hours and days, and "just now" under a minute', () => {
   const now = Date.parse('2026-08-06T12:00:00Z');

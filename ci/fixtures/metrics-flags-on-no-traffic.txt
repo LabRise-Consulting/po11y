@@ -1,0 +1,21 @@
+# n8n /metrics with every N8N_METRICS_INCLUDE_* flag po11y reads turned ON, on
+# an instance that has served no webhook request, no form submission and no
+# workflow execution yet. n8n registers each metric at boot — which emits the
+# HELP/TYPE header — but a histogram carries no series until the first event it
+# measures. Read as samples rather than declarations, this exposition is
+# indistinguishable from every flag being off.
+# HELP n8n_version_info n8n version info.
+# TYPE n8n_version_info gauge
+n8n_version_info{version="v2.29.8",major="2",minor="29",patch="8"} 1
+# HELP n8n_workflow_info Info about workflows
+# TYPE n8n_workflow_info gauge
+n8n_workflow_info{workflow_id="orchmrpoller0000",workflow_name="06 - MR poller",active="true"} 1
+# HELP n8n_workflow_execution_duration_seconds Duration of workflow executions
+# TYPE n8n_workflow_execution_duration_seconds histogram
+# HELP n8n_form_submission_duration_seconds Duration of form submissions (POST) served by n8n, in seconds.
+# TYPE n8n_form_submission_duration_seconds histogram
+# HELP n8n_webhook_request_duration_seconds Duration of webhook requests served by n8n, in seconds.
+# TYPE n8n_webhook_request_duration_seconds histogram
+# HELP n8n_process_resident_memory_bytes Resident memory size in bytes.
+# TYPE n8n_process_resident_memory_bytes gauge
+n8n_process_resident_memory_bytes 350363648
