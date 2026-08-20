@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, mergeNotifications, envNumber, unreachableAlert, DEFAULT_FEED_MAX } from './watchdog.mjs';
+import { summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, mergeNotifications, envNumber, unreachableAlert, DEFAULT_FEED_MAX , aiMapDegradedAlert } from './watchdog.mjs';
 
 const T = (iso) => new Date(iso).getTime();
 const NOW = T('2026-07-28T12:00:00Z');
@@ -433,4 +433,36 @@ test('.env.example documents the same ALERT_FEED_MAX default the code uses', () 
   const env = readFileSync(new URL('../.env.example', import.meta.url), 'utf8');
   assert.match(env, new RegExp(`default ${DEFAULT_FEED_MAX}\\)`), 'comment names the default');
   assert.match(env, new RegExp(`^ALERT_FEED_MAX=${DEFAULT_FEED_MAX}$`, 'm'));
+});
+
+// ---- aiMapDegradedAlert -----------------------------------------------------
+
+test('aiMapDegradedAlert is shaped like every other alert, so reconcile handles it', () => {
+  const a = aiMapDegradedAlert('LLM POST -> 503');
+  assert.equal(a.rule, 'ai-map-degraded');
+  assert.equal(a.workflowId, '', 'no workflow to link to');
+  assert.equal(a.workflowName, 'Architecture map');
+  assert.equal(a.severity, 'info', 'the map still published — only its prose fell back');
+  assert.match(a.message, /503/);
+  assert.match(a.message, /heuristic/i, 'must say what the reader is looking at instead');
+});
+
+test('aiMapDegradedAlert scrubs the LLM base URL out of the published message', () => {
+  const a = aiMapDegradedAlert('POST http://omniroute.internal:20128/v1/chat/completions -> 503',
+    { aiBase: 'http://omniroute.internal:20128/v1' });
+  assert.ok(!a.message.includes('omniroute.internal'), `internal host leaked: ${a.message}`);
+  assert.match(a.message, /the LLM gateway/);
+});
+
+test('aiMapDegradedAlert survives a nullish reason rather than printing undefined', () => {
+  assert.match(aiMapDegradedAlert(null).message, /unknown error/);
+});
+
+test('alertsToNotifications maps severity onto the feed status, and guesses failure', () => {
+  const [info] = alertsToNotifications([{ ...aiMapDegradedAlert('503'), kind: 'firing' }]);
+  assert.equal(info.status, 'info');
+  const [legacy] = alertsToNotifications([{ rule: 'failing', workflowId: 'wf1', workflowName: 'Ingest', title: 't', message: 'm', kind: 'firing' }]);
+  assert.equal(legacy.status, 'failure', 'a rule with no severity must not become info');
+  const [done] = alertsToNotifications([{ rule: 'ai-map-degraded', workflowId: '', workflowName: 'Architecture map', severity: 'info', kind: 'resolved' }]);
+  assert.equal(done.status, 'success', 'a recovery is a recovery whatever the severity was');
 });

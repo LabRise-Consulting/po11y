@@ -24,6 +24,19 @@ Notable changes to Po11y. Format follows
 - Monitoring cards for the Form and Webhook execution dashboards, plus a
   Grafana card for the dashboard list, in both config templates. Grafana
   provisions four dashboards; the templates linked one.
+- A degraded architecture map now says so on the dashboard. When an LLM is
+  configured and the build cannot reach it, the map still publishes with
+  heuristic descriptions — until now the only trace was a stderr line and
+  `po11y_ai_map_llm_up`, so a dashboard reader saw prose quietly turn generic
+  with no way to tell a deliberate local map from a gateway that was down.
+  The build now raises an `info` alert through the watchdog, which gives it
+  dedupe, renotify and recovery on the same terms as every other rule, so it
+  lands in `notifications.json`, the dashboard's notifications section, and the
+  `ALERT_WEBHOOK_URL` push. It fires only where `AI_MAP_*` is set: a stack
+  without an LLM is heuristic by choice, not degraded.
+- `ai-map.json` carries an `llm` block — `{ configured, ok, error }` — and the
+  Architecture page's footer reads `by heuristic — LLM unavailable (…)` rather
+  than `by heuristic`, which had looked like a choice.
 
 ### Fixed
 
@@ -38,6 +51,12 @@ Notable changes to Po11y. Format follows
   the local Prometheus unreachable from its own card. New `{self}` placeholder
   always resolves to the browser's hostname; both config templates use it for
   Prometheus, and the bundled one for OmniRoute.
+- `alertsToNotifications` hardcoded `status: "failure"` for everything that was
+  not a recovery, so an alert's `severity` never reached the feed. Every rule
+  that existed was a failure, so nothing had exposed it. Statuses now follow
+  severity, with anything unrecognised still reported as a failure — the rules
+  that predate severity carry none, and under-reporting a real failure is the
+  worse direction to guess in.
 
 ## [0.1.0] - 2026-08-20
 

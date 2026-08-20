@@ -89,3 +89,20 @@ test('buildFeeds reports the ai-map action, not only its degraded reason', async
   const { aiAction } = await buildFeeds(seed(), { stamp: STAMP, now: NOW });
   assert.equal(typeof aiAction, 'string', 'the caller needs the action to read the LLM outcome');
 });
+
+test('the ai-map carries why its prose reads the way it does', async () => {
+  const { aiMap } = await buildFeeds(seed(), { stamp: STAMP, now: NOW });
+  assert.deepEqual(aiMap.llm, { configured: false, ok: null, error: null },
+    'no LLM configured is neither ok nor degraded');
+});
+
+test('a configured LLM that failed marks the map degraded, with the reason', async () => {
+  const llm = async () => { throw new Error('LLM POST -> 503'); };
+  const { aiMap, degraded } = await buildFeeds(seed(), {
+    stamp: STAMP, now: NOW, ai: { forced: true, aiConfigured: true, model: 'gpt-x', llm },
+  });
+  assert.equal(aiMap.model, 'heuristic');
+  assert.equal(aiMap.llm.configured, true);
+  assert.equal(aiMap.llm.ok, false);
+  assert.match(String(aiMap.llm.error || degraded), /503/);
+});

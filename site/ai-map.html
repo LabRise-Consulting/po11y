@@ -242,8 +242,15 @@ async function resolveN8nBase() {
   document.getElementById("eyebrow").textContent = d.eyebrow || "architecture";
   document.getElementById("title").textContent = d.title || "How it links";
   document.getElementById("lede").textContent = d.lede || "";
+  // "by heuristic" alone reads as a choice. When an LLM was configured and the
+  // text is heuristic anyway, say that it failed and why — otherwise a reader
+  // has no way to tell a deliberate local map from a gateway that is down.
+  const llm = d.llm || {};
+  const why = llm.configured && llm.ok === false
+    ? ` — LLM unavailable${llm.error ? ` (${llm.error})` : ""}`
+    : "";
   document.getElementById("footer").textContent =
-    `generated ${new Date(d.generated_at).toLocaleString()} by ${d.model || "?"} from the live n8n workflow export`;
+    `generated ${new Date(d.generated_at).toLocaleString()} by ${d.model || "?"} from the live n8n workflow export${why}`;
 
   const COLS = d.columns.slice(0, 6);
   const N = d.nodes.filter((n) => Number.isInteger(n.col) && n.col >= 0 && n.col < COLS.length);

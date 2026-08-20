@@ -16,6 +16,7 @@
 // process — two pushers means two messages.
 import {
   summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, unreachableAlert,
+  aiMapDegradedAlert,
 } from './watchdog.mjs';
 import { isProduction } from './exec-status.mjs';
 import { getKv, setKv } from './db.mjs';
@@ -104,4 +105,41 @@ export function unreachableNotifications(db, {
  */
 export function n8nReachable({ syncedOnce, consecutiveFailures }) {
   return !!syncedOnce && consecutiveFailures === 0;
+}
+
+/**
+ * The ai-map's LLM health, as a notification.
+ *
+ * Scoped to its own rule for the reason the unreachable pass is: a rebuild
+ * knows whether the LLM answered, and nothing else. Unlike that pass this one
+ * runs on EVERY rebuild, degraded or not, so the recovery comes from here too
+ * — `degraded: null` reconciles an empty alert list within the scope, which is
+ * exactly "no longer true".
+ *
+ * The caller must only run this when an LLM is actually configured: a stack
+ * with no AI_MAP_* is not degraded, it is heuristic by choice, and alerting on
+ * it would be noise on every read-only deployment.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{degraded: (string|null), cfg: object, now?: number, renotifyMin?: number,
+ *   baseUrl?: string, aiBase?: string, log?: Function}} opts
+ */
+export function aiMapNotifications(db, {
+  degraded, cfg, now = Date.now(), renotifyMin = 360, baseUrl = '', aiBase = '', log = console.error,
+} = {}) {
+  const nothing = { notifications: [], fire: [] };
+  if (!cfg?.enabled) return nothing;
+  try {
+    let prevState = null;
+    try { prevState = JSON.parse(getKv(db, STATE_KEY) ?? 'null'); } catch { /* corrupt: start over */ }
+    const { fire, state } = reconcileAlerts(
+      degraded ? [aiMapDegradedAlert(degraded, { aiBase })] : [], prevState,
+      { now, renotifyMin, rules: ['ai-map-degraded'] },
+    );
+    setKv(db, STATE_KEY, JSON.stringify(state));
+    return { notifications: alertsToNotifications(fire, { now, baseUrl }), fire };
+  } catch (e) {
+    log(`server: ai-map alert reconciliation failed — ${e.message}`);
+    return nothing;
+  }
 }

@@ -13,7 +13,7 @@ import { every } from './timers.mjs';
 import { sampleTables } from './datatables.mjs';
 import { buildFeeds, nextAiMap } from './feeds.mjs';
 import { loadPack, evaluate, reconcileExpectations, toNotifications } from './expectations.mjs';
-import { alertNotifications, unreachableNotifications, n8nReachable } from './alerts.mjs';
+import { alertNotifications, unreachableNotifications, aiMapNotifications, n8nReachable } from './alerts.mjs';
 import { route } from './http.mjs';
 import { makeRequestHandler } from './request.mjs';
 import { makeCachedFeeds, makeStore, makePrometheus, makeN8n, makeGrafana, makeDataTables } from './mcp/sources.mjs';
@@ -278,10 +278,25 @@ async function rebuild() {
       error: lastSyncError, cfg: ALERTS, now, renotifyMin: RENOTIFY_MIN, baseUrl: N8N_PUBLIC_URL,
     });
   }
-  const pushFire = [...unreachable.fire, ...alertFire];
+  // The ai-map's LLM, on every rebuild that actually asked it something. The
+  // action gate matters: republish/keep-annotated/skip-fresh return without
+  // calling the LLM, so a null `degraded` from those branches is "did not ask",
+  // not "asked and it worked" — reconciling on it would publish a recovery the
+  // build has no evidence for. Only runs where an LLM is configured: a stack
+  // without AI_MAP_* is heuristic by choice, not degraded.
+  let aiMapAlert = { notifications: [], fire: [] };
+  if (aiConfigured && built.aiAction === 'publish') {
+    aiMapAlert = aiMapNotifications(db, {
+      degraded: built.degraded, cfg: ALERTS, now, renotifyMin: RENOTIFY_MIN,
+      baseUrl: N8N_PUBLIC_URL, aiBase: AI_BASE,
+    });
+  }
+
+  const pushFire = [...unreachable.fire, ...alertFire, ...aiMapAlert.fire];
   const fresh = [
     ...unreachable.notifications,   // an outage outranks a threshold
     ...alertNotes,
+    ...aiMapAlert.notifications,
     ...toNotifications(expectationFire, now),
   ];
 

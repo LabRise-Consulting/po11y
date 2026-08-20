@@ -34,7 +34,20 @@ export async function buildFeeds(db, { stamp, now = Date.parse(stamp), prevAiMap
   // CAUTION: on 'republish' buildAiMap returns the caller's prevAiMap object
   // mutated. Stamp the returned map, never prev.
   const aiMap = built.ai?.map ?? null;
-  if (aiMap) aiMap.generated_at = stamp;
+  if (aiMap) {
+    aiMap.generated_at = stamp;
+    // Why the prose reads the way it does, carried on the document so a reader
+    // of the Architecture page can tell a deliberate heuristic map from an LLM
+    // that could not be reached. `ok` is false only when an LLM was configured
+    // and the text is heuristic anyway; an unconfigured stack is neither ok nor
+    // degraded, which is what `configured: false` says.
+    const configured = !!ai.aiConfigured;
+    aiMap.llm = {
+      configured,
+      ok: configured ? aiMap.model !== 'heuristic' : null,
+      error: built.ai?.degraded ?? null,
+    };
+  }
 
   return {
     feeds: { ...docs, 'status.json': { generated_at: stamp, ...status } },
