@@ -12,6 +12,13 @@
 # and cannot push to a protected one. If `main` ever gets branch protection,
 # create an unprotected `cla-signatures` branch by hand and point `branch:` at
 # it; the action will not create it for you.
+#
+# `signatures/version1/cla.json` must stay in the repository. The action creates
+# it on the first pull request it ever sees, and that first run then FAILS with
+# "Committers ... have to sign the CLA" even for an allowlisted author — the
+# file is created and read in the same pass. Re-running the job passes. Deleting
+# the file arms the same one-off failure for the next contributor, who will read
+# it as a rejection of their pull request. See signatures/README.md.
 
 name: CLA
 
