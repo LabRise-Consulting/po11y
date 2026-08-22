@@ -16,6 +16,14 @@ You can run all CI checks locally without starting the Docker stack:
 node --test "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" \
   "server/**/*.test.mjs"
 
+# The same tests with the coverage floor CI applies. The command exits 1 if
+# coverage falls below a threshold. Use whole numbers: node truncates a
+# fractional threshold.
+node --test --experimental-test-coverage --test-coverage-lines=95 \
+  --test-coverage-branches=80 --test-coverage-functions=90 \
+  "html/**/*.test.mjs" "site/**/*.test.mjs" "lib/**/*.test.mjs" \
+  "server/**/*.test.mjs"
+
 # Shell script linting — the same list the `lint` job passes
 shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh \
   ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh \

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { esc, safeUrl, withHost, ago, refreshMs, actionKey, formCards,
   withRebuildCard, rebuildMessage,
   scopeKeys, pickScope, feedUrl, scopedSrc, withTab, metricsRangeLabel,
-  execDot, runningText,
+  execDot, runningText, execRows,
   routeSlug, parseHash, resolveRoute, routeHash } from './app.lib.js';
 
 // ---- esc --------------------------------------------------------------------
@@ -242,6 +242,56 @@ test('withTab passes an id-less tab through and appends ?tab= otherwise', () => 
   assert.equal(withTab({ src: '/site/list.html' }), '/site/list.html');
   assert.equal(withTab({ id: 'runs', src: '/site/list.html' }), '/site/list.html?tab=runs');
   assert.equal(withTab({ id: 'runs', src: '/site/list.html?x=1' }), '/site/list.html?x=1&tab=runs');
+});
+
+// ---- execRows ---------------------------------------------------------------
+// 50 rows, named so the filter target sits well past the display cap. Fewer
+// rows than the cap would pass against the bug this guards: the old code
+// capped first, so the defect only appears once the list is longer than 10.
+const fifty = Array.from({ length: 50 }, (_, i) =>
+  ({ name: `Scale test ${String(i + 1).padStart(2, '0')}`, count: 50 - i }));
+
+test('execRows finds a workflow that sits past the display cap', () => {
+  // The regression: the filter searched the already-capped list, so a name
+  // ranked below the tenth busiest reported "no match" for a live workflow.
+  const { rows, total } = execRows(fifty, 'test 47');
+  assert.equal(total, 1);
+  assert.deepEqual(rows.map((w) => w.name), ['Scale test 47']);
+});
+
+test('execRows caps the visible rows but counts the whole filtered set', () => {
+  // total drives the "show all N" label, so it must not be the capped length.
+  const { rows, total, hasMore } = execRows(fifty, '');
+  assert.equal(rows.length, 10);
+  assert.equal(total, 50);
+  assert.equal(hasMore, true);
+});
+
+test('execRows returns every match when expanded', () => {
+  const { rows, total, hasMore } = execRows(fifty, '', { expanded: true });
+  assert.equal(rows.length, 50);
+  assert.equal(total, 50);
+  assert.equal(hasMore, true, 'the toggle still needs to offer "show less"');
+});
+
+test('execRows reports no match and no data as the same emptiness', () => {
+  // The caller tells the two apart by whether a filter is set, so both cases
+  // have to come back with total 0 rather than one of them throwing.
+  assert.equal(execRows(fifty, 'nothing matches this').total, 0);
+  assert.equal(execRows([], '').total, 0);
+  assert.equal(execRows(undefined, '').total, 0);
+});
+
+test('execRows matches case-insensitively and survives a nameless row', () => {
+  assert.equal(execRows(fifty, 'SCALE TEST 03').total, 1);
+  assert.equal(execRows([{ count: 1 }, { name: 'Real', count: 1 }], 'real').total, 1);
+});
+
+test('execRows leaves the given order alone', () => {
+  // status.json is already sorted busiest first; re-sorting here would fight
+  // the server and make the visible ten the wrong ten.
+  const { rows } = execRows(fifty, '', { limit: 3 });
+  assert.deepEqual(rows.map((w) => w.count), [50, 49, 48]);
 });
 
 // ---- metricsRangeLabel ------------------------------------------------------

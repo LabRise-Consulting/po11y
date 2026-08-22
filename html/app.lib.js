@@ -325,6 +325,33 @@ export const execDot = (w) => (w?.errors ? 'fail' : (w?.running ? 'run' : 'ok'))
  */
 export const runningText = (n) => (n ? `${n} running` : '');
 
+/**
+ * Choose which execution rows the Overview shows, and how many matched.
+ *
+ * The filter runs BEFORE the display cap. status.json carries every workflow in
+ * the recent window, so a name that matches only past the cap must still be
+ * findable; capping first made workflow #11 unreachable, because the filter
+ * then searched a list that workflow had already been trimmed out of.
+ *
+ * `total` is the size of the filtered set, not of the visible slice — the
+ * "show all N" button reports it.
+ *
+ * @param {Array<{name?: string}>} [byWorkflow] - rows from status.json
+ * @param {string} [filter] - substring match on the name; empty matches all
+ * @param {{limit?: number, expanded?: boolean}} [opts]
+ * @returns {{rows: object[], total: number, hasMore: boolean}}
+ */
+export function execRows(byWorkflow, filter = '', { limit = 10, expanded = false } = {}) {
+  const f = String(filter ?? '').toLowerCase();
+  const matched = (byWorkflow || []).filter(
+    (w) => !f || String(w?.name ?? '').toLowerCase().includes(f));
+  return {
+    rows: expanded ? matched : matched.slice(0, limit),
+    total: matched.length,
+    hasMore: matched.length > limit,
+  };
+}
+
 // ---- metrics ----------------------------------------------------------------
 
 /**
