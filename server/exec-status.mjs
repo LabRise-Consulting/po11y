@@ -40,6 +40,22 @@ export const FAILED_STATUSES = Object.freeze(['error', 'crashed']);
 
 const FAILED = new Set(FAILED_STATUSES);
 
+// The denominator under FAILED_STATUSES: runs that reached a verdict of their
+// own, either way. Derived from FAILED_STATUSES rather than spelled out, so
+// every failed status is a finished status by construction — that containment
+// is what makes errors/executions a rate bounded by 1 rather than two counters
+// that happen to be near each other.
+//
+// `canceled` is deliberately NOT here, for the same reason it is not a failure:
+// a human stopped the run, so it never reached a verdict. Counting it in the
+// denominator would make every cancellation read as a dip in success rate.
+// `new`, `running` and `waiting` are not finished at all.
+//
+// Consumer: db.mjs's workflow_execution_totals triggers.
+
+/** n8n execution statuses that mean "this run finished on its own, either way". */
+export const FINISHED_STATUSES = Object.freeze(['success', ...FAILED_STATUSES]);
+
 /**
  * Did this execution fail?
  *

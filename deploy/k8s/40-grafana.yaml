@@ -68,9 +68,14 @@ spec:
                 secretKeyRef:
                   name: po11y-secrets
                   key: DB_POSTGRESDB_PASSWORD
-            # Deep-link host baked into the dashboard JSON by the entrypoint sed.
+            # The address this stack publishes on.
             - name: BIND_ADDR
               value: "127.0.0.1"
+            # Host a reader's browser reaches n8n at — baked into the dashboard
+            # JSON by the entrypoint sed. Empty falls back to BIND_ADDR; set it
+            # when n8n is not on the address the dashboards are served from.
+            - name: N8N_LINK_HOST
+              value: ""
             - name: GF_PATHS_PROVISIONING
               value: "/tmp/grafana-provisioning"
             # http://${BIND_ADDR}:${DASHBOARD_PORT}/grafana/ with defaults.

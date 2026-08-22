@@ -74,10 +74,14 @@ services:
       - PO11Y_RO_PASSWORD=${PO11Y_RO_PASSWORD:-}
       # Grafana interpolates ${VAR} in provisioning YAML but NOT in dashboard
       # JSON — the entrypoint seds the n8n deep-link host into a rendered copy.
-      # The n8n deep links target BIND_ADDR:5678; with a remote n8n that host is
-      # elsewhere, so those links can 404. Set BIND_ADDR to the remote host name
-      # if you want them to resolve — the panels/metrics work regardless.
+      # BIND_ADDR stays what it says: the address this stack publishes on.
       - BIND_ADDR=${BIND_ADDR:-127.0.0.1}
+      # The host a reader's browser reaches the REMOTE n8n at, for the deep
+      # links in the dashboards. On this topology that is never BIND_ADDR: n8n
+      # is on another machine, and binding to its address would fail. Defaults
+      # to BIND_ADDR (correct on the bundled stack); set it here to the remote
+      # host — the panels and metrics work either way.
+      - N8N_LINK_HOST=${N8N_LINK_HOST:-}
       - GF_PATHS_PROVISIONING=/tmp/grafana-provisioning
       - GF_SERVER_ROOT_URL=http://${BIND_ADDR:-127.0.0.1}:${DASHBOARD_PORT:-8080}/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true

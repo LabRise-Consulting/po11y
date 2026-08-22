@@ -6,12 +6,13 @@
   ],
   "cards": {
     "Actions": [
-      { "name": "New workflow", "sub": "open the n8n editor", "href": "http://{host}:5678/workflow/new" }
+      { "name": "New workflow", "sub": "open the n8n editor", "href": "{n8n}/workflow/new" }
     ],
     "Monitoring": [
-      { "name": "n8n", "sub": "workflow editor", "href": "http://{host}:5678/",
+      { "name": "n8n", "sub": "workflow editor", "href": "{n8n}/",
         "up": "up{job=\"n8n\"}", "mem": "process_resident_memory_bytes{job=\"n8n\"}" },
       { "name": "Execution analytics", "sub": "grafana", "href": "/grafana/d/adfcxfk" },
+      { "name": "Execution health", "sub": "the same ground from po11y's own metrics, independent of n8n's database", "href": "/grafana/d/po11y-executions" },
       { "name": "System health", "sub": "n8n process metrics", "href": "/grafana/d/adv6qmb" },
       { "name": "Form executions", "sub": "form-trigger submissions", "href": "/grafana/d/n8n-form-executions" },
       { "name": "Webhook executions", "sub": "webhook calls", "href": "/grafana/d/n8n-webhook-executions" },

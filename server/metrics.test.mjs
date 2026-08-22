@@ -29,6 +29,8 @@ test('the snapshot carries the store-derived numbers', () => {
     id: 'w1',
     name: 'Nightly sync',
     errorsTotal: 1,
+    // e1 success + e2 error. e3 is still running, so it has not finished.
+    executionsTotal: 2,
     lastOkAtMs: Date.parse('2026-08-14T11:00:00.000Z'),
     runningSeconds: 900,
   });
@@ -44,7 +46,8 @@ test('an unreachable n8n renders po11y_n8n_up 0 and omits the poll timestamp ent
 test('every series carries HELP and TYPE exactly once', () => {
   const text = renderMetrics(buildSnapshot(seeded(), { now: NOW, n8nUp: 1, pollLastSuccessMs: NOW }));
   for (const name of ['po11y_n8n_up', 'po11y_poll_last_success_timestamp_seconds',
-    'po11y_workflow_errors_total', 'po11y_workflow_last_success_timestamp_seconds',
+    'po11y_workflow_errors_total', 'po11y_workflow_executions_total',
+    'po11y_workflow_last_success_timestamp_seconds',
     'po11y_workflow_running_seconds']) {
     assert.equal((text.match(new RegExp(`^# HELP ${name} `, 'gm')) || []).length, 1, name);
     assert.equal((text.match(new RegExp(`^# TYPE ${name} `, 'gm')) || []).length, 1, name);
@@ -58,6 +61,21 @@ test('label values are escaped so a quote or newline in a workflow name cannot b
 test('workflow series carry both the workflow_id and the workflow_name label', () => {
   const text = renderMetrics(buildSnapshot(seeded(), { now: NOW, n8nUp: 1, pollLastSuccessMs: NOW }));
   assert.match(text, /po11y_workflow_errors_total\{workflow_id="w1",workflow_name="Nightly sync"\} 1/);
+});
+
+// The denominator the errors counter never had: without it a dashboard can
+// show "4 failures" but not whether that is 4 out of 5 or 4 out of 4000.
+test('the finished-execution counter renders alongside the error counter', () => {
+  const text = renderMetrics(buildSnapshot(seeded(), { now: NOW, n8nUp: 1, pollLastSuccessMs: NOW }));
+  assert.match(text, /po11y_workflow_executions_total\{workflow_id="w1",workflow_name="Nightly sync"\} 2/);
+  assert.match(text, /^# TYPE po11y_workflow_executions_total counter$/m);
+});
+
+test('a workflow that has never finished a run still exports a zero, so the ratio has a denominator', () => {
+  const db = openDb(':memory:');
+  upsertWorkflows(db, [{ id: 'w1', name: 'Never run', active: true }]);
+  const text = renderMetrics(buildSnapshot(db, { now: NOW, n8nUp: 1, pollLastSuccessMs: NOW }));
+  assert.match(text, /po11y_workflow_executions_total\{workflow_id="w1",workflow_name="Never run"\} 0/);
 });
 
 test('an ai-map build that got LLM prose renders po11y_ai_map_llm_up 1', () => {

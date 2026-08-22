@@ -74,6 +74,25 @@ test('withHost replaces every {self} occurrence, and tolerates a missing hostnam
   assert.equal(withHost('http://{self}:9090/', {}, ''), 'http://:9090/');
 });
 
+test('withHost resolves {n8n} to the configured n8nUrl, scheme and port included', () => {
+  assert.equal(withHost('{n8n}/workflow/new', { n8nUrl: 'https://n8n.example.com' }, 'box.local'),
+    'https://n8n.example.com/workflow/new');
+});
+
+test('withHost expands {host} inside n8nUrl before splicing it into {n8n}', () => {
+  assert.equal(withHost('{n8n}/', { n8nUrl: 'http://{host}:5678', baseUrl: 'n8n.remote' }, 'box.local'),
+    'http://n8n.remote:5678/');
+});
+
+test('withHost falls back to http://{host}:5678 when no n8nUrl is configured', () => {
+  assert.equal(withHost('{n8n}/rest', {}, 'box.local'), 'http://box.local:5678/rest');
+});
+
+test('withHost strips a trailing slash from {n8n} so {n8n}/path never doubles it', () => {
+  assert.equal(withHost('{n8n}/form/x', { n8nUrl: 'https://n8n.example.com/' }, 'h'),
+    'https://n8n.example.com/form/x');
+});
+
 // ---- ago --------------------------------------------------------------------
 test('ago reports minutes, hours and days, and "just now" under a minute', () => {
   const now = Date.parse('2026-08-06T12:00:00Z');

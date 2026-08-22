@@ -91,6 +91,10 @@ services:
       # Grafana interpolates ${VAR} in provisioning YAML but NOT in dashboard
       # JSON — the entrypoint seds the n8n deep-link host into a rendered copy.
       - BIND_ADDR=${BIND_ADDR:-127.0.0.1}
+      # Host the dashboards' n8n deep links point at. Here it is the same
+      # box, so BIND_ADDR is the right default; the read-only stack is where
+      # the two diverge. See observability/grafana/entrypoint.sh.
+      - N8N_LINK_HOST=${N8N_LINK_HOST:-}
       - GF_PATHS_PROVISIONING=/tmp/grafana-provisioning
       - GF_SERVER_ROOT_URL=http://${BIND_ADDR:-127.0.0.1}:${DASHBOARD_PORT:-8080}/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true

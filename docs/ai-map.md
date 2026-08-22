@@ -82,12 +82,14 @@ follow from how `config.json` works:
 - **Existing installs do not get it.** Bootstrap seeds `config.json` from the
   example only when the file is absent, so it never overwrites your edits. Add
   the card by hand to pick it up:
-  `{ "name": "OmniRoute", "sub": "LLM gateway", "href": "http://{host}:20128/" }`
+  `{ "name": "OmniRoute", "sub": "LLM gateway", "href": "http://{self}:20128/" }`
 - **Remove it if you set `OMNIROUTE_ENABLED=false`.** The card is a plain link,
   not a health probe — nothing scrapes OmniRoute — so with the overlay off it
   points at a closed port.
 
-The `{host}` placeholder resolves to whatever host your browser is on. Because
+The `{self}` placeholder resolves to whatever host your browser is on — the box
+serving the dashboard, which is where the gateway runs. (`{host}` would be
+wrong here: on the read-only topology it points at the remote n8n.) Because
 the overlay publishes the port on loopback only, the card works from the machine
 running the stack. From anywhere else it fails by design; see the note below.
 
