@@ -116,22 +116,49 @@ test('an unreachable listing call yields zero samples rather than throwing', asy
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM datatable_counts').get().n, 0);
 });
 
-test('paging is capped so a runaway cursor cannot page forever', async () => {
+test('a table that outgrows the page cap stores no sample rather than a capped one', async () => {
   const db = openDb(':memory:');
-  let page = 0;
+  let pages = 0;
+  const fetchFn = async (url) => {
+    if (url.includes('/api/v1/data-tables?')) {
+      return listResponse([{ id: 'id-huge', name: 'orders' }, { id: 'id-good', name: 'invoices' }]);
+    }
+    if (url.includes('id-huge')) {
+      pages += 1;
+      return jsonResponse({ data: new Array(250).fill({}), nextCursor: `page${pages}` });
+    }
+    return jsonResponse({ data: new Array(9).fill({}), nextCursor: null });
+  };
+  const n = await sampleTables(db, fetchFn, 'http://n8n', 'k', ['orders', 'invoices'], NOW);
+  // A capped count is not a count: it stops rising the moment the table passes
+  // the ceiling, and a growth expectation reads that flat line as a dead
+  // ingest. Skip the sample instead — same degradation the repeating-cursor
+  // case already takes — so the series has a hole rather than a lie.
+  assert.equal(n, 1, 'only "invoices" produced a sample this tick');
+  const rows = db.prepare('SELECT key, rows FROM datatable_counts').all().map((r) => ({ ...r }));
+  assert.deepEqual(rows, [{ key: 'invoices', rows: 9 }], 'a capped count must never enter the series');
+  // Still bounded: the cap exists so a runaway cursor cannot page forever.
+  assert.ok(pages > 0 && pages < 1000, `paging must still stop, got ${pages} pages`);
+});
+
+test('a table of tens of thousands of rows still samples exactly', async () => {
+  // The ceiling has to sit far above the tables a pack actually watches. A
+  // table that merely grows past it is not a runaway cursor, and losing its
+  // samples the day it crosses is the same blind spot as capping them.
+  const TOTAL = 47_311;
+  const db = openDb(':memory:');
+  let served = 0;
   const fetchFn = async (url) => {
     if (url.includes('/api/v1/data-tables?')) {
       return listResponse([{ id: 'id1', name: 'orders' }]);
     }
-    page += 1;
-    return jsonResponse({ data: new Array(250).fill({}), nextCursor: `page${page}` });
+    const rows = Math.min(250, TOTAL - served);
+    served += rows;
+    return jsonResponse({ data: new Array(rows).fill({}), nextCursor: served < TOTAL ? `page${served}` : null });
   };
   const n = await sampleTables(db, fetchFn, 'http://n8n', 'k', ['orders'], NOW);
   assert.equal(n, 1);
-  const row = db.prepare('SELECT rows FROM datatable_counts').get();
-  // Capped, not infinite — the exact ceiling is an implementation detail, but
-  // it must be well below "kept paging until memory ran out".
-  assert.ok(row.rows > 0 && row.rows <= 10_000, `expected a bounded count, got ${row.rows}`);
+  assert.equal(db.prepare('SELECT rows FROM datatable_counts').get().rows, TOTAL);
 });
 
 test('a table stuck on a repeating cursor is skipped for the tick, not counted with an inflated total, and its neighbor still samples', async () => {

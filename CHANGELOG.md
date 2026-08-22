@@ -109,6 +109,16 @@ Notable changes to Po11y. Format follows
 
 ### Fixed
 
+- A data table that grew past the row-count sampler's page ceiling reported
+  its own healthy ingest as a dead one. Counting a table means paging it, and
+  paging stopped at 40 pages — so once a table passed 10,000 rows every
+  sample read exactly 10,000. A growth expectation differences two samples,
+  so the pinned counter read as zero growth and the expectation failed on
+  every rebuild, renotifying for as long as the table stayed above the
+  ceiling. Hitting the cap now stores no sample at all — a hole in the series
+  rather than a flat line that lies — and the ceiling is 400 pages
+  (100,000 rows). Cost is linear in table size on every poll tick, so
+  `docs/server.md` now states the request budget alongside the ceiling.
 - The bundled **n8n Workflow & Execution Analytics** dashboard computed three
   of its four percentages over every execution status, so `running`, `waiting`
   and `canceled` runs counted against the workflow and every rate read low
