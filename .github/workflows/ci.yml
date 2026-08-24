@@ -184,6 +184,22 @@ jobs:
           sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 bundled DASHBOARD_BASIC_AUTH' >/dev/null
           sh -c 'PO11Y_ALLOW_OPEN_BIND=1; export PO11Y_ALLOW_OPEN_BIND; . ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 bundled ""' >/dev/null
           echo "guard OK: loopback, gated and overridden binds all pass"
+      # report mode is wording only: the read-only preflight prints the same
+      # finding but goes on to exit 0, so the text must not say REFUSING while
+      # the return value stays 1 for callers that do refuse.
+      - run: |
+          set +e
+          out=$(sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 readonly "" report' 2>&1)
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then
+            echo "guard FAILED: report mode must still return 1, got $code"
+            exit 1
+          fi
+          case "$out" in
+            *REFUSING*) echo "guard FAILED: report mode still says REFUSING"; exit 1 ;;
+          esac
+          echo "guard OK: report mode returns 1 without claiming to refuse"
 
   compose-config:
     # Client-side render + schema validation of BOTH compose files. `docker

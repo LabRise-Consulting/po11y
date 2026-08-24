@@ -25,20 +25,24 @@ po11y_bind_is_loopback() {
   esac
 }
 
-# po11y_bind_guard BIND STACK GATE
+# po11y_bind_guard BIND STACK GATE [MODE]
 #   BIND   the BIND_ADDR in force
 #   STACK  bundled | readonly — which ports exist to warn about
 #   GATE   human name of the active dashboard auth gate, empty when there is none
+#   MODE   enforce (default) | report — wording only, never the return value
 #
 # Prints nothing and returns 0 for a loopback bind. Otherwise names every
 # published port the gate does not cover, and returns 1 when the bind is
 # ungated and PO11Y_ALLOW_OPEN_BIND is not 1. Callers choose what a 1 means:
 # bootstrap.sh and the dashboard entrypoint refuse with exit 78 (EX_CONFIG),
-# the read-only preflight only reports.
+# the read-only preflight only reports — which is why MODE exists. A report
+# that says REFUSING while the script goes on to exit 0 teaches the reader to
+# distrust the next warning too.
 po11y_bind_guard() {
   _pbg_bind="${1:-}"
   _pbg_stack="${2:-bundled}"
   _pbg_gate="${3:-}"
+  _pbg_mode="${4:-enforce}"
 
   if po11y_bind_is_loopback "$_pbg_bind"; then
     return 0
@@ -61,7 +65,12 @@ po11y_bind_guard() {
     return 0
   fi
 
-  echo "po11y: REFUSING — BIND_ADDR=$_pbg_bind is not loopback and no dashboard auth gate is set."
+  if [ "$_pbg_mode" = report ]; then
+    echo "po11y: BIND_ADDR=$_pbg_bind is not loopback and no dashboard auth gate is set."
+    echo "  The dashboard will refuse to start on this bind."
+  else
+    echo "po11y: REFUSING — BIND_ADDR=$_pbg_bind is not loopback and no dashboard auth gate is set."
+  fi
   echo "  Set DASHBOARD_BASIC_AUTH=user:password, or add docker-compose.auth.yml"
   echo "  (forward auth), or set PO11Y_ALLOW_OPEN_BIND=1 to accept an open bind."
   return 1

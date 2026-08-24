@@ -314,7 +314,7 @@ PF_GATE=""
 if po11y_bind_is_loopback "$PF_BIND"; then
   ok "BIND_ADDR=$PF_BIND — the stack reaches this host only"
 else
-  po11y_bind_guard "$PF_BIND" readonly "$PF_GATE" || true
+  po11y_bind_guard "$PF_BIND" readonly "$PF_GATE" report || true
 fi
 
 # ---- verdict ----------------------------------------------------------------
