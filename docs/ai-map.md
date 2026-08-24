@@ -3,7 +3,9 @@
 The Architecture tab always works because code builds its structure. An LLM is optional and only generates the text descriptions. You can enable LLM descriptions in two ways:
 
 1. **Bundled OmniRoute gateway (default)**
-   The `docker-compose.omniroute.yml` overlay runs an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) gateway. Bootstrap includes OmniRoute by default unless `OMNIROUTE_ENABLED=false`. When `AI_MAP_BASE_URL` is empty, OmniRoute uses `AI_MAP_MODEL=auto/best-free` (a keyless free-tier route).
+   The `docker-compose.omniroute.yml` overlay runs an [OmniRoute](https://github.com/diegosouzapw/OmniRoute) gateway. Bootstrap includes OmniRoute by default unless `OMNIROUTE_ENABLED=false`. When `AI_MAP_BASE_URL` is empty, OmniRoute uses `AI_MAP_MODEL=auto/best-free`, a route that needs no provider key.
+
+   That route depends on a third party's free tier, so it can rate-limit or stop answering without notice. The map then keeps its structure and falls back to heuristic text; `po11y_ai_map_llm_up` and the `Po11yAiMapLlmDegraded` rule are what tell you it happened. Connect a provider and pin `AI_MAP_MODEL` for prose you can rely on.
 
    To use a custom model:
    - Open `http://127.0.0.1:20128` and log in (`OMNIROUTE_ADMIN_PASSWORD` in `.env`).

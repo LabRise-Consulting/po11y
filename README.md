@@ -37,7 +37,7 @@ By default, services bind to `127.0.0.1`. To expose services on a local network 
 
 ## Core Features
 
-https://github.com/user-attachments/assets/0e77f4f9-4119-41e7-a59b-c20b56d2afc5
+https://github.com/user-attachments/assets/3ed3d96d-8ff3-400a-806d-0e71f38db172
 
 The video walks the whole stack end to end.
 
@@ -99,10 +99,10 @@ ghcr.io/labrise-consulting/po11y/server:<tag>    # immutable
 ghcr.io/labrise-consulting/po11y/server:latest   # moving alias
 ```
 
-Only po11y's own code is published. The bundled topology still needs this
-repository, because `bootstrap.sh` drives it and the root `Dockerfile` derives
-from n8n's image, which carries the Sustainable Use License. See
-[docs/ci.md](docs/ci.md).
+Only the `server` process is published; the root `Dockerfile` is not, because it
+derives from n8n's image, which carries the Sustainable Use License. Both compose
+files build the server from source, so running either topology needs this clone
+rather than the published image. See [docs/ci.md](docs/ci.md).
 
 ### Project Status
 
@@ -181,9 +181,10 @@ This topology monitors an external n8n instance without altering its configurati
 This topology sends nothing to an LLM unless you configure one. The bundled
 OmniRoute gateway is wired up by `bootstrap.sh`, which the commands below do
 not run, so the architecture map uses local heuristic descriptions. To enable
-LLM prose, start the gateway overlay and set the three `AI_MAP_*` variables in
-`.env` — the map calls an LLM only when all three are set. See
-[docs/ai-map.md](docs/ai-map.md).
+LLM prose, set the three `AI_MAP_*` variables in `.env` — the map calls an LLM
+only when all three are set. `AI_MAP_BASE_URL` takes any OpenAI-compatible
+endpoint (OpenAI, Anthropic, Mistral, a local Ollama); starting the gateway
+overlay instead routes through OmniRoute. See [docs/ai-map.md](docs/ai-map.md).
 
 ### Prerequisites
 

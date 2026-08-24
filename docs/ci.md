@@ -42,8 +42,8 @@ Superseded pull request runs are cancelled automatically. Tag runs are never can
 
 | Job | Image | Description |
 |---|---|---|
-| `test` | `node:24-alpine` | Runs all unit test suites (`html/`, `site/`, `lib/`, `server/`) using Node's built-in test runner. |
-| `lint` | `shellcheck-alpine:v0.10.0` | Runs ShellCheck on all shell scripts, verifies no expired markers exist in `bootstrap.sh`, and validates both shared entrypoints — Grafana's (`ci/check-grafana-entrypoint.sh`) and the dashboard's (`ci/check-dashboard-entrypoint.sh`). |
+| `test` | `node:24-alpine` | Runs all unit test suites (`html/`, `site/`, `lib/`, `server/`, `observability/`) with Node's built-in test runner, under a coverage floor. The report goes to the run summary. |
+| `lint` | `shellcheck-alpine:v0.10.0` | Runs ShellCheck on every shell script, then the five `ci/check-*.sh` guards: expired markers in `bootstrap.sh`, the Grafana and dashboard shared entrypoints, the read-only preflight, and duplicate keys in `.env.example`. |
 | `interlock` | `alpine:3.20` | Verifies that `bootstrap.sh` exits with code 78 when configured with a non-loopback bind address without authentication. |
 | `compose-config` | `docker:27` | Validates both Docker Compose files (bundled and read-only) and their overlays using `docker compose config`. |
 | `manifests` | `alpine/k8s:1.31.1` | Validates Kubernetes manifests in `deploy/k8s` against Kubernetes schemas using `kustomize` and `kubeconform -strict`. The schemas are cached between runs, so only a cold cache needs `raw.githubusercontent.com`; the job is capped at 5 minutes because an unreachable schema host otherwise fails slowly. |
@@ -71,7 +71,7 @@ ghcr.io/labrise-consulting/po11y/server:<git tag>   (immutable)
 ghcr.io/labrise-consulting/po11y/server:latest      (moving alias)
 ```
 
-Only po11y's own code is published. The root `Dockerfile` is never pushed: it derives from n8n's image, which carries the Sustainable Use License, and the bundled stack needs the clone for `bootstrap.sh` regardless.
+Only the `server` process is published. The root `Dockerfile` is never pushed: it derives from n8n's image, which carries the Sustainable Use License. Both compose files build the server from source, so running either topology needs the clone rather than the published image.
 
 Authentication uses the job-scoped `GITHUB_TOKEN` with `packages: write`, so there is no long-lived registry credential to store or rotate. The job is guarded on `github.repository`, which returns the organisation's canonical capitalisation — a lowercase literal in that comparison would never match, and the job would silently skip on a real tag.
 

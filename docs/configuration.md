@@ -95,10 +95,10 @@ offers a "show all" button; its filter box searches all of them.
 last poll, and the dashboard renders it as a cyan dot and an "N running" pill.
 Two things bound it:
 
-- **It is as fresh as `POLL_INTERVAL`** (30 s by default), not live. A workflow
-  that finishes inside one poll window can start and end without ever being
-  seen as running. Lower `SERVER_POLL_INTERVAL` if your workflows are shorter
-  than the interval and you want their runs to be visible while they happen.
+- **It is as fresh as `SERVER_POLL_INTERVAL`** (30 s by default), not live. A
+  workflow that finishes inside one poll window can start and end without ever
+  being seen as running. Lower it if your workflows are shorter than the
+  interval and you want their runs visible while they happen.
 - **It needs the running listing.** n8n leaves in-flight executions out of the
   default `/executions` response, so the server asks for `?status=running`
   separately each poll. If that request fails the poll still succeeds and logs

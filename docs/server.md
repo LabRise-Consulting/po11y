@@ -223,9 +223,10 @@ catch. When `windowMinutes` is present the SQL must contain exactly one
 as the stored `2026-08-11T02:00:00.000Z` stamps — a SQL-side comparison
 would silently compare unlike strings).
 
-The shipped pack (`server/packs/example.json`) is a working example —
-four expectations, all windowed to 26 hours (a day plus slack, so a
-missed-by-an-hour run does not false-positive):
+The shipped pack (`server/packs/example.json`) is a working example — four
+expectations, each set to 26 hours (a day plus slack, so a missed-by-an-hour
+run does not false-positive): three `min-count` windows plus one
+`max-age-minutes` budget.
 
 ```json
 {
