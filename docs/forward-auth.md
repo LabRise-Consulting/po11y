@@ -29,6 +29,16 @@ Configure generic OIDC settings in `.env`. Set `OAUTH2_PROXY_OIDC_ISSUER_URL`, c
 
 Set `http(s)://<dashboard-host>/oauth2/callback` as the authorized redirect URI in your IdP.
 
+### Who may sign in
+
+`OAUTH2_PROXY_EMAIL_DOMAINS` is required and has no default. Set your organization's domain, or several separated by commas. Authenticating with the IdP is not the same as belonging to your team: with a public issuer such as Google, `*` admits every account that issuer will authenticate. Use `*` only when something else already limits who the IdP authenticates.
+
+### Session lifetime and offboarding
+
+`OAUTH2_PROXY_COOKIE_REFRESH` (default `1h`) sets how often oauth2-proxy revalidates a live session against the IdP. `OAUTH2_PROXY_COOKIE_EXPIRE` (default `8h`) sets how long a session lasts.
+
+Revocation is not immediate. A user you disable in the IdP keeps their session until the next refresh, so allow up to `OAUTH2_PROXY_COOKIE_REFRESH` for access to end. Shorten the interval if you need a faster response. Do not remove it: with no refresh interval, nothing is revalidated and a disabled account keeps working until its cookie expires. Keep `OAUTH2_PROXY_COOKIE_EXPIRE` at or below the refresh-token lifetime your IdP issues.
+
 ## Header security
 
 Nginx extracts user identity (email and groups) strictly from internal responses returned by `oauth2-proxy` (`/oauth2/auth`). Client-supplied headers (such as `X-Forwarded-Email` or `X-Auth-Request-*`) are stripped before requests reach downstream services like Grafana or n8n.
@@ -41,3 +51,17 @@ Set `FORM_ALLOWED_GROUPS` to a comma-separated list of authorized OIDC group nam
 - **Validation source**: Groups are validated exclusively against internal `$auth_groups` responses from `oauth2-proxy`.
 - **Group name formatting**: Group names must use alphanumeric characters, underscores, or hyphens (`[A-Za-z0-9_-]`). Match checks compare exact token values.
 - **Requirement**: `FORM_ALLOWED_GROUPS` requires the forward-auth overlay. Without forward auth, group checks are disabled.
+
+## What forward auth does not cover
+
+Four limits. None is a defect in the overlay; each is a boundary to plan around.
+
+- **Two ports bypass it entirely.** oauth2-proxy sits in front of nginx only. Grafana on port 3000 and Prometheus on port 9090 are published by `BIND_ADDR` alongside the dashboard, and neither passes through nginx. A request to `/grafana/` is authenticated; a request to port 3000 is not. This is the same limit `DASHBOARD_BASIC_AUTH` has, so switching to OIDC does not close it — see [security.md](security.md).
+- **Grafana receives no identity.** Nginx blanks every identity header before proxying to Grafana, and sets no `X-WEBAUTH-USER`. Every authenticated user therefore reaches Grafana as the same anonymous Viewer. Grafana keeps no per-user audit trail and applies no per-user permissions, and administration remains one shared account.
+- **Groups gate one route.** `$auth_groups` is read only by the `/form/` block. Read access to the feeds, the map, `/grafana/`, `/prom/`, `/mcp/` and `POST /rebuild` is the same for everyone who signs in. See "Read authorization scope" in [security.md](security.md).
+- **`/mcp/` stops working for machine clients.** The MCP route sits behind the same gate, and a machine client cannot complete a browser redirect. The overlay configures no `skip-auth-routes` and no bearer-token path, so an MCP client cannot reach a dashboard running forward auth.
+
+Two configuration notes:
+
+- `OAUTH2_PROXY_COOKIE_SECURE` defaults to `false`, which is required for a plain-HTTP loopback bind. Over any real network the session cookie travels in clear text and anyone who captures it holds the session. Set it to `true` as soon as TLS is in front.
+- A group name that contains characters outside `[A-Za-z0-9_-]` is filtered before it reaches the match, while oauth2-proxy keeps emitting the original. A Keycloak group path such as `/team-a` therefore never matches, and the entry denies silently. The dashboard logs a notice at start naming any entry this affects. Configure the IdP to emit group names without slashes.

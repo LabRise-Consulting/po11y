@@ -180,6 +180,12 @@ printf '\nsecrets   %s\n' "$ENV_FILE"
 if [ "$WRITE" = no ]; then
   note "--check: not writing"
 else
+  # The Grafana admin password and the three OmniRoute secrets land in this
+  # file. `cp .env.example .env` inherits the umask, which on most hosts leaves
+  # it world-readable, so every account on the box reads them. Tighten it
+  # before the first secret is written.
+  chmod 600 "$ENV_FILE"
+  note "mode 600 enforced on $ENV_FILE"
   # openssl is bootstrap.sh's generator, but this script runs on hosts that
   # never install one — a minimal container, a locked-down box — and refusing
   # to seed there would leave compose unable to start over a missing random
@@ -290,6 +296,25 @@ with open(path, 'w', encoding='utf-8') as fh:
     fh.write(out)
 say('wrote: %s' % wrote)
 SEED_CONFIG
+fi
+
+# ---- exposure ---------------------------------------------------------------
+# Report only, deliberately: an open bind is a risk, not a reason po11y cannot
+# run, so it must not change the exit code the metrics probes own. The
+# enforcing copy of this guard lives in the dashboard entrypoint, because the
+# read-only stack has no bootstrap.sh to stop `compose up` before it publishes
+# a port. Saying it here as well means an operator meets the warning while
+# reading this report, not through a container that refuses to serve.
+printf '\nexposure  BIND_ADDR\n'
+# shellcheck source=deploy/nginx/bind-guard.sh
+. ./deploy/nginx/bind-guard.sh
+PF_BIND="$(get_env BIND_ADDR)"; PF_BIND="${PF_BIND:-127.0.0.1}"
+PF_GATE=""
+[ -z "$(get_env DASHBOARD_BASIC_AUTH)" ] || PF_GATE=DASHBOARD_BASIC_AUTH
+if po11y_bind_is_loopback "$PF_BIND"; then
+  ok "BIND_ADDR=$PF_BIND — the stack reaches this host only"
+else
+  po11y_bind_guard "$PF_BIND" readonly "$PF_GATE" || true
 fi
 
 # ---- verdict ----------------------------------------------------------------

@@ -178,6 +178,58 @@ Notable changes to Po11y. Format follows
   that predate severity carry none, and under-reporting a real failure is the
   worse direction to guess in.
 
+### Security
+
+- The exposure interlock now covers the read-only stack. It lived in
+  `bootstrap.sh`, which only the bundled stack runs, so
+  `docker compose -f docker-compose.readonly.yml up -d` published wherever
+  `BIND_ADDR` pointed and said nothing. The check moved into
+  `deploy/nginx/bind-guard.sh`, sourced by `bootstrap.sh` before it brings the
+  stack up, by `scripts/readonly-preflight.sh` as a report, and by the
+  dashboard entrypoint on every container start. A non-loopback `BIND_ADDR`
+  with no auth gate — neither `DASHBOARD_BASIC_AUTH` nor the forward-auth
+  overlay — now stops the dashboard container with exit 78 on both stacks.
+  `PO11Y_ALLOW_OPEN_BIND=1` accepts the open bind, and now reaches the
+  container through compose, so it can live in `.env` as well as in the shell
+  environment.
+
+  **This can stop an existing deployment.** A stack running a non-loopback
+  bind with no dashboard password will not serve after the upgrade until an
+  auth gate or the override is set. What the guard cannot do is unpublish a
+  port: it runs after compose has already bound them, so the warning it prints
+  about Grafana on 3000 and Prometheus on 9090 remains the operator's to act
+  on.
+- `OAUTH2_PROXY_EMAIL_DOMAINS` is required, with no default. It defaulted to
+  `*`, which admits every account the IdP will authenticate — for a public
+  issuer such as Google, one of the four the overlay documents, that is every
+  account in existence rather than everyone on the team. oauth2-proxy itself
+  denies until a domain is named; the overlay now keeps that stance and fails
+  fast like its four other required variables. Set it to your organization's
+  domain before the next `up` with `docker-compose.auth.yml`.
+- The forward-auth overlay now sets `OAUTH2_PROXY_COOKIE_REFRESH` (`1h`) and
+  `OAUTH2_PROXY_COOKIE_EXPIRE` (`8h`). Neither was set, so no session was ever
+  revalidated against the IdP and an account disabled there kept working until
+  its cookie expired — up to a week on oauth2-proxy's default. Offboarding is
+  the reason the docs offer this overlay, and it did not work.
+- `bootstrap.sh` and `scripts/readonly-preflight.sh` `chmod 600 .env` when they
+  write to it. Every generated secret lands there — the Postgres passwords,
+  the Grafana admin password, the n8n owner password, the minted API key — and
+  `cp .env.example .env` inherits the umask, which on most hosts leaves the
+  file readable by every account on the box. No HTTP password protects a file.
+- A `FORM_ALLOWED_GROUPS` entry that the `[A-Za-z0-9_-]` filter has to change
+  now logs a notice at start. oauth2-proxy keeps emitting the original name, so
+  a Keycloak group path such as `/team-a` could never match the filtered
+  `team-a` and denied silently — a correct-looking allowlist that returned 403
+  forever.
+- `docs/security.md` and `docs/forward-auth.md` now state what dashboard auth
+  does not cover: Grafana on 3000 and Prometheus on 9090 are published by the
+  same `BIND_ADDR` and never pass through nginx, so neither Basic Auth nor
+  forward auth touches them. `bootstrap.sh` had printed this at runtime while
+  the docs did not say it. The forward-auth page also records that Grafana
+  receives no per-user identity, that groups gate only `POST /form/`, and that
+  `/mcp/` becomes unreachable for machine clients once the overlay is on.
+
+
 ## [0.1.0] - 2026-08-20
 
 First tagged release, and the first public one. Everything below is the

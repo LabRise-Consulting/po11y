@@ -117,7 +117,9 @@ jobs:
       # inherit whatever a dependency happens to pull in.
       - run: apk add --no-cache git python3 openssl
       - uses: actions/checkout@v5
-      - run: shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh scripts/readonly-preflight.sh ci/check-readonly-preflight.sh ci/check-env-example.sh
+      # -x follows the `. deploy/nginx/bind-guard.sh` sources, so the shared
+      # exposure guard is checked in the context of each script that uses it.
+      - run: shellcheck -x bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh deploy/nginx/dashboard-entrypoint.sh deploy/nginx/bind-guard.sh scripts/readonly-preflight.sh ci/check-readonly-preflight.sh ci/check-env-example.sh
       # Fail if any dated '# REMOVE AFTER YYYY-MM' liability in bootstrap.sh is past.
       - run: sh ci/check-expired-markers.sh bootstrap.sh
       # Guard the A3 bug class: an overlay re-inlining grafana's entrypoint
@@ -157,6 +159,28 @@ jobs:
             exit 1
           fi
           echo "interlock OK: refused non-loopback bind with exit 78"
+      # The same guard, as the dashboard entrypoint runs it: the read-only stack
+      # has no bootstrap.sh, so this is the only interlock it ever gets. Called
+      # directly rather than through the container — the guard is a sourced
+      # shell function, and nginx is not what is under test.
+      - run: |
+          set +e
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 readonly "" || exit 78' >/dev/null
+          code=$?
+          set -e
+          if [ "$code" -ne 78 ]; then
+            echo "guard FAILED: ungated non-loopback bind expected exit 78, got $code"
+            exit 1
+          fi
+          echo "guard OK: refused ungated non-loopback bind with exit 78"
+      # And the three cases that must NOT refuse: loopback, a gated bind, and
+      # the documented override. A guard that refuses everything would pass the
+      # assertion above and break every working deployment.
+      - run: |
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 127.0.0.1 readonly ""' >/dev/null
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 bundled DASHBOARD_BASIC_AUTH' >/dev/null
+          sh -c 'PO11Y_ALLOW_OPEN_BIND=1; export PO11Y_ALLOW_OPEN_BIND; . ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 bundled ""' >/dev/null
+          echo "guard OK: loopback, gated and overridden binds all pass"
 
   compose-config:
     # Client-side render + schema validation of BOTH compose files. `docker
@@ -183,6 +207,7 @@ jobs:
       OAUTH2_PROXY_OIDC_ISSUER_URL: http://idp.example:8080/realms/dummy
       OAUTH2_PROXY_CLIENT_ID: dummy
       OAUTH2_PROXY_CLIENT_SECRET: dummy
+      OAUTH2_PROXY_EMAIL_DOMAINS: example.com
       # 32-byte secret (base64url) — oauth2-proxy requires exactly 16/24/32 bytes.
       OAUTH2_PROXY_COOKIE_SECRET: cG8xMXktY2ktZHVtbXktY29va2llLXNlY3JldC0zMmI
       # Alerting overlay required (:?) var.

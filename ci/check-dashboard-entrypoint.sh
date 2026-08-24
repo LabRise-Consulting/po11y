@@ -20,7 +20,7 @@ CANON='entrypoint: ["sh", "/etc/po11y-dashboard-entrypoint.sh"]'
 SCRIPT=deploy/nginx/dashboard-entrypoint.sh
 
 [ -f "$SCRIPT" ] || fail "$SCRIPT is missing"
-for marker in '/etc/nginx/feeds.conf' '/etc/nginx/auth.conf' '/etc/nginx/form-proxy.conf' '/etc/nginx/forward-auth.conf' 'conf.d/form-authz.conf'; do
+for marker in '/etc/nginx/feeds.conf' '/etc/nginx/auth.conf' '/etc/nginx/form-proxy.conf' '/etc/nginx/forward-auth.conf' 'conf.d/form-authz.conf' 'po11y_bind_guard'; do
   grep -qF "$marker" "$SCRIPT" || fail "$SCRIPT no longer renders $marker"
 done
 
@@ -35,6 +35,17 @@ for f in docker-compose*.yml; do
       || fail "$f: dashboard entrypoint is not the canonical shared one ($CANON)"
     printf '%s\n' "$block" | grep -qF 'deploy/nginx/dashboard-entrypoint.sh:/etc/po11y-dashboard-entrypoint.sh' \
       || fail "$f: dashboard declares the canonical entrypoint but does not mount $SCRIPT"
+    # The exposure guard is sourced from the ./deploy/nginx mount, and reads
+    # BIND_ADDR and PO11Y_STACK from the environment. Both are defaulted in the
+    # guard so a vendored compose file still starts, which is exactly why they
+    # are asserted here: a dashboard that never receives BIND_ADDR reports a
+    # loopback bind and warns about nothing, and the failure is silent.
+    printf '%s\n' "$block" | grep -qF './deploy/nginx:/etc/nginx/po11y-feeds' \
+      || fail "$f: dashboard does not mount ./deploy/nginx — the entrypoint cannot source bind-guard.sh"
+    for var in BIND_ADDR PO11Y_STACK; do
+      printf '%s\n' "$block" | grep -qE "^      - $var=" \
+        || fail "$f: dashboard does not pass $var — the exposure guard cannot see the real bind"
+    done
   fi
 done
 

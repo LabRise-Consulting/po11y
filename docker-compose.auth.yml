@@ -21,9 +21,15 @@ services:
       - OAUTH2_PROXY_CLIENT_SECRET=${OAUTH2_PROXY_CLIENT_SECRET:?set the OIDC client secret}
       # Generate with:  openssl rand -base64 32 | tr -- '+/' '-_'
       - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_PROXY_COOKIE_SECRET:?set a cookie secret (see .env.example forward auth block)}
-      # Which e-mail domains may sign in. '*' = any authenticated account the IdP
-      # returns; narrow it to your org's domain(s) in .env.
-      - OAUTH2_PROXY_EMAIL_DOMAINS=${OAUTH2_PROXY_EMAIL_DOMAINS:-*}
+      # Which e-mail domains may sign in. Required, with no default, because
+      # the only sane default is the dangerous one: '*' admits every account
+      # the IdP will authenticate, and for a public issuer — Google is one of
+      # the four this overlay documents — that is every account in the world,
+      # not every account on your team. oauth2-proxy itself denies until a
+      # domain is named; this keeps that stance. Set your org's domain(s),
+      # comma-separated. '*' still works if you mean it and something else
+      # narrows who the IdP will authenticate at all.
+      - OAUTH2_PROXY_EMAIL_DOMAINS=${OAUTH2_PROXY_EMAIL_DOMAINS:?set the e-mail domain(s) allowed to sign in, e.g. example.com (see .env.example)}
       # Claim to read group membership from. oauth2-proxy surfaces it as
       # X-Auth-Request-Groups; the dashboard's /form/ authorization
       # (FORM_ALLOWED_GROUPS) matches against it. Default matches
@@ -48,6 +54,15 @@ services:
       # Plain HTTP on a localhost bind by default, so the session cookie must not
       # be Secure-only or the browser never sends it back. Set true behind TLS.
       - OAUTH2_PROXY_COOKIE_SECURE=${OAUTH2_PROXY_COOKIE_SECURE:-false}
+      # How long a session lives, and how often oauth2-proxy re-checks it
+      # against the IdP. Without a refresh interval no session is ever
+      # revalidated, so a user disabled in the IdP keeps working until the
+      # cookie expires — up to a week on oauth2-proxy's own default. That is
+      # the opposite of the offboarding this overlay exists to provide, so a
+      # refresh is set here rather than left to the operator to discover.
+      # Cookie expiry must stay at or below the IdP's refresh-token lifetime.
+      - OAUTH2_PROXY_COOKIE_REFRESH=${OAUTH2_PROXY_COOKIE_REFRESH:-1h}
+      - OAUTH2_PROXY_COOKIE_EXPIRE=${OAUTH2_PROXY_COOKIE_EXPIRE:-8h}
       # In reverse-proxy mode oauth2-proxy derives its callback URL from the
       # forwarded Host/Proto. Override only if your IdP pins an exact redirect
       # URL that differs (e.g. behind a TLS proxy on another hostname).
