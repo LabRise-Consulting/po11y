@@ -39,6 +39,10 @@ Set `http(s)://<dashboard-host>/oauth2/callback` as the authorized redirect URI 
 
 Revocation is not immediate. A user you disable in the IdP keeps their session until the next refresh, so allow up to `OAUTH2_PROXY_COOKIE_REFRESH` for access to end. Shorten the interval if you need a faster response. Do not remove it: with no refresh interval, nothing is revalidated and a disabled account keeps working until its cookie expires. Keep `OAUTH2_PROXY_COOKIE_EXPIRE` at or below the refresh-token lifetime your IdP issues.
 
+Refresh needs a refresh token, which most IdPs issue only for the `offline_access` scope. Without one, oauth2-proxy revalidates the ID token locally instead of asking the IdP, and `OAUTH2_PROXY_COOKIE_EXPIRE` becomes the real bound on how long a revoked account keeps access. Check that your IdP issues a refresh token if you rely on the one-hour figure; the expiry always holds.
+
+The dashboard also has to hand the refreshed cookie back to the browser. Nginx discards the `auth_request` subrequest's `Set-Cookie`, so the entrypoint renders the `auth_request_set $auth_cookie` / `add_header Set-Cookie` pair that upstream prescribes for `--cookie-refresh`, and every location with its own `add_header` restates it — nginx inherits `add_header` only into levels that declare none. Without that, the browser keeps presenting the pre-refresh cookie, and an IdP that rotates refresh tokens rejects the replay and forces a sign-in redirect.
+
 ## Header security
 
 Nginx extracts user identity (email and groups) strictly from internal responses returned by `oauth2-proxy` (`/oauth2/auth`). Client-supplied headers (such as `X-Forwarded-Email` or `X-Auth-Request-*`) are stripped before requests reach downstream services like Grafana or n8n.

@@ -165,14 +165,17 @@ jobs:
       # shell function, and nginx is not what is under test.
       - run: |
           set +e
-          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 readonly "" || exit 78' >/dev/null
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 readonly ""' >/dev/null
           code=$?
           set -e
-          if [ "$code" -ne 78 ]; then
-            echo "guard FAILED: ungated non-loopback bind expected exit 78, got $code"
+          # Exactly 1, the guard's own refusal. A missing file or a renamed
+          # function also exits non-zero, and accepting any non-zero here would
+          # let a guard that never runs satisfy the assertion.
+          if [ "$code" -ne 1 ]; then
+            echo "guard FAILED: ungated non-loopback bind expected the guard to return 1, got $code"
             exit 1
           fi
-          echo "guard OK: refused ungated non-loopback bind with exit 78"
+          echo "guard OK: refused ungated non-loopback bind"
       # And the three cases that must NOT refuse: loopback, a gated bind, and
       # the documented override. A guard that refuses everything would pass the
       # assertion above and break every working deployment.

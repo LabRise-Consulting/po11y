@@ -211,6 +211,18 @@ Notable changes to Po11y. Format follows
   revalidated against the IdP and an account disabled there kept working until
   its cookie expired — up to a week on oauth2-proxy's default. Offboarding is
   the reason the docs offer this overlay, and it did not work.
+
+  Turning refresh on also required making the refreshed cookie reach the
+  browser. Nginx discards the `auth_request` subrequest's `Set-Cookie`, so the
+  entrypoint now renders the `auth_request_set $auth_cookie` / `add_header
+  Set-Cookie` pair upstream prescribes for `--cookie-refresh`, and every
+  location that sets its own `add_header` — the app shell, and the feeds this
+  page polls hardest — includes `refresh-cookie.conf` to restate it, because
+  nginx inherits `add_header` only into levels that declare none of their own.
+  Left out, the browser would keep presenting the pre-refresh cookie and an IdP
+  that rotates refresh tokens would answer the replay with a sign-in redirect,
+  on a page that fetches its feeds with XHR. Refresh still needs the IdP to
+  issue a refresh token; where it does not, the cookie expiry is the bound.
 - `bootstrap.sh` and `scripts/readonly-preflight.sh` `chmod 600 .env` when they
   write to it. Every generated secret lands there — the Postgres passwords,
   the Grafana admin password, the n8n owner password, the minted API key — and

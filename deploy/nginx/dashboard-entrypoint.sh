@@ -42,9 +42,31 @@ if [ "$FORWARD_AUTH" = "true" ]; then
     printf '%s\n' 'auth_request_set $auth_email $upstream_http_x_auth_request_email;'
     # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
     printf '%s\n' 'auth_request_set $auth_groups $upstream_http_x_auth_request_groups;'
+    # OAUTH2_PROXY_COOKIE_REFRESH re-mints the session cookie, and oauth2-proxy
+    # returns it as Set-Cookie on the /oauth2/auth subrequest. auth_request
+    # discards that response, so without these two lines the browser never
+    # receives the refreshed cookie: every later request presents the same
+    # stale one, the refresh token is replayed, and an IdP that rotates refresh
+    # tokens rejects the replay and forces a sign-in redirect — on a page that
+    # polls its feeds with fetch(). Lifting it here is what upstream's own
+    # nginx auth_request guide prescribes for --cookie-refresh.
+    # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
+    printf '%s\n' 'auth_request_set $auth_cookie $upstream_http_set_cookie;'
+    # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
+    printf '%s\n' 'add_header Set-Cookie $auth_cookie;'
   } > /etc/nginx/forward-auth.conf
+  # nginx inherits add_header only into levels that declare none of their own,
+  # so the server-scope line above is shadowed in every location that sets its
+  # own Cache-Control — the app shell and, more importantly, the feeds the
+  # dashboard polls. Those locations include this file to restate it. It must
+  # exist either way: an `add_header ... $auth_cookie` referencing a variable
+  # no auth_request_set defined is a config error nginx refuses to start on,
+  # which is why the empty file below is load-bearing rather than tidy.
+  # shellcheck disable=SC2016  # literal nginx $var syntax, not shell expansion
+  printf '%s\n' 'add_header Set-Cookie $auth_cookie;' > /etc/nginx/refresh-cookie.conf
 else
   : > /etc/nginx/forward-auth.conf
+  : > /etc/nginx/refresh-cookie.conf
 fi
 # Basic Auth gate. Forward-auth WINS when both are set: a Basic prompt on
 # top of the OIDC redirect is double auth / broken UX, so log a one-line
@@ -98,7 +120,10 @@ if [ "$ENABLE_FORM_PROXY" = "true" ]; then
     # the generated regex holds the filtered 'team-a', so the entry denies
     # silently instead of allowing — a correct-looking allowlist that returns
     # 403 forever. Name the entry and what it became.
-    printf %s "$FORM_ALLOWED_GROUPS" | tr ',' '\n' | while IFS= read -r raw; do
+    # `read` returns non-zero at EOF, so the `|| [ -n "$raw" ]` is what keeps
+    # the last (unterminated) entry — printf %s emits no trailing newline, and
+    # without it a single-entry allowlist was never checked at all.
+    printf %s "$FORM_ALLOWED_GROUPS" | tr ',' '\n' | while IFS= read -r raw || [ -n "$raw" ]; do
       trimmed="$(printf %s "$raw" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
       [ -n "$trimmed" ] || continue
       filtered="$(printf %s "$trimmed" | tr -cd 'A-Za-z0-9_-')"

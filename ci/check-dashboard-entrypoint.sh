@@ -20,7 +20,7 @@ CANON='entrypoint: ["sh", "/etc/po11y-dashboard-entrypoint.sh"]'
 SCRIPT=deploy/nginx/dashboard-entrypoint.sh
 
 [ -f "$SCRIPT" ] || fail "$SCRIPT is missing"
-for marker in '/etc/nginx/feeds.conf' '/etc/nginx/auth.conf' '/etc/nginx/form-proxy.conf' '/etc/nginx/forward-auth.conf' 'conf.d/form-authz.conf' 'po11y_bind_guard'; do
+for marker in '/etc/nginx/feeds.conf' '/etc/nginx/auth.conf' '/etc/nginx/form-proxy.conf' '/etc/nginx/forward-auth.conf' 'conf.d/form-authz.conf' '/etc/nginx/refresh-cookie.conf' 'po11y_bind_guard'; do
   grep -qF "$marker" "$SCRIPT" || fail "$SCRIPT no longer renders $marker"
 done
 
@@ -42,9 +42,16 @@ for f in docker-compose*.yml; do
     # loopback bind and warns about nothing, and the failure is silent.
     printf '%s\n' "$block" | grep -qF './deploy/nginx:/etc/nginx/po11y-feeds' \
       || fail "$f: dashboard does not mount ./deploy/nginx — the entrypoint cannot source bind-guard.sh"
-    for var in BIND_ADDR PO11Y_STACK; do
+    # The entrypoint reads FORWARD_AUTH and DASHBOARD_BASIC_AUTH bare under
+    # `set -u`, so a compose file that omits either kills the container on
+    # start. BIND_ADDR, PO11Y_STACK and PO11Y_ALLOW_OPEN_BIND are defaulted in
+    # the guard instead, which is why they are asserted rather than trusted: a
+    # dashboard that never receives BIND_ADDR reports a loopback bind and warns
+    # about nothing, and one that never receives PO11Y_ALLOW_OPEN_BIND cannot
+    # honour the documented override. Both failures are silent.
+    for var in BIND_ADDR PO11Y_STACK PO11Y_ALLOW_OPEN_BIND FORWARD_AUTH DASHBOARD_BASIC_AUTH; do
       printf '%s\n' "$block" | grep -qE "^      - $var=" \
-        || fail "$f: dashboard does not pass $var — the exposure guard cannot see the real bind"
+        || fail "$f: dashboard does not pass $var to the entrypoint"
     done
   fi
 done

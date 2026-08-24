@@ -60,7 +60,16 @@ services:
       # cookie expires — up to a week on oauth2-proxy's own default. That is
       # the opposite of the offboarding this overlay exists to provide, so a
       # refresh is set here rather than left to the operator to discover.
-      # Cookie expiry must stay at or below the IdP's refresh-token lifetime.
+      #
+      # Two things this depends on. The refresh itself needs the IdP to issue a
+      # refresh token (usually the offline_access scope); without one
+      # oauth2-proxy revalidates the ID token locally instead, and the expiry
+      # below becomes the real bound on how long a revoked account keeps
+      # access. And the refreshed cookie has to reach the browser: under
+      # auth_request nginx drops the subrequest's Set-Cookie, so the dashboard
+      # entrypoint renders the auth_request_set/add_header pair upstream
+      # prescribes for --cookie-refresh. Expiry must stay at or below the
+      # refresh-token lifetime your IdP issues.
       - OAUTH2_PROXY_COOKIE_REFRESH=${OAUTH2_PROXY_COOKIE_REFRESH:-1h}
       - OAUTH2_PROXY_COOKIE_EXPIRE=${OAUTH2_PROXY_COOKIE_EXPIRE:-8h}
       # In reverse-proxy mode oauth2-proxy derives its callback URL from the
