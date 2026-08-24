@@ -38,12 +38,21 @@ import { apiGetPaged } from './n8n.mjs';
 import { recordTableCount } from './db.mjs';
 
 const ROWS_PAGE_LIMIT = 250;
-// A hard ceiling on pages-per-sample so a misbehaving cursor (or a table
-// that has genuinely grown past anything PO11Y_DATATABLES was meant to
-// watch) cannot page forever inside a single poll tick. 40 * 250 = 10,000
-// rows — far past anything the shipped pack's tables need, and a capped
-// sample is loudly logged rather than silently short.
-const PAGE_CAP = 40;
+// A hard ceiling on pages-per-sample so a misbehaving cursor cannot page
+// forever inside a single poll tick. 400 * 250 = 100,000 rows.
+//
+// The ceiling was 40 pages (10,000 rows) and a table that crossed it kept
+// sampling — at exactly 10,000, every tick, forever. A growth expectation
+// differences two samples, so a pinned counter reads as zero growth and
+// reports a healthy ingest as a dead one. That is why hitting the cap now
+// throws (see countRows): a capped count is not a count.
+//
+// Raising the ceiling is the other half. Paging is the only way to count a
+// table on builds with no total, so cost is linear: a table of N rows costs
+// ceil(N / 250) GETs on every poll tick. Budget accordingly before pointing
+// PO11Y_DATATABLES at a table near this ceiling — at the default 30s
+// POLL_INTERVAL, 100,000 rows is 400 requests every 30 seconds.
+const PAGE_CAP = 400;
 
 /**
  * Pull a row count out of whatever a data-table endpoint returned. Some n8n
@@ -83,12 +92,13 @@ async function resolveTableIds(fetchFn, baseUrl, apiKey) {
  * `count`, trust it and stop — an empty `data[]` alongside a real count is a
  * valid (if unusual) first-page shape, and re-summing per-page counts across
  * later pages would double count on a build that repeats the total on every
- * page. Can also throw before either of those — apiGetPaged rejects a
- * cursor it has already seen, so a table stuck on a repeating cursor fails
- * fast instead of returning a silently inflated count; sampleTables' caller
- * catches this and the table is skipped for the tick.
+ * page. Throws rather than returning a number it cannot stand behind: on a
+ * cursor apiGetPaged has already seen (a table stuck on a repeating cursor,
+ * which would otherwise return a silently inflated count) and on hitting
+ * PAGE_CAP (which would otherwise return a silently short one). Either way
+ * sampleTables' caller catches it and the table is skipped for the tick.
  */
-async function countRows(fetchFn, baseUrl, apiKey, id, name) {
+async function countRows(fetchFn, baseUrl, apiKey, id) {
   let total = 0;
   let pages = 0;
   for await (const page of apiGetPaged(
@@ -100,11 +110,10 @@ async function countRows(fetchFn, baseUrl, apiKey, id, name) {
     total += parseCount(page) ?? 0;
     pages += 1;
     if (page?.nextCursor && pages >= PAGE_CAP) {
-      console.error(
-        `server: datatable sampling — "${name}" hit the ${PAGE_CAP}-page cap `
-        + `(~${total} rows counted so far) — this sample is capped, not exact`,
+      throw new Error(
+        `hit the ${PAGE_CAP}-page cap (~${total} rows counted so far) — `
+        + 'a capped count is not a count, so no sample is stored for this tick',
       );
-      return total;
     }
   }
   return total;
@@ -145,7 +154,7 @@ export async function sampleTables(db, fetchFn, baseUrl, apiKey, targets, now) {
     try {
       const id = idByName.get(name);
       if (!id) throw new Error(`no data table named "${name}" on this instance`);
-      const rows = await countRows(fetchFn, baseUrl, apiKey, id, name);
+      const rows = await countRows(fetchFn, baseUrl, apiKey, id);
       recordTableCount(db, name, rows, sampledAt);
       stored += 1;
     } catch (e) {

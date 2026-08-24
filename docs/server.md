@@ -180,12 +180,17 @@ other configured tables.
 `/api/v1/data-tables/{id}/rows`) does not return a total row count on the
 probed build (n8n 2.29.8) — no `count`/`total` field, no
 `X-Total-Count`/`Content-Range` header. Counting a table means paging every
-`rows` page (capped at `limit=250` per page) and summing lengths. This is
-capped at 40 pages (~10,000 rows) per sample per poll tick — a table past
-that ceiling still gets a sample, but it is the capped value, logged as
-such, not silently short. (If a future n8n build *does* return a `count`
-field on the first page, the implementation trusts it and skips paging —
-see the comment at the top of `server/datatables.mjs`.)
+`rows` page (capped at `limit=250` per page) and summing lengths. Cost is
+therefore linear: a table of N rows costs `ceil(N / 250)` GETs on every
+poll tick. Paging stops at 400 pages (100,000 rows) per sample, and a
+table that hits that ceiling gets **no sample** for the tick — the count
+is logged and dropped, because a capped count is not a count: it stops
+rising the moment the table passes the ceiling, and a growth expectation
+differences two samples, so a pinned counter reads as zero growth and
+reports a healthy ingest as a dead one. A hole in the series is honest; a
+flat line is not. (If a future n8n build *does* return a `count` field on
+the first page, the implementation trusts it and skips paging — see the
+comment at the top of `server/datatables.mjs`.)
 
 **One-day warm-up.** A growth expectation's delta needs two samples that
 straddle its window; until then the query returns `NULL`, which
