@@ -223,6 +223,16 @@ Notable changes to Po11y. Format follows
   that rotates refresh tokens would answer the replay with a sign-in redirect,
   on a page that fetches its feeds with XHR. Refresh still needs the IdP to
   issue a refresh token; where it does not, the cookie expiry is the bound.
+
+  A session over 4kB is split across several cookies, and `auth_request`
+  exposes only the first `Set-Cookie` of them — forwarding that alone would
+  pair a fresh part 0 with a stale part 1 and break the session outright. The
+  dashboard detects the split and withholds the header instead, leaving the
+  browser on its intact pre-refresh cookie; a deployment whose IdP issues
+  tokens that large should move to a Redis session store, which upstream
+  recommends over reassembling the parts in nginx. `OAUTH2_PROXY_COOKIE_NAME`
+  is pinned to `_oauth2_proxy` because the detection derives an nginx variable
+  name from it.
 - `bootstrap.sh` and `scripts/readonly-preflight.sh` `chmod 600 .env` when they
   write to it. Every generated secret lands there — the Postgres passwords,
   the Grafana admin password, the n8n owner password, the minted API key — and

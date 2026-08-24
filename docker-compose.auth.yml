@@ -30,6 +30,11 @@ services:
       # comma-separated. '*' still works if you mean it and something else
       # narrows who the IdP will authenticate at all.
       - OAUTH2_PROXY_EMAIL_DOMAINS=${OAUTH2_PROXY_EMAIL_DOMAINS:?set the e-mail domain(s) allowed to sign in, e.g. example.com (see .env.example)}
+      # Pinned, not left to oauth2-proxy's default, because nginx derives a
+      # variable name from it: the dashboard detects a split session by reading
+      # $upstream_cookie__oauth2_proxy_1. Change this and that detection stops
+      # working silently, so change deploy/nginx/dashboard-entrypoint.sh with it.
+      - OAUTH2_PROXY_COOKIE_NAME=_oauth2_proxy
       # Claim to read group membership from. oauth2-proxy surfaces it as
       # X-Auth-Request-Groups; the dashboard's /form/ authorization
       # (FORM_ALLOWED_GROUPS) matches against it. Default matches

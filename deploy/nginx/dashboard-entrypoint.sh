@@ -52,9 +52,35 @@ if [ "$FORWARD_AUTH" = "true" ]; then
     # nginx auth_request guide prescribes for --cookie-refresh.
     # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
     printf '%s\n' 'auth_request_set $auth_cookie $upstream_http_set_cookie;'
+    # A session larger than 4kB is split across _oauth2_proxy_0.._N, and
+    # $upstream_http_set_cookie carries only the FIRST of those headers.
+    # Forwarding part 0 alone is worse than forwarding nothing: the browser
+    # would hold a fresh part 0 beside a stale part 1, the session would fail
+    # to decode, and every request would bounce to sign-in. Capturing part 1
+    # is how we detect the split; the map below then withholds the whole
+    # header, which leaves the browser on its intact pre-refresh cookie.
+    # Reassembling the parts in nginx is possible and upstream documents it,
+    # but calls it fragile, handles only two parts and hard-codes the cookie
+    # name — a server-side session store is upstream's own answer, and
+    # docs/forward-auth.md points a split deployment at it.
     # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
-    printf '%s\n' 'add_header Set-Cookie $auth_cookie;'
+    printf '%s\n' 'auth_request_set $auth_cookie_part1 $upstream_cookie__oauth2_proxy_1;'
+    # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
+    printf '%s\n' 'add_header Set-Cookie $safe_auth_cookie;'
   } > /etc/nginx/forward-auth.conf
+  # http scope, like form-authz.conf: `map` is invalid in the server-scope
+  # include. Empty part 1 means an unsplit session, and only then does the
+  # refreshed cookie reach the browser.
+  {
+    # shellcheck disable=SC2016  # literal nginx $var syntax, not shell expansion
+    printf '%s\n' 'map $auth_cookie_part1 $auth_cookie_split { default split; "" whole; }'
+    # shellcheck disable=SC2016  # literal nginx $var syntax, not shell expansion
+    printf '%s\n' 'map "$auth_cookie_split:$auth_cookie" $safe_auth_cookie {'
+    printf '%s\n' '  default "";'
+    # shellcheck disable=SC2016  # literal nginx $var syntax, not shell expansion
+    printf '%s\n' '  "~^whole:(?<cookie>.+)$" $cookie;'
+    printf '%s\n' '}'
+  } > /etc/nginx/conf.d/auth-cookie.conf
   # nginx inherits add_header only into levels that declare none of their own,
   # so the server-scope line above is shadowed in every location that sets its
   # own Cache-Control — the app shell and, more importantly, the feeds the
@@ -63,10 +89,11 @@ if [ "$FORWARD_AUTH" = "true" ]; then
   # no auth_request_set defined is a config error nginx refuses to start on,
   # which is why the empty file below is load-bearing rather than tidy.
   # shellcheck disable=SC2016  # literal nginx $var syntax, not shell expansion
-  printf '%s\n' 'add_header Set-Cookie $auth_cookie;' > /etc/nginx/refresh-cookie.conf
+  printf '%s\n' 'add_header Set-Cookie $safe_auth_cookie;' > /etc/nginx/refresh-cookie.conf
 else
   : > /etc/nginx/forward-auth.conf
   : > /etc/nginx/refresh-cookie.conf
+  : > /etc/nginx/conf.d/auth-cookie.conf
 fi
 # Basic Auth gate. Forward-auth WINS when both are set: a Basic prompt on
 # top of the OIDC redirect is double auth / broken UX, so log a one-line

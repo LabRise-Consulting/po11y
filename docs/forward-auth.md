@@ -41,6 +41,14 @@ Revocation is not immediate. A user you disable in the IdP keeps their session u
 
 Refresh needs a refresh token, which most IdPs issue only for the `offline_access` scope. Without one, oauth2-proxy revalidates the ID token locally instead of asking the IdP, and `OAUTH2_PROXY_COOKIE_EXPIRE` becomes the real bound on how long a revoked account keeps access. Check that your IdP issues a refresh token if you rely on the one-hour figure; the expiry always holds.
 
+### Large sessions (split cookies)
+
+A session over 4kB does not fit in one cookie, so oauth2-proxy splits it across `_oauth2_proxy_0`, `_oauth2_proxy_1` and so on. Nginx's `auth_request` exposes only the first `Set-Cookie` header, so forwarding a refreshed split session would leave the browser holding a new part 0 beside a stale part 1 — a session that no longer decodes, and a sign-in redirect on the next request.
+
+The dashboard detects the split by reading `$upstream_cookie__oauth2_proxy_1`, and withholds the header entirely when it is present. The browser then keeps its intact pre-refresh cookie: refresh stops taking effect for that deployment, and `OAUTH2_PROXY_COOKIE_EXPIRE` becomes the bound on revocation again, but no session breaks.
+
+Sessions grow with the size of the tokens your IdP issues, so this affects IdPs with large ID tokens or many group claims. If it affects yours, configure a server-side session store (`OAUTH2_PROXY_SESSION_STORE_TYPE=redis` and a Redis instance you run). The cookie then holds only a ticket, which never splits and never changes on refresh, so refresh works with no nginx involvement at all. This is upstream's own recommendation; reassembling split cookies in nginx is documented but fragile, handles only two parts, and hard-codes the cookie name. The overlay pins `OAUTH2_PROXY_COOKIE_NAME=_oauth2_proxy` because the detection above derives an nginx variable name from it.
+
 The dashboard also has to hand the refreshed cookie back to the browser. Nginx discards the `auth_request` subrequest's `Set-Cookie`, so the entrypoint renders the `auth_request_set $auth_cookie` / `add_header Set-Cookie` pair that upstream prescribes for `--cookie-refresh`, and every location with its own `add_header` restates it — nginx inherits `add_header` only into levels that declare none. Without that, the browser keeps presenting the pre-refresh cookie, and an IdP that rotates refresh tokens rejects the replay and forces a sign-in redirect.
 
 ## Header security

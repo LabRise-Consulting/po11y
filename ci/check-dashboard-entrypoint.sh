@@ -20,7 +20,7 @@ CANON='entrypoint: ["sh", "/etc/po11y-dashboard-entrypoint.sh"]'
 SCRIPT=deploy/nginx/dashboard-entrypoint.sh
 
 [ -f "$SCRIPT" ] || fail "$SCRIPT is missing"
-for marker in '/etc/nginx/feeds.conf' '/etc/nginx/auth.conf' '/etc/nginx/form-proxy.conf' '/etc/nginx/forward-auth.conf' 'conf.d/form-authz.conf' '/etc/nginx/refresh-cookie.conf' 'po11y_bind_guard'; do
+for marker in '/etc/nginx/feeds.conf' '/etc/nginx/auth.conf' '/etc/nginx/form-proxy.conf' '/etc/nginx/forward-auth.conf' 'conf.d/form-authz.conf' '/etc/nginx/refresh-cookie.conf' 'conf.d/auth-cookie.conf' 'po11y_bind_guard'; do
   grep -qF "$marker" "$SCRIPT" || fail "$SCRIPT no longer renders $marker"
 done
 
