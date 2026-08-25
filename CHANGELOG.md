@@ -298,6 +298,39 @@ Notable changes to Po11y. Format follows
   receives no per-user identity, that groups gate only `POST /form/`, and that
   `/mcp/` becomes unreachable for machine clients once the overlay is on.
 
+- The Kubernetes manifests pointed Grafana's `n8n-postgres` datasource at n8n's
+  own database user, which has full privileges. Grafana grants every anonymous
+  visitor the Viewer role, a Viewer may run arbitrary SQL through
+  `/api/ds/query`, and the dashboard proxies `/grafana/` with no authentication
+  of its own — so anyone who could reach the dashboard could read
+  `credentials_entity` and `execution_data`. The compose stack does not have
+  this problem because `bootstrap.sh` creates a SELECT-only `po11y_ro` role
+  first; the manifests had no equivalent, and the gap was recorded as a known
+  divergence in a comment rather than closed.
+
+  The grafana Deployment now runs a `create-readonly-role` init container that
+  executes the same SQL `bootstrap.sh` does, and the datasource authenticates as
+  `po11y_ro` with a new `PO11Y_RO_PASSWORD` secret key. The Grafana container no
+  longer holds `DB_POSTGRESDB_PASSWORD` at all — only the init container does,
+  and only long enough to create the role. Existing deployments must add
+  `PO11Y_RO_PASSWORD` to the `po11y-secrets` Secret before rolling out; see
+  `deploy/k8s/README.md` step 2.
+- The Kubernetes dashboard nginx proxied `/grafana/` without the header
+  scrubbing `nginx.conf` does: neither `Authorization` nor the six
+  `X-Auth-Request-*` / `X-Forwarded-*` identity headers were cleared. Grafana's
+  `auth.proxy` is off, so nothing acted on a forged identity header today, but
+  enabling it later would have been a silent authentication bypass — and the
+  unscrubbed `Authorization` header already broke the authenticating Ingress the
+  README recommends, because Grafana tries forwarded Basic credentials against
+  its own users and answers 401. `ci/check-k8s-grafana.sh` now reads the
+  expected header list out of `nginx.conf`, so the two copies cannot drift
+  apart again.
+- `safeUrl` refused `//host/path` but accepted `/\host/path`. A browser
+  normalises every backslash in a special scheme to a forward slash before
+  resolving, so the second spelling is the first one in disguise: it resolved to
+  `http://host/path` and retargeted a dashboard link off the box, which is
+  exactly what the `//` check exists to prevent. Backslashes are now refused
+  anywhere in a URL — nothing po11y links to needs one.
 
 ## [0.1.0] - 2026-08-20
 

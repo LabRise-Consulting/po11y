@@ -100,6 +100,22 @@ data:
         set $grafana_upstream http://grafana:3000;
         proxy_pass $grafana_upstream;
         proxy_set_header Host $http_host;
+        # Same scrubbing the compose nginx does (nginx.conf), which this copy
+        # lacked. Authorization first: the README tells operators to put an
+        # authenticating Ingress in front, and forwarded Basic credentials make
+        # Grafana try them against its own users and answer 401. The identity
+        # headers second: a client can send its own X-Auth-Request-* /
+        # X-Forwarded-* to the front door, hoping a header-auth-aware upstream
+        # reads them as a verified identity. Grafana's auth.proxy is off here,
+        # so nothing acts on them today — scrub them so turning it on later is
+        # not a silent authentication bypass.
+        proxy_set_header Authorization "";
+        proxy_set_header X-Auth-Request-User "";
+        proxy_set_header X-Auth-Request-Email "";
+        proxy_set_header X-Auth-Request-Groups "";
+        proxy_set_header X-Forwarded-User "";
+        proxy_set_header X-Forwarded-Email "";
+        proxy_set_header X-Forwarded-Groups "";
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -198,11 +214,16 @@ metadata:
 data:
   # ./observability/grafana/provisioning/datasources/datasources.yml
   # Grafana interpolates ${VAR} in provisioning YAML from the pod env, so the
-  # DB_POSTGRESDB_* env vars on the grafana Deployment fill these in.
-  # KNOWN DIVERGENCE from compose: compose authenticates this datasource as
-  # the read-only po11y_ro role (created by bootstrap.sh); these manifests
-  # have no bootstrap equivalent, so Grafana here still uses n8n's own DB
-  # credentials with full privileges.
+  # env vars on the grafana Deployment fill these in.
+  #
+  # po11y_ro, never n8n's own DB user. Grafana runs with anonymous Viewer
+  # access, and a Viewer may run arbitrary SQL against a datasource through
+  # /api/ds/query, so whatever this datasource can read is readable by anyone
+  # who can reach Grafana — which, through the dashboard's /grafana/ proxy, is
+  # anyone who can reach the dashboard. The role is SELECT-only with
+  # credentials_entity and execution_data revoked, and is created by the
+  # create-readonly-role init container on the grafana Deployment. This used to
+  # be a documented divergence from compose rather than a fix.
   datasources.yml: |
     apiVersion: 1
 
@@ -213,9 +234,9 @@ data:
         access: proxy
         url: postgres:5432
         database: ${DB_POSTGRESDB_DATABASE}
-        user: ${DB_POSTGRESDB_USER}
+        user: ${PO11Y_RO_USER}
         secureJsonData:
-          password: ${DB_POSTGRESDB_PASSWORD}
+          password: ${PO11Y_RO_PASSWORD}
         jsonData:
           sslmode: disable
           postgresVersion: 1600

@@ -40,6 +40,26 @@ test('safeUrl refuses protocol-relative urls', () => {
   assert.equal(safeUrl('/ok'), '/ok', 'a single leading slash is still fine');
 });
 
+// A backslash is not a path character to a browser: in a special scheme the
+// URL parser normalises `\` to `/` before resolving, so "/\evil.test/x" is the
+// protocol-relative "//evil.test/x" wearing a disguise. Checking only for a
+// literal "//" therefore refused the obvious spelling and passed the one an
+// attacker would actually reach for.
+test('safeUrl refuses backslash spellings of a protocol-relative url', () => {
+  assert.equal(safeUrl('/\\evil.test/x'), '#');
+  assert.equal(safeUrl('\\\\evil.test/x'), '#');
+  assert.equal(safeUrl('\\/evil.test/x'), '#');
+  assert.equal(safeUrl('//\\evil.test'), '#');
+});
+
+// Anywhere, not just at the front: a browser normalises every backslash in the
+// path, so "/a\b" and "/a/b" address the same thing. Nothing po11y links to
+// needs one, and allowing them means re-deriving this rule at every call site.
+test('safeUrl refuses a backslash anywhere in the url', () => {
+  assert.equal(safeUrl('/site/map\\html'), '#');
+  assert.equal(safeUrl('https://example.test/a\\b'), '#');
+});
+
 test('safeUrl escapes the url it accepts', () => {
   assert.equal(safeUrl('/x?a=1&b=2'), '/x?a=1&amp;b=2');
 });
