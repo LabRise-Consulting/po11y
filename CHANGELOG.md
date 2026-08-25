@@ -109,6 +109,53 @@ Notable changes to Po11y. Format follows
 
 ### Fixed
 
+- `PO11Y_ALLOW_OPEN_BIND=1` set in `.env` — where `.env.example` documents it —
+  did not reach `bootstrap.sh` or `scripts/readonly-preflight.sh`. The guard
+  reads it from the process environment, compose reads it from `.env` for the
+  container, and both scripts run before compose, so the override worked for
+  the dashboard container and nowhere else: bootstrap refused an open bind with
+  exit 78 while naming the variable the operator had already set. Both scripts
+  now lift the value out of `.env` when it is not already exported, so a shell
+  override still wins, exactly as compose resolves it.
+- The exposure guard read a bracketed IPv6 loopback bind (`BIND_ADDR=[::1]`) as
+  non-loopback and refused to serve on it. The brackets are what a compose port
+  mapping needs to tell the address from the port, so the bracketed spelling is
+  the one an operator actually writes — which made the safest bind available the
+  one the dashboard would not start on. Unbracketed expanded forms stay
+  unsupported: compose does not accept them in a port mapping.
+- The read-only preflight's exposure report could not see the forward-auth
+  overlay, because `docker-compose.auth.yml` sets `FORWARD_AUTH` on the
+  dashboard service and never in `.env`. A read-only stack running the overlay
+  on a non-loopback bind was told the dashboard would refuse to start, which is
+  the opposite of what happens. The report now detects a configured overlay by
+  the variable that file cannot start without, names it as the gate, and says
+  the overlay only gates anything once it is actually brought up with the second
+  `-f` — configured is not running, and both readings are stated rather than
+  guessed at.
+- The preflight's `config.json` seeder built `n8nUrl` from scheme, host and port
+  only, dropping the path. An n8n served under a prefix (`N8N_PATH`, or a proxy
+  mounting it at `/n8n`) got `https://{host}`, so every `{n8n}`-built card
+  resolved past the prefix and 404'd — the exact breakage `{n8n}` was added to
+  fix.
+- The same seeder overwrote a hand-set `n8nUrl` whenever `baseUrl` was empty,
+  against the README's promise that a re-run writes only what is empty. An
+  operator who set the prefix by hand and left the host to the script lost the
+  prefix on the next run. It now writes `n8nUrl` only when it is empty or still
+  the shape `config.readonly.example.json` ships, and says so when it declines.
+- The seeder exited non-zero on the "rewrite would not parse" branch. That
+  branch is the last command in its arm and the script runs under `set -eu`, so
+  it aborted the whole preflight: the exposure report and the metrics verdict
+  never printed, on the one run where the operator most needs them. Nothing was
+  being written either way, so it now reports and carries on.
+- The po11y Execution Health dashboard's **Success rate** panel divided by an
+  unguarded denominator. `server/metrics.mjs` emits a `0` for every workflow it
+  knows, so on a store with nothing finished yet both sums are `0`, PromQL
+  yields `NaN`, and the leading panel of the read-only Metrics row rendered
+  `NaN` on its base threshold colour — red, on a brand-new and entirely healthy
+  install. The denominator is now `clamp_min(…, 1)`, which fixes `0/0` while
+  leaving a never-scraped server showing "No data" rather than claiming a rate
+  it has no evidence for.
+
 - A data table that grew past the row-count sampler's page ceiling reported
   its own healthy ingest as a dead one. Counting a table means paging it, and
   paging stopped at 40 pages — so once a table passed 10,000 rows every

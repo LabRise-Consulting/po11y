@@ -174,6 +174,17 @@ BIND="$(get_env BIND_ADDR)"; BIND="${BIND:-127.0.0.1}"
 . ./deploy/nginx/bind-guard.sh
 GATE=""
 [ -z "$(get_env DASHBOARD_BASIC_AUTH)" ] || GATE=DASHBOARD_BASIC_AUTH
+# The override reaches the CONTAINER through compose, which reads it from
+# .env — and .env is where .env.example documents it. This script runs before
+# compose and the guard reads the process environment, so the value has to be
+# lifted across here or the two disagree: the container would accept the open
+# bind that bootstrap already refused with exit 78, naming the variable the
+# operator had just set. An exported value wins, so a CI/runtime override still
+# beats the file, exactly as compose resolves it.
+if [ -z "${PO11Y_ALLOW_OPEN_BIND:-}" ]; then
+  PO11Y_ALLOW_OPEN_BIND="$(get_env PO11Y_ALLOW_OPEN_BIND)"
+  export PO11Y_ALLOW_OPEN_BIND
+fi
 po11y_bind_guard "$BIND" bundled "$GATE" || exit 78
 
 # ---- 2. stack up ----------------------------------------------------------------

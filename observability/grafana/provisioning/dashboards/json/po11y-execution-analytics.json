@@ -69,7 +69,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "100 * (1 - sum(po11y_workflow_errors_total) / sum(po11y_workflow_executions_total))",
+          "expr": "100 * (1 - sum(po11y_workflow_errors_total) / clamp_min(sum(po11y_workflow_executions_total), 1))",
           "format": "time_series",
           "instant": true,
           "range": false,

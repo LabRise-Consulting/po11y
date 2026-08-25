@@ -218,4 +218,96 @@ out="$(runcfg)"
 printf '%s\n' "$out" | grep -q 'config.readonly.example.json' \
   || fail 'config seeding: did not point at the example to copy'
 
+# An n8n served under a path prefix (N8N_PATH, or a proxy mounting it at /n8n).
+# n8nUrl carries the shape around the host, and the path is part of that shape:
+# dropping it built "https://{host}" and every {n8n} card resolved to
+# https://example.com/workflow/... — the breakage {n8n} was added to fix.
+cfg_env 'https://example.com/n8n' 'https://example.com/n8n'
+cfg_json '' 'http://{host}:5678'
+runcfg >/dev/null
+has_cfg '"baseUrl": "example.com"' || fail 'config seeding: path-prefixed host not written'
+has_cfg '"n8nUrl": "https://{host}/n8n"' || fail 'config seeding: dropped the n8n path prefix'
+
+# A hand-set n8nUrl beside an EMPTY baseUrl. The README promises a re-run writes
+# only what is empty, and baseUrl being empty is no evidence that n8nUrl is: an
+# operator who sets the prefix by hand and leaves the host to the script hit
+# exactly this and lost the prefix on the next run.
+cfg_env 'http://100.66.166.57:5678' 'http://100.66.166.57:5678'
+cfg_json '' 'https://{host}/n8n'
+out="$(runcfg)"
+has_cfg '"baseUrl": "100.66.166.57"' || fail 'config seeding: baseUrl not written beside a hand-set n8nUrl'
+has_cfg '"n8nUrl": "https://{host}/n8n"' || fail 'config seeding: clobbered a hand-set n8nUrl'
+printf '%s\n' "$out" | grep -q 'hand-set' \
+  || fail 'config seeding: silently skipped the n8nUrl instead of saying why'
+
+# ---- exposure report --------------------------------------------------------
+# The report must never claim an outcome the container will not produce. Three
+# gates, three different things to say, and the metrics verdict must still
+# print underneath every one of them — a config-seed branch that exits non-zero
+# takes the rest of the report down with it under `set -eu`.
+grep -q 'sys.exit(1)' scripts/readonly-preflight.sh \
+  && fail 'the config seeder still exits non-zero — that aborts the whole preflight under set -e'
+
+expose_env() { # expose_env BIND EXTRA_LINE
+  cat > "$TMP/env.exp" <<EOF
+N8N_API_URL=http://127.0.0.1:1
+N8N_API_KEY=fixture
+N8N_METRICS_TARGET=127.0.0.1:1
+GRAFANA_ADMIN_PASSWORD=fixture
+OMNIROUTE_JWT_SECRET=fixture
+OMNIROUTE_API_KEY_SECRET=fixture
+OMNIROUTE_ADMIN_PASSWORD=fixture
+BIND_ADDR=$1
+$2
+EOF
+}
+
+runexp() {
+  ENV_FILE="$TMP/env.exp" sh scripts/readonly-preflight.sh --check \
+    --metrics-file ci/fixtures/metrics-minimal.txt 2>&1 || true
+}
+
+# Loopback: nothing to warn about.
+expose_env '127.0.0.1' ''
+out="$(runexp)"
+printf '%s\n' "$out" | grep -q 'reaches this host only' \
+  || fail 'exposure: a loopback bind was not reported as safe'
+
+# Bracketed IPv6 loopback is the form a compose port mapping needs, so it is the
+# form that lands in .env. It reaches this host only, exactly like 127.0.0.1.
+expose_env '[::1]' ''
+printf '%s\n' "$(runexp)" | grep -q 'reaches this host only' \
+  || fail 'exposure: BIND_ADDR=[::1] was not recognised as loopback'
+
+# Ungated and open: the one case that really does refuse.
+expose_env '192.0.2.1' ''
+out="$(runexp)"
+printf '%s\n' "$out" | grep -q 'will refuse to start' \
+  || fail 'exposure: an ungated open bind was not reported as refusing'
+printf '%s\n' "$out" | grep -q 'REFUSING' \
+  && fail 'exposure: the report claims to refuse while it exits 0'
+
+# The override, set where .env.example documents it. The container accepts this
+# bind, so the report must not say the dashboard will refuse to start.
+expose_env '192.0.2.1' 'PO11Y_ALLOW_OPEN_BIND=1'
+out="$(runexp)"
+printf '%s\n' "$out" | grep -q 'PO11Y_ALLOW_OPEN_BIND=1' \
+  || fail 'exposure: PO11Y_ALLOW_OPEN_BIND=1 in .env was ignored'
+printf '%s\n' "$out" | grep -q 'will refuse to start' \
+  && fail 'exposure: reported a refusal for a bind the override accepts'
+
+# The forward-auth overlay. FORWARD_AUTH is set by docker-compose.auth.yml, not
+# by .env, so the overlay is detected by the variable it cannot start without.
+# Configured is not brought up, so the report names the gate AND the second -f.
+expose_env '192.0.2.1' 'OAUTH2_PROXY_OIDC_ISSUER_URL=https://idp.example.com'
+out="$(runexp)"
+printf '%s\n' "$out" | grep -q 'gated by the forward-auth overlay' \
+  || fail 'exposure: a configured forward-auth overlay was not recognised as a gate'
+printf '%s\n' "$out" | grep -q 'docker-compose.auth.yml' \
+  || fail 'exposure: did not say the overlay must actually be brought up'
+
+# Every one of those runs must still reach the metrics verdict underneath.
+printf '%s\n' "$out" | grep -q 'Ask the admin of that n8n to set' \
+  || fail 'exposure: the metrics verdict did not print after the exposure report'
+
 echo 'check-readonly-preflight: ok'

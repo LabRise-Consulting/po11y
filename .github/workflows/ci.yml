@@ -183,7 +183,46 @@ jobs:
           sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 127.0.0.1 readonly ""' >/dev/null
           sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 bundled DASHBOARD_BASIC_AUTH' >/dev/null
           sh -c 'PO11Y_ALLOW_OPEN_BIND=1; export PO11Y_ALLOW_OPEN_BIND; . ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 bundled ""' >/dev/null
-          echo "guard OK: loopback, gated and overridden binds all pass"
+          # IPv6 loopback, in the bracketed form a compose port mapping needs
+          # ("[::1]:3000:3000") — which is therefore the form an operator puts
+          # in .env. Reading it as non-loopback refused the safest bind there is.
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard "[::1]" readonly ""' >/dev/null
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard "::1" readonly ""' >/dev/null
+          echo "guard OK: loopback (v4, v6, bracketed v6), gated and overridden binds all pass"
+      # The override has to work where .env.example says it does. bootstrap.sh
+      # and the preflight run BEFORE compose, so each lifts PO11Y_ALLOW_OPEN_BIND
+      # out of .env into the environment the guard reads; without that the
+      # container accepts a bind bootstrap already refused with exit 78.
+      - run: |
+          tmp=$(mktemp -d)
+          cp -r deploy "$tmp/"; cp bootstrap.sh "$tmp/"
+          printf 'BIND_ADDR=192.0.2.1\nPO11Y_ALLOW_OPEN_BIND=1\nDASHBOARD_BASIC_AUTH=\n' > "$tmp/.env"
+          set +e
+          (cd "$tmp" && sh -c '
+            set -eu
+            ENV_FILE=.env
+            get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed "s/[[:space:]]*#.*//"; }
+            . ./deploy/nginx/bind-guard.sh
+            if [ -z "${PO11Y_ALLOW_OPEN_BIND:-}" ]; then
+              PO11Y_ALLOW_OPEN_BIND="$(get_env PO11Y_ALLOW_OPEN_BIND)"
+              export PO11Y_ALLOW_OPEN_BIND
+            fi
+            po11y_bind_guard "$(get_env BIND_ADDR)" bundled ""
+          ') >/dev/null
+          code=$?
+          set -e
+          rm -rf "$tmp"
+          if [ "$code" -ne 0 ]; then
+            echo "guard FAILED: PO11Y_ALLOW_OPEN_BIND=1 in .env did not accept the open bind (exit $code)"
+            exit 1
+          fi
+          # And the same lift must be present in the two scripts that need it,
+          # so this assertion cannot pass against a copy that only lives here.
+          for f in bootstrap.sh scripts/readonly-preflight.sh; do
+            grep -q 'get_env PO11Y_ALLOW_OPEN_BIND' "$f" \
+              || { echo "guard FAILED: $f does not read PO11Y_ALLOW_OPEN_BIND from .env"; exit 1; }
+          done
+          echo "guard OK: PO11Y_ALLOW_OPEN_BIND is honoured from .env before compose runs"
       # report mode is wording only: the read-only preflight prints the same
       # finding but goes on to exit 0, so the text must not say REFUSING while
       # the return value stays 1 for callers that do refuse.

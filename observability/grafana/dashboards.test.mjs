@@ -149,3 +149,31 @@ test('the po11y dashboard only queries metrics the server actually exports', () 
     }
   }
 });
+
+// A fresh store is the first thing an operator sees, and it is exactly where
+// PromQL division breaks: server/metrics.mjs emits a 0 for every workflow it
+// knows, so `sum(errors) / sum(executions)` is 0/0 — NaN — until something has
+// finished. A stat panel renders NaN on its base threshold colour, which on
+// the success rate is red: a brand-new, entirely healthy install shows a red
+// panel reading NaN.
+//
+// `clamp_min(denominator, 1)` rather than `or vector(N)`, and the test asks for
+// that shape specifically. The two are not interchangeable here: `or vector(N)`
+// fires on an EMPTY result as well as a zero one, so on the success rate it
+// would also claim N when no series exist at all — a server that has never been
+// scraped — where "No data" is the honest answer. Guarding the denominator
+// fixes 0/0 and leaves the never-scraped case alone.
+test('no stat panel on the po11y dashboard divides by an unguarded denominator', () => {
+  const dash = [...byUid.values()].find((d) => d.file.startsWith('po11y-'));
+  assert.ok(dash, 'no po11y-*.json dashboard is shipped');
+
+  const offenders = [];
+  for (const panel of allPanels(dash).filter((p) => p.type === 'stat')) {
+    for (const expr of exprsOf(panel)) {
+      if (!expr.includes('/')) continue;
+      if (!/clamp_min\s*\(/.test(expr)) offenders.push(`${panel.id} "${panel.title}": ${expr}`);
+    }
+  }
+  assert.deepEqual(offenders, [],
+    'these stat panels divide without clamp_min, so a store with nothing finished renders NaN');
+});

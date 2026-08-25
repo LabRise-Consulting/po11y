@@ -18,9 +18,17 @@
 
 # po11y_bind_is_loopback BIND -> 0 when BIND reaches this host only.
 # An empty value counts: every compose file defaults BIND_ADDR to 127.0.0.1.
+#
+# `[::1]` as well as `::1`: a compose port mapping needs the brackets to tell
+# the address from the port ("[::1]:3000:3000"), so the bracketed spelling is
+# the one an operator who binds IPv6 loopback actually writes into .env.
+# Reading it as non-loopback refused to serve on the safest bind there is.
+# Unbracketed expanded forms (0:0:...:1) are deliberately absent: compose does
+# not accept them in a port mapping, so they cannot reach this function from a
+# working configuration.
 po11y_bind_is_loopback() {
   case "${1:-}" in
-    ""|localhost|::1|127.*) return 0 ;;
+    ""|localhost|::1|"[::1]"|127.*) return 0 ;;
     *) return 1 ;;
   esac
 }
