@@ -20,11 +20,16 @@
   })();
 </script>
 <style>
+  /* Kind hues: every kind its own hue — schedule no longer shares the workflow
+     blue and feed/external are no longer twin greys. Adjacent-in-the-graph
+     pairs are CVD-validated; far pairs lean on the card's kind tag text.
+     sky/sink stay for ai-map.json files published before the server rename. */
   :root{
     --bg:#f4f6f9; --panel:#ffffff; --ink:#141a22; --muted:#5b6774;
     --line:#d3dae2; --grid:#e7ebf0;
-    --neutral:#64748b; --cyan:#0e93b0; --amber:#c07a10; --emerald:#0f9d6b;
-    --sky:#2f74d0; --violet:#7c53d6; --sink:#7a8695;
+    --neutral:#64748b; --cyan:#2a78d6; --amber:#c07a10; --emerald:#0f9d6b;
+    --sky:#2f74d0; --violet:#5f35c8; --sink:#7a8695; --rose:#ad2e5e;
+    --orange:#cc4e14; --plum:#a21caf;
     --edge:#aab4c0;
     --shadow:0 1px 2px rgba(20,30,45,.06),0 6px 20px rgba(20,30,45,.07);
     --mono:ui-monospace,"SF Mono",Menlo,"Cascadia Code",Consolas,monospace;
@@ -33,8 +38,9 @@
   :root[data-theme=dark]{
     --bg:#0e131a; --panel:#161d27; --ink:#e7edf4; --muted:#93a1b1;
     --line:#28323f; --grid:#1b2430;
-    --neutral:#8b98a8; --cyan:#38bdf8; --amber:#e0a13c; --emerald:#34d399;
-    --sky:#6aa6f5; --violet:#a888f0; --sink:#8a97a8;
+    --neutral:#8b98a8; --cyan:#6aa6f5; --amber:#e0a13c; --emerald:#10a878;
+    --sky:#6aa6f5; --violet:#7a55e0; --sink:#8a97a8; --rose:#ef7fa7;
+    --orange:#e0794a; --plum:#c44dd6;
     --edge:#3a4657;
     --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
   }
@@ -42,8 +48,9 @@
     :root:not([data-theme=light]){
       --bg:#0e131a; --panel:#161d27; --ink:#e7edf4; --muted:#93a1b1;
       --line:#28323f; --grid:#1b2430;
-      --neutral:#8b98a8; --cyan:#38bdf8; --amber:#e0a13c; --emerald:#34d399;
-      --sky:#6aa6f5; --violet:#a888f0; --sink:#8a97a8;
+      --neutral:#8b98a8; --cyan:#6aa6f5; --amber:#e0a13c; --emerald:#10a878;
+      --sky:#6aa6f5; --violet:#7a55e0; --sink:#8a97a8; --rose:#ef7fa7;
+      --orange:#e0794a; --plum:#c44dd6;
       --edge:#3a4657;
       --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
     }
@@ -51,43 +58,72 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
     line-height:1.5;-webkit-font-smoothing:antialiased}
-  .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 56px}
+  .wrap{max-width:1400px;margin:0 auto;padding:28px 24px 48px}
   header .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;
     text-transform:uppercase;color:var(--cyan);margin:0 0 10px}
   h1{font-size:clamp(24px,4vw,34px);line-height:1.1;margin:0 0 8px;
     letter-spacing:-.02em;font-weight:680}
   .lede{color:var(--muted);max-width:64ch;margin:0;font-size:15px}
-  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:22px 0 0;
+  .controls{display:flex;flex-wrap:wrap;gap:10px 14px;margin:18px 0 0;align-items:center}
+  .views{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  .views button{border:0;background:var(--panel);color:var(--muted);cursor:pointer;
+    font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    padding:6px 12px}
+  .views button.on{background:var(--grid);color:var(--ink)}
+  .views button:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+  .views button[data-ord]::after{content:attr(data-ord);margin-left:5px;font-size:9px;
+    opacity:.7;vertical-align:super}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:0;margin-left:auto;
     font-family:var(--mono);font-size:11.5px;color:var(--muted)}
   .legend span{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
   .swatch{width:22px;height:3px;border-radius:2px;display:inline-block}
 
-  .board{margin-top:26px;background:var(--panel);border:1px solid var(--line);
-    border-radius:14px;box-shadow:var(--shadow);overflow-x:auto;overflow-y:hidden}
-  .stage{position:relative;margin:0 auto}
-  .stage svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-  .colhead{position:absolute;top:14px;transform:translateX(-50%);
-    font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
-    text-transform:uppercase;color:var(--muted);white-space:nowrap}
+  /* The board is the pan/zoom viewport: it clips, #stage is the single
+     transformed layer inside it (translate+scale, transform-origin 0 0). */
+  .board{position:relative;margin-top:22px;background:var(--panel);
+    border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);
+    overflow:hidden;height:max(460px,calc(100vh - 300px));
+    cursor:grab;touch-action:none}
+  .board.panning{cursor:grabbing}
+  #stage{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
+  #stage svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .colhead{position:absolute;transform:translateX(-50%);font-family:var(--mono);
+    font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);
+    white-space:nowrap}
 
   .node{position:absolute;transform:translate(-50%,-50%);width:190px;
     background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--nc,var(--neutral));
-    border-radius:9px;padding:10px 12px;box-shadow:var(--shadow);cursor:default;
-    transition:transform .12s ease,box-shadow .12s ease,opacity .12s ease}
-  .node:hover{transform:translate(-50%,-50%) translateY(-2px)}
+    border-radius:9px;padding:10px 12px;box-shadow:var(--shadow);cursor:grab;
+    transition:box-shadow .12s ease,opacity .12s ease}
+  .node.dragging{cursor:grabbing;z-index:5}
   .node .tag{font-family:var(--mono);font-size:10px;color:var(--nc,var(--neutral));
     font-weight:600;letter-spacing:.04em}
+  .node .tag .runcount,.node .tag .errcount{display:none;float:right;font-weight:500;margin-left:6px}
+  .node .tag .runcount{color:var(--muted)}
+  .node .tag .errcount{color:var(--rose)}
+  #stage.runs .runcount{display:inline-block}
+  #stage.errs .errcount{display:inline-block}
   .node .name{font-size:13.5px;font-weight:600;margin-top:1px;letter-spacing:-.01em}
   .node .sub{font-family:var(--mono);font-size:10.5px;color:var(--muted);
     margin-top:4px;line-height:1.35;word-break:break-word;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .stage.dim .node:not(.hot){opacity:.32}
-  .stage.dim .node.hot{box-shadow:0 0 0 2px var(--nc,var(--cyan)),var(--shadow)}
+  #stage.dim .node:not(.hot){opacity:.32}
+  #stage.dim .node.hot{box-shadow:0 0 0 2px var(--nc,var(--cyan)),var(--shadow)}
   path.edge{fill:none;stroke:var(--edge);stroke-width:1.6;opacity:.85;
     transition:opacity .12s ease,stroke-width .12s ease}
-  .stage.dim path.edge{opacity:.12}
-  .stage.dim path.edge.hot{opacity:1;stroke-width:2.4}
-  .node.clickable{cursor:pointer}
+  #stage.dim path.edge{opacity:.1}
+  #stage.dim path.edge.hot{opacity:1;stroke-width:2.4}
+
+  .zoom{position:absolute;right:12px;bottom:12px;z-index:10;display:flex;gap:4px}
+  .zoom button{width:30px;height:30px;border-radius:7px;cursor:pointer;
+    border:1px solid var(--muted);background:var(--panel);color:var(--ink);
+    font:14px/1 var(--sans);padding:0}
+  .zoom button:hover{border-color:var(--ink)}
+  .zoom button:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+  .hint{position:absolute;left:12px;bottom:12px;z-index:10;font-family:var(--mono);
+    font-size:10.5px;color:var(--muted);background:var(--panel);
+    border:1px solid var(--line);border-radius:6px;padding:3px 8px}
+
   .overlay{position:fixed;inset:0;background:rgba(10,15,22,.55);display:flex;
     align-items:center;justify-content:center;padding:20px;z-index:20}
   .overlay[hidden]{display:none}
@@ -141,9 +177,30 @@
     <p class="eyebrow" id="eyebrow"></p>
     <h1 id="title"></h1>
     <p class="lede" id="lede"></p>
-    <div class="legend" id="legend"></div>
+    <div class="controls">
+      <div class="views" role="group" aria-label="layout">
+        <button id="v-col">columns</button>
+        <button id="v-dag">free dag</button>
+      </div>
+      <div class="views" role="group" aria-label="sort">
+        <button id="s-default">default</button>
+        <button id="s-name">name</button>
+        <button id="s-runs">runs</button>
+        <button id="s-errors">errors</button>
+        <button id="s-recent">recent</button>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
   </header>
-  <div class="board" hidden><div class="stage" id="stage"></div></div>
+  <div class="board" id="viewport" hidden>
+    <div id="stage"></div>
+    <div class="hint">drag canvas to pan · drag a card to move it · wheel zooms · 0 fits</div>
+    <div class="zoom" id="zoom">
+      <button id="z-out" aria-label="zoom out" title="Zoom out (−)">−</button>
+      <button id="z-in" aria-label="zoom in" title="Zoom in (+)">+</button>
+      <button id="z-fit" aria-label="fit map to view" title="Fit to view (0)">⤢</button>
+    </div>
+  </div>
   <div class="notes" id="notes" hidden></div>
   <footer id="footer" hidden></footer>
   <div class="overlay" id="overlay" hidden>
@@ -156,18 +213,24 @@
   </div>
 </div>
 
-<script>
-// Renders /ai-map.json (written by the ai-map workflow — an LLM reads the
+<script type="module">
+// Renders /ai-map.json (written by the ai-map builder — an LLM reads the
 // live n8n workflow export and emits this schema):
 //   { generated_at, model, eyebrow, title, lede,
 //     columns: ["Triggers", ...],                     // 2-6 ordered column titles
-//     kinds: { "<kind>": "cyan|amber|emerald|sky|violet|neutral|sink" },
+//     kinds: { "<kind>": "cyan|amber|emerald|rose|orange|plum|violet|neutral" },
 //     nodes: [{ id, col, kind, tag, name, sub, summary? }], // col indexes columns;
 //                                  // summary: optional 2-3 sentence AI text on wf: nodes
 //     edges: [[fromId, toId, kind?]],
 //     legend: [[label, kind]], notes: [{ title, text }] }
-// All strings are model-generated — everything goes through esc().
-const PALETTE = ["neutral","cyan","amber","emerald","sky","violet","sink"];
+// All strings are model-generated — node cards go in via textContent, the
+// legend/notes via esc(). Layout maths lives in ai-map.layout.js and pan/zoom
+// maths in map.lib.js (both pure, node --test); this file is wiring.
+import { clampScale, zoomAt, fitView, isClick } from './map.lib.js';
+import { SIZES, layoutColumns, layoutDag } from './ai-map.layout.js';
+
+// sky/sink linger for maps published before the server's kind rename.
+const PALETTE = ["neutral","cyan","amber","emerald","sky","violet","sink","rose","orange","plum"];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
@@ -211,11 +274,12 @@ async function resolveN8nBase() {
 (async () => {
   const meta = document.getElementById("meta");
   // Scope (config "scopes"): the dashboard passes ?scope=<s> when a non-default
-  // scope is active; fetch that namespace's ai-map. No/invalid/default scope
-  // keeps today's flat path. Charset guard mirrors nginx's [a-z0-9-] whitelist.
+  // scope is active; fetch that namespace's feeds. No/invalid/default scope
+  // keeps today's flat paths. Charset guard mirrors nginx's [a-z0-9-] whitelist.
   const scope = new URLSearchParams(location.search).get("scope");
-  const aiMapUrl = (scope && scope !== "default" && /^[a-z0-9-]+$/.test(scope))
-    ? `/status/${scope}/ai-map.json` : "/ai-map.json";
+  const scoped = scope && scope !== "default" && /^[a-z0-9-]+$/.test(scope);
+  const aiMapUrl = scoped ? `/status/${scope}/ai-map.json` : "/ai-map.json";
+  const statusUrl = scoped ? `/status/${scope}/status.json` : "/status.json";
   let d;
   try {
     const r = await fetch(aiMapUrl, { cache: "no-store" });
@@ -230,6 +294,22 @@ async function resolveN8nBase() {
   meta.hidden = true;
   document.getElementById("setup").remove();
   const n8nBase = await resolveN8nBase();
+
+  // Execution stats (recent-100 window) keyed by map node id: powers the
+  // runs/errors/recent sorts and the count badges. Workflows outside the
+  // window have no entry and rank zero; a missing status.json just means
+  // every activity sort ranks zero — the map still renders.
+  let stats = {};
+  try {
+    const sr = await fetch(statusUrl, { cache: "no-store" });
+    if (sr.ok) {
+      const s = await sr.json();
+      stats = Object.fromEntries(((s.executions || {}).byWorkflow || [])
+        .filter((w) => w && w.id != null)
+        .map((w) => ["wf:" + w.id, w]));
+    }
+  } catch { /* feed optional */ }
+
   for (const el of document.querySelectorAll("header[hidden],.board[hidden],.notes[hidden],footer[hidden]")) el.hidden = false;
 
   const cs = getComputedStyle(document.documentElement);
@@ -256,54 +336,126 @@ async function resolveN8nBase() {
   const N = d.nodes.filter((n) => Number.isInteger(n.col) && n.col >= 0 && n.col < COLS.length);
   const ids = new Set(N.map((n) => n.id));
   const E = (d.edges || []).filter((e) => Array.isArray(e) && ids.has(e[0]) && ids.has(e[1]));
-
-  const NODE_W = 190, NODE_H = 74, VGAP = 24, PAD_TOP = 66, PAD_BOT = 30;
-  const STAGE_W = Math.max(760, 220 + (COLS.length - 1) * 235);
-  const COL_X = COLS.map((_, c) => COLS.length === 1 ? STAGE_W / 2 : 110 + c * ((STAGE_W - 220) / (COLS.length - 1)));
+  const { NODE_W } = SIZES;
 
   const stage = document.getElementById("stage");
-  const byCol = COLS.map((_, c) => N.filter((n) => n.col === c));
-  const heights = byCol.map((list) => Math.max(NODE_H, list.length * NODE_H + (list.length - 1) * VGAP));
-  const maxH = Math.max(...heights);
-  const STAGE_H = PAD_TOP + maxH + PAD_BOT;
-  const pos = {};
-  byCol.forEach((list, c) => {
-    const top = PAD_TOP + (maxH - heights[c]) / 2;
-    list.forEach((n, i) => { pos[n.id] = { x: COL_X[c], y: top + i * (NODE_H + VGAP) + NODE_H / 2 }; });
-  });
-  stage.style.width = STAGE_W + "px";
-  stage.style.height = STAGE_H + "px";
-
-  COLS.forEach((t, c) => {
-    const h = document.createElement("div"); h.className = "colhead";
-    h.style.left = COL_X[c] + "px"; h.textContent = t; stage.appendChild(h);
-  });
-
+  const viewport = document.getElementById("viewport");
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", `0 0 ${STAGE_W} ${STAGE_H}`);
   svg.setAttribute("preserveAspectRatio", "none");
   stage.appendChild(svg);
-  const edgeEls = [];
-  E.forEach(([a, b, k]) => {
-    const p1 = pos[a], p2 = pos[b]; if (!p1 || !p2) return;
-    const x1 = p1.x + NODE_W / 2, y1 = p1.y, x2 = p2.x - NODE_W / 2, y2 = p2.y;
-    const dx = Math.max(40, (x2 - x1) * 0.5);
+  const edgeEls = E.map(([a, b, k]) => {
     const path = document.createElementNS(NS, "path");
-    path.setAttribute("d", `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`);
     path.setAttribute("class", "edge");
     if (k) path.style.stroke = colVar(k);
     svg.appendChild(path);
-    edgeEls.push({ el: path, a, b });
+    return { el: path, a, b };
   });
 
+  // ---- live layout state -----------------------------------------------------
+  // pos/size come from the layout module; view is the pan/zoom transform; a
+  // card drag rewrites its pos entry directly (reset by any relayout). travel
+  // is shared by card drags and canvas pans so isClick can veto the dialog.
+  let pos = {}, size = { width: 0, height: 0 };
+  let view = { x: 0, y: 0, k: 1 };
+  let touched = false;
+  let travel = { dx: 0, dy: 0 };
+
   const nodeEls = {};
+  const headEls = [];
+  function placeNode(id) {
+    const el = nodeEls[id], p = pos[id];
+    el.style.left = p.x + "px"; el.style.top = p.y + "px";
+  }
+  function drawEdges() {
+    edgeEls.forEach((o) => {
+      const p1 = pos[o.a], p2 = pos[o.b]; if (!p1 || !p2) return;
+      // Leave/enter on the side facing the other node, so a dragged card that
+      // ends up left of its source still gets a sane curve.
+      const forward = p2.x >= p1.x;
+      const x1 = p1.x + (forward ? NODE_W / 2 : -NODE_W / 2), y1 = p1.y;
+      const x2 = p2.x + (forward ? -NODE_W / 2 : NODE_W / 2), y2 = p2.y;
+      const dx = Math.max(40, Math.abs(x2 - x1) * 0.5) * (forward ? 1 : -1);
+      o.el.setAttribute("d", `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`);
+    });
+  }
+
+  // ---- layout + sort ---------------------------------------------------------
+  const MODE_KEY = "po11y-ai-map-layout";
+  let curMode = localStorage.getItem(MODE_KEY) === "col" ? "col" : "dag";
+  let sortChain = [];
+  function applyMode(mode) {
+    curMode = mode;
+    localStorage.setItem(MODE_KEY, mode);
+    const r = mode === "dag"
+      ? layoutDag(N, E, sortChain, stats)
+      : layoutColumns(N, COLS, sortChain, stats);
+    pos = r.pos; size = { width: r.width, height: r.height };
+    stage.style.width = r.width + "px";
+    stage.style.height = r.height + "px";
+    svg.setAttribute("viewBox", `0 0 ${r.width} ${r.height}`);
+    Object.keys(nodeEls).forEach(placeNode);
+    drawEdges();
+    headEls.forEach((h) => h.remove()); headEls.length = 0;
+    r.heads.forEach((h) => {
+      const el = document.createElement("div");
+      el.className = "colhead"; el.style.left = h.x + "px"; el.style.top = "20px";
+      el.textContent = h.text;
+      stage.appendChild(el); headEls.push(el);
+    });
+    document.getElementById("v-dag").classList.toggle("on", mode === "dag");
+    document.getElementById("v-col").classList.toggle("on", mode !== "dag");
+    stage.classList.toggle("runs", sortChain.includes("runs") || sortChain.includes("recent"));
+    stage.classList.toggle("errs", sortChain.includes("errors"));
+    touched = false; fit();
+  }
+  document.getElementById("v-dag").addEventListener("click", () => applyMode("dag"));
+  document.getElementById("v-col").addEventListener("click", () => applyMode("col"));
+
+  const SORTS = ["name", "runs", "errors", "recent"];
+  function renderSortButtons() {
+    document.getElementById("s-default").classList.toggle("on", !sortChain.length);
+    SORTS.forEach((k) => {
+      const b = document.getElementById("s-" + k);
+      const i = sortChain.indexOf(k);
+      b.classList.toggle("on", i >= 0);
+      // Order badge only once a second key makes the order matter.
+      if (i >= 0 && sortChain.length > 1) b.dataset.ord = i + 1;
+      else delete b.dataset.ord;
+    });
+  }
+  document.getElementById("s-default").addEventListener("click", () => {
+    sortChain = []; renderSortButtons(); applyMode(curMode);
+  });
+  SORTS.forEach((k) => document.getElementById("s-" + k).addEventListener("click", () => {
+    const i = sortChain.indexOf(k);
+    if (i >= 0) sortChain.splice(i, 1); else sortChain.push(k);
+    renderSortButtons(); applyMode(curMode);
+  }));
+
+  // ---- node cards: hover highlight, drag-to-move, click dialog ---------------
   N.forEach((n) => {
-    const p = pos[n.id]; const el = document.createElement("div");
-    el.className = "node"; el.style.left = p.x + "px"; el.style.top = p.y + "px";
+    const el = document.createElement("div");
+    el.className = "node";
     el.style.setProperty("--nc", colVar(n.kind));
-    el.innerHTML = `<div class="tag">${esc(n.tag)}</div><div class="name">${esc(n.name)}</div><div class="sub">${esc(n.sub)}</div>`;
+    const mk = (cls, text) => {
+      const div = document.createElement("div");
+      div.className = cls; div.textContent = text ?? ""; return div;
+    };
+    const tag = mk("tag", n.tag);
+    const st = stats[n.id];
+    if (st) {
+      const rc = document.createElement("span"); rc.className = "runcount";
+      rc.textContent = String(st.count || 0);
+      rc.title = "executions in the recent window";
+      const ec = document.createElement("span"); ec.className = "errcount";
+      ec.textContent = String(st.errors || 0);
+      ec.title = "failed executions in the recent window";
+      tag.append(rc, ec);
+    }
+    el.append(tag, mk("name", n.name), mk("sub", n.sub));
     stage.appendChild(el); nodeEls[n.id] = el;
+
     const focus = () => {
       stage.classList.add("dim");
       const hot = new Set([n.id]);
@@ -319,13 +471,42 @@ async function resolveN8nBase() {
     el.addEventListener("mouseenter", focus);
     el.addEventListener("mouseleave", blur);
     el.tabIndex = 0; el.addEventListener("focus", focus); el.addEventListener("blur", blur);
+
+    // Drag a card to move it. stopPropagation keeps the viewport pan from
+    // starting; travel feeds the same click-vs-drag threshold as panning.
+    // Screen travel divides by the scale so the card tracks the pointer at
+    // any zoom. Manual positions last until the next layout/sort change.
+    let drag = null;
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: pos[n.id].x, oy: pos[n.id].y };
+      travel = { dx: 0, dy: 0 };
+      try { el.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+      el.classList.add("dragging");
+    });
+    el.addEventListener("pointermove", (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      travel = { dx: e.clientX - drag.sx, dy: e.clientY - drag.sy };
+      pos[n.id] = { x: drag.ox + travel.dx / view.k, y: drag.oy + travel.dy / view.k };
+      placeNode(n.id);
+      drawEdges();
+    });
+    const endDrag = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      try { el.releasePointerCapture(drag.id); } catch { /* already gone */ }
+      drag = null;
+      el.classList.remove("dragging");
+    };
+    el.addEventListener("pointerup", endDrag);
+    el.addEventListener("pointercancel", endDrag);
+
     // Workflows/sub-workflows open a detail dialog; trigger/file/external
     // nodes stay inert.
     if (String(n.id).startsWith("wf:")) {
-      el.classList.add("clickable");
       const open = () => openDialog(n.name, n.summary || n.sub || "",
         n8nBase ? `${n8nBase}/workflow/${encodeURIComponent(String(n.id).slice(3))}` : null);
-      el.addEventListener("click", open);
+      el.addEventListener("click", () => { if (isClick(travel.dx, travel.dy)) open(); });
       el.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
       });
@@ -337,6 +518,69 @@ async function resolveN8nBase() {
 
   document.getElementById("notes").innerHTML = (d.notes || []).slice(0, 4).map((n) =>
     `<div class="card"><h3>${esc(n.title)}</h3><p>${esc(n.text)}</p></div>`).join("");
+
+  // ---- pan/zoom wiring (same shape as map.html; maths from map.lib.js) -------
+  const boxOf = () => {
+    const r = viewport.getBoundingClientRect();
+    return { width: r.width, height: r.height };
+  };
+  function setView(v) {
+    view = { x: v.x, y: v.y, k: clampScale(v.k) };
+    stage.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
+  }
+  function fit() { setView(fitView(size, boxOf())); }
+  function zoomBy(factor, anchor) {
+    const b = boxOf();
+    touched = true;
+    setView(zoomAt(view, anchor || { x: b.width / 2, y: b.height / 2 }, factor));
+  }
+  viewport.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = viewport.getBoundingClientRect();
+    zoomBy(Math.exp(-e.deltaY * 0.0015), { x: e.clientX - r.left, y: e.clientY - r.top });
+  }, { passive: false });
+  let panning = null;
+  viewport.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    panning = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y };
+    travel = { dx: 0, dy: 0 };
+    try { viewport.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+    viewport.classList.add("panning");
+  });
+  viewport.addEventListener("pointermove", (e) => {
+    if (!panning || e.pointerId !== panning.id) return;
+    travel = { dx: e.clientX - panning.sx, dy: e.clientY - panning.sy };
+    touched = true;
+    setView({ x: panning.ox + travel.dx, y: panning.oy + travel.dy, k: view.k });
+  });
+  function endPan(e) {
+    if (!panning || e.pointerId !== panning.id) return;
+    try { viewport.releasePointerCapture(panning.id); } catch { /* already gone */ }
+    panning = null;
+    viewport.classList.remove("panning");
+  }
+  viewport.addEventListener("pointerup", endPan);
+  viewport.addEventListener("pointercancel", endPan);
+  // The controls live inside the viewport, so swallow the press or every
+  // button click would also begin a pan.
+  document.getElementById("zoom").addEventListener("pointerdown", (e) => e.stopPropagation());
+  document.getElementById("z-in").addEventListener("click", () => zoomBy(1.25));
+  document.getElementById("z-out").addEventListener("click", () => zoomBy(1 / 1.25));
+  document.getElementById("z-fit").addEventListener("click", () => { touched = false; fit(); });
+  viewport.addEventListener("dblclick", (e) => {
+    const r = viewport.getBoundingClientRect();
+    zoomBy(1.5, { x: e.clientX - r.left, y: e.clientY - r.top });
+  });
+  addEventListener("keydown", (e) => {
+    if (!overlay.hidden) return;                       // dialog owns the keyboard
+    if (e.key === "+" || e.key === "=") zoomBy(1.25);
+    else if (e.key === "-") zoomBy(1 / 1.25);
+    else if (e.key === "0") { touched = false; fit(); }
+  });
+  // Refit on resize only while the reader has not framed it themselves.
+  addEventListener("resize", () => { if (!touched) fit(); });
+
+  applyMode(curMode);
 })();
 </script>
 </body>
