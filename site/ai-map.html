@@ -179,15 +179,15 @@
     <p class="lede" id="lede"></p>
     <div class="controls">
       <div class="views" role="group" aria-label="layout">
-        <button id="v-col">columns</button>
-        <button id="v-dag">free dag</button>
+        <button id="v-col" aria-pressed="false">columns</button>
+        <button id="v-dag" aria-pressed="false">free dag</button>
       </div>
       <div class="views" role="group" aria-label="sort">
-        <button id="s-default">default</button>
-        <button id="s-name">name</button>
-        <button id="s-runs">runs</button>
-        <button id="s-errors">errors</button>
-        <button id="s-recent">recent</button>
+        <button id="s-default" aria-pressed="false">default</button>
+        <button id="s-name" aria-pressed="false">name</button>
+        <button id="s-runs" aria-pressed="false">runs</button>
+        <button id="s-errors" aria-pressed="false">errors</button>
+        <button id="s-recent" aria-pressed="false">recent</button>
       </div>
       <div class="legend" id="legend"></div>
     </div>
@@ -381,6 +381,9 @@ async function resolveN8nBase() {
   }
 
   // ---- layout + sort ---------------------------------------------------------
+  // Toggle state lives in the `on` class for the styling and in aria-pressed
+  // for assistive tech — keep the two in sync through this one helper.
+  const setOn = (el, on) => { el.classList.toggle("on", on); el.setAttribute("aria-pressed", String(on)); };
   const MODE_KEY = "po11y-ai-map-layout";
   let curMode = localStorage.getItem(MODE_KEY) === "col" ? "col" : "dag";
   let sortChain = [];
@@ -403,8 +406,8 @@ async function resolveN8nBase() {
       el.textContent = h.text;
       stage.appendChild(el); headEls.push(el);
     });
-    document.getElementById("v-dag").classList.toggle("on", mode === "dag");
-    document.getElementById("v-col").classList.toggle("on", mode !== "dag");
+    setOn(document.getElementById("v-dag"), mode === "dag");
+    setOn(document.getElementById("v-col"), mode !== "dag");
     stage.classList.toggle("runs", sortChain.includes("runs") || sortChain.includes("recent"));
     stage.classList.toggle("errs", sortChain.includes("errors"));
     touched = false; fit();
@@ -414,11 +417,11 @@ async function resolveN8nBase() {
 
   const SORTS = ["name", "runs", "errors", "recent"];
   function renderSortButtons() {
-    document.getElementById("s-default").classList.toggle("on", !sortChain.length);
+    setOn(document.getElementById("s-default"), !sortChain.length);
     SORTS.forEach((k) => {
       const b = document.getElementById("s-" + k);
       const i = sortChain.indexOf(k);
-      b.classList.toggle("on", i >= 0);
+      setOn(b, i >= 0);
       // Order badge only once a second key makes the order matter.
       if (i >= 0 && sortChain.length > 1) b.dataset.ord = i + 1;
       else delete b.dataset.ord;
@@ -568,6 +571,8 @@ async function resolveN8nBase() {
   document.getElementById("z-out").addEventListener("click", () => zoomBy(1 / 1.25));
   document.getElementById("z-fit").addEventListener("click", () => { touched = false; fit(); });
   viewport.addEventListener("dblclick", (e) => {
+    // A double-click on a card is a fumbled drag or click, not a zoom ask.
+    if (e.target.closest(".node")) return;
     const r = viewport.getBoundingClientRect();
     zoomBy(1.5, { x: e.clientX - r.left, y: e.clientY - r.top });
   });
@@ -580,6 +585,7 @@ async function resolveN8nBase() {
   // Refit on resize only while the reader has not framed it themselves.
   addEventListener("resize", () => { if (!touched) fit(); });
 
+  renderSortButtons();
   applyMode(curMode);
 })();
 </script>
