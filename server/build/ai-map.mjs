@@ -136,7 +136,7 @@ export async function buildAiMap(workflows, {
     title: 'How the workflows link',
     lede: 'Triggers on the left start the workflows; edges follow real references (sub-workflow calls, published feeds, external services).',
     columns: ['Triggers', 'Workflows', 'Sub-workflows', 'Outputs'],
-    kinds: { schedule: 'sky', form: 'amber', webhook: 'violet', entry: 'cyan', worker: 'emerald', file: 'sink', external: 'neutral' },
+    kinds: { schedule: 'rose', form: 'amber', webhook: 'violet', entry: 'cyan', worker: 'emerald', file: 'orange', external: 'plum' },
     nodes, edges,
     legend: Object.keys(KIND_LABEL).filter((k) => nodes.some((n) => n.kind === k)).map((k) => [KIND_LABEL[k], k]),
     notes: [],
