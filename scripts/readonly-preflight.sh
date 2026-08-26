@@ -180,6 +180,12 @@ printf '\nsecrets   %s\n' "$ENV_FILE"
 if [ "$WRITE" = no ]; then
   note "--check: not writing"
 else
+  # The Grafana admin password and the three OmniRoute secrets land in this
+  # file. `cp .env.example .env` inherits the umask, which on most hosts leaves
+  # it world-readable, so every account on the box reads them. Tighten it
+  # before the first secret is written.
+  chmod 600 "$ENV_FILE"
+  note "mode 600 enforced on $ENV_FILE"
   # openssl is bootstrap.sh's generator, but this script runs on hosts that
   # never install one — a minimal container, a locked-down box — and refusing
   # to seed there would leave compose unable to start over a missing random
@@ -263,9 +269,23 @@ if cfg.get('baseUrl'):
 
 # baseUrl carries the host alone; n8nUrl carries the shape around it. Splitting
 # them is what lets {host} also address other services on that same box.
+#
+# The path is part of that shape. An n8n served under a prefix (N8N_PATH, or a
+# reverse proxy mounting it at /n8n) has one, and dropping it built
+# "https://{host}" from "https://example.com/n8n" — so every {n8n}-built card
+# resolved to https://example.com/workflow/... and 404'd, which is the exact
+# breakage {n8n} was added to fix. A trailing slash is stripped because
+# app.lib.js's n8nBase joins with one.
 bracketed = '[{host}]' if ':' in host else '{host}'
-n8n_url = '%s://%s%s' % (url.scheme or 'http', bracketed,
-                         ':%d' % url.port if url.port else '')
+n8n_url = '%s://%s%s%s' % (url.scheme or 'http', bracketed,
+                           ':%d' % url.port if url.port else '',
+                           url.path.rstrip('/'))
+# What this may overwrite: an empty value, or the shape config.readonly.example.json
+# ships. Anything else is a hand-set n8nUrl, and the README promises a re-run
+# writes only what is empty. baseUrl being empty is not evidence that n8nUrl is
+# — an operator who set the prefix by hand and left the host to the script hit
+# exactly that gap and lost the prefix on the next run.
+SEEDABLE = ('', 'http://{host}:5678')
 
 out, n = re.subn(r'("baseUrl"\s*:\s*)""',
                  lambda m: m.group(1) + json.dumps(host), text, count=1)
@@ -274,7 +294,12 @@ if not n:
     sys.exit(0)
 
 wrote = 'baseUrl=%s' % host
-if 'n8nUrl' in cfg and cfg.get('n8nUrl') != n8n_url:
+current_n8n_url = cfg.get('n8nUrl')
+if 'n8nUrl' not in cfg or current_n8n_url == n8n_url:
+    pass
+elif current_n8n_url not in SEEDABLE:
+    say('n8nUrl is hand-set (%s) — left alone' % current_n8n_url)
+else:
     out, k = re.subn(r'("n8nUrl"\s*:\s*)"[^"]*"',
                      lambda m: m.group(1) + json.dumps(n8n_url), out, count=1)
     if k:
@@ -283,13 +308,64 @@ if 'n8nUrl' in cfg and cfg.get('n8nUrl') != n8n_url:
 try:
     json.loads(out)
 except ValueError as e:
+    # exit 0, not 1. This script runs under `set -eu` and this heredoc is the
+    # last command in its branch, so a non-zero status here aborted the whole
+    # preflight: the exposure report and the final metrics verdict never
+    # printed, on the one run where the operator most needs them. Nothing was
+    # written, the message says so, and the config is one section of a report.
     say('rewrite would not parse (%s) — left alone' % e)
-    sys.exit(1)
+    sys.exit(0)
 
 with open(path, 'w', encoding='utf-8') as fh:
     fh.write(out)
 say('wrote: %s' % wrote)
 SEED_CONFIG
+fi
+
+# ---- exposure ---------------------------------------------------------------
+# Report only, deliberately: an open bind is a risk, not a reason po11y cannot
+# run, so it must not change the exit code the metrics probes own. The
+# enforcing copy of this guard lives in the dashboard entrypoint, because the
+# read-only stack has no bootstrap.sh to stop `compose up` before it publishes
+# a port. Saying it here as well means an operator meets the warning while
+# reading this report, not through a container that refuses to serve.
+printf '\nexposure  BIND_ADDR\n'
+# shellcheck source=deploy/nginx/bind-guard.sh
+. ./deploy/nginx/bind-guard.sh
+PF_BIND="$(get_env BIND_ADDR)"; PF_BIND="${PF_BIND:-127.0.0.1}"
+# The same lift bootstrap.sh does. The guard reads PO11Y_ALLOW_OPEN_BIND from
+# the process environment; .env.example documents it as a .env variable,
+# because that is where compose reads it for the container. Without this the
+# report says the dashboard will refuse to start on a bind the container will
+# in fact accept. An exported value still wins, as it does for compose.
+if [ -z "${PO11Y_ALLOW_OPEN_BIND:-}" ]; then
+  PO11Y_ALLOW_OPEN_BIND="$(get_env PO11Y_ALLOW_OPEN_BIND)"
+  export PO11Y_ALLOW_OPEN_BIND
+fi
+PF_GATE=""
+[ -z "$(get_env DASHBOARD_BASIC_AUTH)" ] || PF_GATE=DASHBOARD_BASIC_AUTH
+# Forward auth is a compose OVERLAY: docker-compose.auth.yml sets
+# FORWARD_AUTH=true on the dashboard service, never in .env, so this script
+# cannot see the gate the entrypoint will apply. What it can see is whether the
+# overlay is CONFIGURED — that file refuses to start without
+# OAUTH2_PROXY_OIDC_ISSUER_URL (`:?`), and nothing else reads that variable.
+# Configured is not the same as brought up, so this is reported rather than
+# counted: an operator running the overlay must not be told the dashboard will
+# refuse to start when it will not, and an operator who filled the variables in
+# and then forgot the second -f must not be told the bind is gated when it is
+# not. Both readings get said out loud.
+PF_FORWARD_AUTH=no
+[ "$(get_env FORWARD_AUTH)" != true ] || PF_FORWARD_AUTH=yes
+[ -z "$(get_env OAUTH2_PROXY_OIDC_ISSUER_URL)" ] || PF_FORWARD_AUTH=yes
+if po11y_bind_is_loopback "$PF_BIND"; then
+  ok "BIND_ADDR=$PF_BIND — the stack reaches this host only"
+elif [ -z "$PF_GATE" ] && [ "$PF_FORWARD_AUTH" = yes ]; then
+  po11y_bind_guard "$PF_BIND" readonly "the forward-auth overlay" report || true
+  note "the overlay gates the dashboard only once it is brought up:"
+  note "  docker compose -f docker-compose.readonly.yml -f docker-compose.auth.yml up -d"
+  note "without that second -f there is no gate, and the dashboard exits 78"
+else
+  po11y_bind_guard "$PF_BIND" readonly "$PF_GATE" report || true
 fi
 
 # ---- verdict ----------------------------------------------------------------

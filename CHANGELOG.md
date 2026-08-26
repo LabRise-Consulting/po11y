@@ -109,6 +109,53 @@ Notable changes to Po11y. Format follows
 
 ### Fixed
 
+- `PO11Y_ALLOW_OPEN_BIND=1` set in `.env` — where `.env.example` documents it —
+  did not reach `bootstrap.sh` or `scripts/readonly-preflight.sh`. The guard
+  reads it from the process environment, compose reads it from `.env` for the
+  container, and both scripts run before compose, so the override worked for
+  the dashboard container and nowhere else: bootstrap refused an open bind with
+  exit 78 while naming the variable the operator had already set. Both scripts
+  now lift the value out of `.env` when it is not already exported, so a shell
+  override still wins, exactly as compose resolves it.
+- The exposure guard read a bracketed IPv6 loopback bind (`BIND_ADDR=[::1]`) as
+  non-loopback and refused to serve on it. The brackets are what a compose port
+  mapping needs to tell the address from the port, so the bracketed spelling is
+  the one an operator actually writes — which made the safest bind available the
+  one the dashboard would not start on. Unbracketed expanded forms stay
+  unsupported: compose does not accept them in a port mapping.
+- The read-only preflight's exposure report could not see the forward-auth
+  overlay, because `docker-compose.auth.yml` sets `FORWARD_AUTH` on the
+  dashboard service and never in `.env`. A read-only stack running the overlay
+  on a non-loopback bind was told the dashboard would refuse to start, which is
+  the opposite of what happens. The report now detects a configured overlay by
+  the variable that file cannot start without, names it as the gate, and says
+  the overlay only gates anything once it is actually brought up with the second
+  `-f` — configured is not running, and both readings are stated rather than
+  guessed at.
+- The preflight's `config.json` seeder built `n8nUrl` from scheme, host and port
+  only, dropping the path. An n8n served under a prefix (`N8N_PATH`, or a proxy
+  mounting it at `/n8n`) got `https://{host}`, so every `{n8n}`-built card
+  resolved past the prefix and 404'd — the exact breakage `{n8n}` was added to
+  fix.
+- The same seeder overwrote a hand-set `n8nUrl` whenever `baseUrl` was empty,
+  against the README's promise that a re-run writes only what is empty. An
+  operator who set the prefix by hand and left the host to the script lost the
+  prefix on the next run. It now writes `n8nUrl` only when it is empty or still
+  the shape `config.readonly.example.json` ships, and says so when it declines.
+- The seeder exited non-zero on the "rewrite would not parse" branch. That
+  branch is the last command in its arm and the script runs under `set -eu`, so
+  it aborted the whole preflight: the exposure report and the metrics verdict
+  never printed, on the one run where the operator most needs them. Nothing was
+  being written either way, so it now reports and carries on.
+- The po11y Execution Health dashboard's **Success rate** panel divided by an
+  unguarded denominator. `server/metrics.mjs` emits a `0` for every workflow it
+  knows, so on a store with nothing finished yet both sums are `0`, PromQL
+  yields `NaN`, and the leading panel of the read-only Metrics row rendered
+  `NaN` on its base threshold colour — red, on a brand-new and entirely healthy
+  install. The denominator is now `clamp_min(…, 1)`, which fixes `0/0` while
+  leaving a never-scraped server showing "No data" rather than claiming a rate
+  it has no evidence for.
+
 - A data table that grew past the row-count sampler's page ceiling reported
   its own healthy ingest as a dead one. Counting a table means paging it, and
   paging stopped at 40 pages — so once a table passed 10,000 rows every
@@ -177,6 +224,80 @@ Notable changes to Po11y. Format follows
   severity, with anything unrecognised still reported as a failure — the rules
   that predate severity carry none, and under-reporting a real failure is the
   worse direction to guess in.
+
+### Security
+
+- The exposure interlock now covers the read-only stack. It lived in
+  `bootstrap.sh`, which only the bundled stack runs, so
+  `docker compose -f docker-compose.readonly.yml up -d` published wherever
+  `BIND_ADDR` pointed and said nothing. The check moved into
+  `deploy/nginx/bind-guard.sh`, sourced by `bootstrap.sh` before it brings the
+  stack up, by `scripts/readonly-preflight.sh` as a report, and by the
+  dashboard entrypoint on every container start. A non-loopback `BIND_ADDR`
+  with no auth gate — neither `DASHBOARD_BASIC_AUTH` nor the forward-auth
+  overlay — now stops the dashboard container with exit 78 on both stacks.
+  `PO11Y_ALLOW_OPEN_BIND=1` accepts the open bind, and now reaches the
+  container through compose, so it can live in `.env` as well as in the shell
+  environment.
+
+  **This can stop an existing deployment.** A stack running a non-loopback
+  bind with no dashboard password will not serve after the upgrade until an
+  auth gate or the override is set. What the guard cannot do is unpublish a
+  port: it runs after compose has already bound them, so the warning it prints
+  about Grafana on 3000 and Prometheus on 9090 remains the operator's to act
+  on.
+- `OAUTH2_PROXY_EMAIL_DOMAINS` is required, with no default. It defaulted to
+  `*`, which admits every account the IdP will authenticate — for a public
+  issuer such as Google, one of the four the overlay documents, that is every
+  account in existence rather than everyone on the team. oauth2-proxy itself
+  denies until a domain is named; the overlay now keeps that stance and fails
+  fast like its four other required variables. Set it to your organization's
+  domain before the next `up` with `docker-compose.auth.yml`.
+- The forward-auth overlay now sets `OAUTH2_PROXY_COOKIE_REFRESH` (`1h`) and
+  `OAUTH2_PROXY_COOKIE_EXPIRE` (`8h`). Neither was set, so no session was ever
+  revalidated against the IdP and an account disabled there kept working until
+  its cookie expired — up to a week on oauth2-proxy's default. Offboarding is
+  the reason the docs offer this overlay, and it did not work.
+
+  Turning refresh on also required making the refreshed cookie reach the
+  browser. Nginx discards the `auth_request` subrequest's `Set-Cookie`, so the
+  entrypoint now renders the `auth_request_set $auth_cookie` / `add_header
+  Set-Cookie` pair upstream prescribes for `--cookie-refresh`, and every
+  location that sets its own `add_header` — the app shell, and the feeds this
+  page polls hardest — includes `refresh-cookie.conf` to restate it, because
+  nginx inherits `add_header` only into levels that declare none of their own.
+  Left out, the browser would keep presenting the pre-refresh cookie and an IdP
+  that rotates refresh tokens would answer the replay with a sign-in redirect,
+  on a page that fetches its feeds with XHR. Refresh still needs the IdP to
+  issue a refresh token; where it does not, the cookie expiry is the bound.
+
+  A session over 4kB is split across several cookies, and `auth_request`
+  exposes only the first `Set-Cookie` of them — forwarding that alone would
+  pair a fresh part 0 with a stale part 1 and break the session outright. The
+  dashboard detects the split and withholds the header instead, leaving the
+  browser on its intact pre-refresh cookie; a deployment whose IdP issues
+  tokens that large should move to a Redis session store, which upstream
+  recommends over reassembling the parts in nginx. `OAUTH2_PROXY_COOKIE_NAME`
+  is pinned to `_oauth2_proxy` because the detection derives an nginx variable
+  name from it.
+- `bootstrap.sh` and `scripts/readonly-preflight.sh` `chmod 600 .env` when they
+  write to it. Every generated secret lands there — the Postgres passwords,
+  the Grafana admin password, the n8n owner password, the minted API key — and
+  `cp .env.example .env` inherits the umask, which on most hosts leaves the
+  file readable by every account on the box. No HTTP password protects a file.
+- A `FORM_ALLOWED_GROUPS` entry that the `[A-Za-z0-9_-]` filter has to change
+  now logs a notice at start. oauth2-proxy keeps emitting the original name, so
+  a Keycloak group path such as `/team-a` could never match the filtered
+  `team-a` and denied silently — a correct-looking allowlist that returned 403
+  forever.
+- `docs/security.md` and `docs/forward-auth.md` now state what dashboard auth
+  does not cover: Grafana on 3000 and Prometheus on 9090 are published by the
+  same `BIND_ADDR` and never pass through nginx, so neither Basic Auth nor
+  forward auth touches them. `bootstrap.sh` had printed this at runtime while
+  the docs did not say it. The forward-auth page also records that Grafana
+  receives no per-user identity, that groups gate only `POST /form/`, and that
+  `/mcp/` becomes unreachable for machine clients once the overlay is on.
+
 
 ## [0.1.0] - 2026-08-20
 

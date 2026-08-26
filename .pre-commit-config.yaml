@@ -12,3 +12,7 @@ repos:
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
+        # -x follows `. deploy/nginx/bind-guard.sh` into the shared exposure
+        # guard, which a hook run over changed files alone would not have as an
+        # input. Matches the CI lint job.
+        args: ["-x"]

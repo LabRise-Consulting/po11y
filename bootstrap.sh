@@ -56,6 +56,14 @@ done
 
 # ---- 1. env file --------------------------------------------------------------
 [ -f "$ENV_FILE" ] || { cp .env.example "$ENV_FILE"; echo "bootstrap: created $ENV_FILE"; }
+# Every generated secret below lands in this file: the Postgres passwords, the
+# Grafana admin password, the n8n owner password, and the API key bootstrap
+# mints for the server. `cp` inherits the umask, which on most hosts leaves the
+# file world-readable, so a second account on the box reads all of them without
+# defeating any dashboard password. Tighten it before the first secret is
+# written, on every run — a secrets file that a re-run silently re-widens is
+# the failure this is here to prevent.
+chmod 600 "$ENV_FILE"
 
 set_env() { # set_env KEY VALUE
   if grep -q "^$1=" "$ENV_FILE"; then
@@ -153,27 +161,31 @@ elif [ "$OMNIROUTE" = "false" ] && [ "$AI_BASE" = "$OMNIROUTE_AI_BASE" ]; then
 fi
 
 BIND="$(get_env BIND_ADDR)"; BIND="${BIND:-127.0.0.1}"
-# Exposure interlock: a non-loopback bind with no auth gate means the anonymous
+# Exposure guard: a non-loopback bind with no auth gate means the anonymous
 # Grafana Viewer and every feed are readable by anything that can route to this
-# box. Refuse loudly (a warning would scroll past) and BEFORE 'compose up'
-# publishes any port. PO11Y_ALLOW_OPEN_BIND=1 (environment, not .env) overrides.
-if [ "$BIND" != "127.0.0.1" ] && [ "$BIND" != "localhost" ] \
-   && [ -z "$(get_env DASHBOARD_BASIC_AUTH)" ] \
-   && [ "${PO11Y_ALLOW_OPEN_BIND:-}" != "1" ]; then
-  echo "bootstrap: REFUSING — BIND_ADDR=$BIND is not loopback and"
-  echo "  DASHBOARD_BASIC_AUTH is empty. Set it, or set PO11Y_ALLOW_OPEN_BIND=1."
-  exit 78
+# box. Refuse loudly (a warning would scroll past) and BEFORE `compose up`
+# publishes any port. The refusal, the list of ports auth does not cover and
+# the PO11Y_ALLOW_OPEN_BIND=1 override all live in the shared guard, which the
+# dashboard entrypoint runs again at container start: bootstrap is the bundled
+# stack's pre-up checkpoint, and the read-only stack has no bootstrap at all.
+# Forward auth is not consulted here. It arrives as a compose overlay the
+# operator adds by hand, and bootstrap's own `compose up` never carries it.
+# shellcheck source=deploy/nginx/bind-guard.sh
+. ./deploy/nginx/bind-guard.sh
+GATE=""
+[ -z "$(get_env DASHBOARD_BASIC_AUTH)" ] || GATE=DASHBOARD_BASIC_AUTH
+# The override reaches the CONTAINER through compose, which reads it from
+# .env — and .env is where .env.example documents it. This script runs before
+# compose and the guard reads the process environment, so the value has to be
+# lifted across here or the two disagree: the container would accept the open
+# bind that bootstrap already refused with exit 78, naming the variable the
+# operator had just set. An exported value wins, so a CI/runtime override still
+# beats the file, exactly as compose resolves it.
+if [ -z "${PO11Y_ALLOW_OPEN_BIND:-}" ]; then
+  PO11Y_ALLOW_OPEN_BIND="$(get_env PO11Y_ALLOW_OPEN_BIND)"
+  export PO11Y_ALLOW_OPEN_BIND
 fi
-# DASHBOARD_BASIC_AUTH gates only nginx on :8080. A non-loopback bind also
-# publishes three ports that auth does not touch — say so every run, because
-# the interlock passing reads as "auth covers me" when it does not.
-if [ "$BIND" != "127.0.0.1" ] && [ "$BIND" != "localhost" ]; then
-  echo "bootstrap: WARNING — BIND_ADDR=$BIND also publishes ports DASHBOARD_BASIC_AUTH does NOT gate:"
-  echo "  $BIND:5678  n8n editor (own login) + unauthenticated /metrics"
-  echo "  $BIND:3000  Grafana (anonymous Viewer unless DASHBOARD_GRAFANA_EMBED=false)"
-  echo "  $BIND:9090  Prometheus (no auth)"
-  echo "  Restrict these at a firewall, or keep BIND_ADDR loopback behind your own proxy."
-fi
+po11y_bind_guard "$BIND" bundled "$GATE" || exit 78
 
 # ---- 2. stack up ----------------------------------------------------------------
 compose up -d --build

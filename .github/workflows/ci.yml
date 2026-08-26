@@ -117,7 +117,9 @@ jobs:
       # inherit whatever a dependency happens to pull in.
       - run: apk add --no-cache git python3 openssl
       - uses: actions/checkout@v5
-      - run: shellcheck bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh scripts/readonly-preflight.sh ci/check-readonly-preflight.sh ci/check-env-example.sh
+      # -x follows the `. deploy/nginx/bind-guard.sh` sources, so the shared
+      # exposure guard is checked in the context of each script that uses it.
+      - run: shellcheck -x bootstrap.sh ci/smoke.sh ci/check-expired-markers.sh ci/check-grafana-entrypoint.sh observability/grafana/entrypoint.sh scripts/backup-store.sh ci/check-dashboard-entrypoint.sh deploy/nginx/dashboard-entrypoint.sh deploy/nginx/bind-guard.sh scripts/readonly-preflight.sh ci/check-readonly-preflight.sh ci/check-env-example.sh
       # Fail if any dated '# REMOVE AFTER YYYY-MM' liability in bootstrap.sh is past.
       - run: sh ci/check-expired-markers.sh bootstrap.sh
       # Guard the A3 bug class: an overlay re-inlining grafana's entrypoint
@@ -157,6 +159,86 @@ jobs:
             exit 1
           fi
           echo "interlock OK: refused non-loopback bind with exit 78"
+      # The same guard, as the dashboard entrypoint runs it: the read-only stack
+      # has no bootstrap.sh, so this is the only interlock it ever gets. Called
+      # directly rather than through the container — the guard is a sourced
+      # shell function, and nginx is not what is under test.
+      - run: |
+          set +e
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 readonly ""' >/dev/null
+          code=$?
+          set -e
+          # Exactly 1, the guard's own refusal. A missing file or a renamed
+          # function also exits non-zero, and accepting any non-zero here would
+          # let a guard that never runs satisfy the assertion.
+          if [ "$code" -ne 1 ]; then
+            echo "guard FAILED: ungated non-loopback bind expected the guard to return 1, got $code"
+            exit 1
+          fi
+          echo "guard OK: refused ungated non-loopback bind"
+      # And the three cases that must NOT refuse: loopback, a gated bind, and
+      # the documented override. A guard that refuses everything would pass the
+      # assertion above and break every working deployment.
+      - run: |
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 127.0.0.1 readonly ""' >/dev/null
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 bundled DASHBOARD_BASIC_AUTH' >/dev/null
+          sh -c 'PO11Y_ALLOW_OPEN_BIND=1; export PO11Y_ALLOW_OPEN_BIND; . ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 bundled ""' >/dev/null
+          # IPv6 loopback, in the bracketed form a compose port mapping needs
+          # ("[::1]:3000:3000") — which is therefore the form an operator puts
+          # in .env. Reading it as non-loopback refused the safest bind there is.
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard "[::1]" readonly ""' >/dev/null
+          sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard "::1" readonly ""' >/dev/null
+          echo "guard OK: loopback (v4, v6, bracketed v6), gated and overridden binds all pass"
+      # The override has to work where .env.example says it does. bootstrap.sh
+      # and the preflight run BEFORE compose, so each lifts PO11Y_ALLOW_OPEN_BIND
+      # out of .env into the environment the guard reads; without that the
+      # container accepts a bind bootstrap already refused with exit 78.
+      - run: |
+          tmp=$(mktemp -d)
+          cp -r deploy "$tmp/"; cp bootstrap.sh "$tmp/"
+          printf 'BIND_ADDR=192.0.2.1\nPO11Y_ALLOW_OPEN_BIND=1\nDASHBOARD_BASIC_AUTH=\n' > "$tmp/.env"
+          set +e
+          (cd "$tmp" && sh -c '
+            set -eu
+            ENV_FILE=.env
+            get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed "s/[[:space:]]*#.*//"; }
+            . ./deploy/nginx/bind-guard.sh
+            if [ -z "${PO11Y_ALLOW_OPEN_BIND:-}" ]; then
+              PO11Y_ALLOW_OPEN_BIND="$(get_env PO11Y_ALLOW_OPEN_BIND)"
+              export PO11Y_ALLOW_OPEN_BIND
+            fi
+            po11y_bind_guard "$(get_env BIND_ADDR)" bundled ""
+          ') >/dev/null
+          code=$?
+          set -e
+          rm -rf "$tmp"
+          if [ "$code" -ne 0 ]; then
+            echo "guard FAILED: PO11Y_ALLOW_OPEN_BIND=1 in .env did not accept the open bind (exit $code)"
+            exit 1
+          fi
+          # And the same lift must be present in the two scripts that need it,
+          # so this assertion cannot pass against a copy that only lives here.
+          for f in bootstrap.sh scripts/readonly-preflight.sh; do
+            grep -q 'get_env PO11Y_ALLOW_OPEN_BIND' "$f" \
+              || { echo "guard FAILED: $f does not read PO11Y_ALLOW_OPEN_BIND from .env"; exit 1; }
+          done
+          echo "guard OK: PO11Y_ALLOW_OPEN_BIND is honoured from .env before compose runs"
+      # report mode is wording only: the read-only preflight prints the same
+      # finding but goes on to exit 0, so the text must not say REFUSING while
+      # the return value stays 1 for callers that do refuse.
+      - run: |
+          set +e
+          out=$(sh -c '. ./deploy/nginx/bind-guard.sh; po11y_bind_guard 192.0.2.1 readonly "" report' 2>&1)
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then
+            echo "guard FAILED: report mode must still return 1, got $code"
+            exit 1
+          fi
+          case "$out" in
+            *REFUSING*) echo "guard FAILED: report mode still says REFUSING"; exit 1 ;;
+          esac
+          echo "guard OK: report mode returns 1 without claiming to refuse"
 
   compose-config:
     # Client-side render + schema validation of BOTH compose files. `docker
@@ -183,6 +265,7 @@ jobs:
       OAUTH2_PROXY_OIDC_ISSUER_URL: http://idp.example:8080/realms/dummy
       OAUTH2_PROXY_CLIENT_ID: dummy
       OAUTH2_PROXY_CLIENT_SECRET: dummy
+      OAUTH2_PROXY_EMAIL_DOMAINS: example.com
       # 32-byte secret (base64url) — oauth2-proxy requires exactly 16/24/32 bytes.
       OAUTH2_PROXY_COOKIE_SECRET: cG8xMXktY2ktZHVtbXktY29va2llLXNlY3JldC0zMmI
       # Alerting overlay required (:?) var.

@@ -4,6 +4,24 @@
 # rather than merging it, so inline copies drift — ci/check-dashboard-entrypoint.sh
 # guards this file the way ci/check-grafana-entrypoint.sh guards grafana's).
 set -eu
+# Exposure guard, before anything is rendered. BIND_ADDR moves the dashboard
+# port and two ungated ports together (Grafana, Prometheus), so every start
+# names the ports the active gate does not cover, and an ungated non-loopback
+# bind refuses to serve at all. Shared with bootstrap.sh, which runs the same
+# guard before `compose up` publishes anything — but only on the bundled
+# stack. The read-only stack has no bootstrap, so this copy is the only guard
+# it ever runs. BIND_ADDR and PO11Y_STACK are defaulted rather than required so
+# a vendored compose file written before they existed still starts.
+# shellcheck source=deploy/nginx/bind-guard.sh
+. /etc/nginx/po11y-feeds/bind-guard.sh
+if [ "$FORWARD_AUTH" = "true" ]; then
+  bind_gate="the forward-auth overlay"
+elif [ -n "$DASHBOARD_BASIC_AUTH" ]; then
+  bind_gate=DASHBOARD_BASIC_AUTH
+else
+  bind_gate=""
+fi
+po11y_bind_guard "${BIND_ADDR:-127.0.0.1}" "${PO11Y_STACK:-bundled}" "$bind_gate" || exit 78
 # The template carries no substitution placeholders anymore (the
 # /n8n-table key moved into the server process), so rendering is a
 # plain copy; every `$var` in the file is an nginx runtime variable. (The
@@ -24,9 +42,58 @@ if [ "$FORWARD_AUTH" = "true" ]; then
     printf '%s\n' 'auth_request_set $auth_email $upstream_http_x_auth_request_email;'
     # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
     printf '%s\n' 'auth_request_set $auth_groups $upstream_http_x_auth_request_groups;'
+    # OAUTH2_PROXY_COOKIE_REFRESH re-mints the session cookie, and oauth2-proxy
+    # returns it as Set-Cookie on the /oauth2/auth subrequest. auth_request
+    # discards that response, so without these two lines the browser never
+    # receives the refreshed cookie: every later request presents the same
+    # stale one, the refresh token is replayed, and an IdP that rotates refresh
+    # tokens rejects the replay and forces a sign-in redirect — on a page that
+    # polls its feeds with fetch(). Lifting it here is what upstream's own
+    # nginx auth_request guide prescribes for --cookie-refresh.
+    # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
+    printf '%s\n' 'auth_request_set $auth_cookie $upstream_http_set_cookie;'
+    # A session larger than 4kB is split across _oauth2_proxy_0.._N, and
+    # $upstream_http_set_cookie carries only the FIRST of those headers.
+    # Forwarding part 0 alone is worse than forwarding nothing: the browser
+    # would hold a fresh part 0 beside a stale part 1, the session would fail
+    # to decode, and every request would bounce to sign-in. Capturing part 1
+    # is how we detect the split; the map below then withholds the whole
+    # header, which leaves the browser on its intact pre-refresh cookie.
+    # Reassembling the parts in nginx is possible and upstream documents it,
+    # but calls it fragile, handles only two parts and hard-codes the cookie
+    # name — a server-side session store is upstream's own answer, and
+    # docs/forward-auth.md points a split deployment at it.
+    # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
+    printf '%s\n' 'auth_request_set $auth_cookie_part1 $upstream_cookie__oauth2_proxy_1;'
+    # shellcheck disable=SC2016  # literal nginx $var syntax for forward-auth.conf, not shell expansion
+    printf '%s\n' 'add_header Set-Cookie $safe_auth_cookie;'
   } > /etc/nginx/forward-auth.conf
+  # http scope, like form-authz.conf: `map` is invalid in the server-scope
+  # include. Empty part 1 means an unsplit session, and only then does the
+  # refreshed cookie reach the browser.
+  {
+    # shellcheck disable=SC2016  # literal nginx $var syntax, not shell expansion
+    printf '%s\n' 'map $auth_cookie_part1 $auth_cookie_split { default split; "" whole; }'
+    # shellcheck disable=SC2016  # literal nginx $var syntax, not shell expansion
+    printf '%s\n' 'map "$auth_cookie_split:$auth_cookie" $safe_auth_cookie {'
+    printf '%s\n' '  default "";'
+    # shellcheck disable=SC2016  # literal nginx $var syntax, not shell expansion
+    printf '%s\n' '  "~^whole:(?<cookie>.+)$" $cookie;'
+    printf '%s\n' '}'
+  } > /etc/nginx/conf.d/auth-cookie.conf
+  # nginx inherits add_header only into levels that declare none of their own,
+  # so the server-scope line above is shadowed in every location that sets its
+  # own Cache-Control — the app shell and, more importantly, the feeds the
+  # dashboard polls. Those locations include this file to restate it. It must
+  # exist either way: an `add_header ... $auth_cookie` referencing a variable
+  # no auth_request_set defined is a config error nginx refuses to start on,
+  # which is why the empty file below is load-bearing rather than tidy.
+  # shellcheck disable=SC2016  # literal nginx $var syntax, not shell expansion
+  printf '%s\n' 'add_header Set-Cookie $safe_auth_cookie;' > /etc/nginx/refresh-cookie.conf
 else
   : > /etc/nginx/forward-auth.conf
+  : > /etc/nginx/refresh-cookie.conf
+  : > /etc/nginx/conf.d/auth-cookie.conf
 fi
 # Basic Auth gate. Forward-auth WINS when both are set: a Basic prompt on
 # top of the OIDC redirect is double auth / broken UX, so log a one-line
@@ -75,6 +142,20 @@ if [ "$ENABLE_FORM_PROXY" = "true" ]; then
     # semicolons, braces -> nothing escapes the generated regex), drop
     # empties, join with '|'. Empty after filtering == unset -> deny.
     alt="$(printf %s "$FORM_ALLOWED_GROUPS" | tr ',' '\n' | tr -cd 'A-Za-z0-9_\n-' | grep -v '^$' | paste -sd '|' -)"
+    # A name the filter had to change can never match. oauth2-proxy keeps
+    # emitting the original (a Keycloak group path arrives as '/team-a'), while
+    # the generated regex holds the filtered 'team-a', so the entry denies
+    # silently instead of allowing — a correct-looking allowlist that returns
+    # 403 forever. Name the entry and what it became.
+    # `read` returns non-zero at EOF, so the `|| [ -n "$raw" ]` is what keeps
+    # the last (unterminated) entry — printf %s emits no trailing newline, and
+    # without it a single-entry allowlist was never checked at all.
+    printf %s "$FORM_ALLOWED_GROUPS" | tr ',' '\n' | while IFS= read -r raw || [ -n "$raw" ]; do
+      trimmed="$(printf %s "$raw" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      [ -n "$trimmed" ] || continue
+      filtered="$(printf %s "$trimmed" | tr -cd 'A-Za-z0-9_-')"
+      [ "$filtered" = "$trimmed" ] || echo "po11y: FORM_ALLOWED_GROUPS entry '$trimmed' has characters outside [A-Za-z0-9_-]; the allowlist holds '$filtered', but oauth2-proxy emits the name unfiltered, so this entry can never match and form firing stays denied for it. Configure the IdP to emit slash-free group names." >&2
+    done
     if [ -n "$alt" ]; then
       {
         # shellcheck disable=SC2016  # literal nginx map syntax for form-authz.conf, not shell expansion

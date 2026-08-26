@@ -109,6 +109,15 @@ services:
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${DASHBOARD_PORT:-8080}:80"
     environment:
+      # Which interface the stack publishes on, and which stack this is. The
+      # entrypoint's exposure guard needs both: BIND_ADDR to know whether the
+      # bind is loopback, PO11Y_STACK to name the right ports (this stack runs no
+      # n8n, so 5678 is not one of them). PO11Y_ALLOW_OPEN_BIND accepts an ungated
+      # non-loopback bind; it reaches the container through compose, so it can
+      # live in the shell environment or in .env.
+      - BIND_ADDR=${BIND_ADDR:-127.0.0.1}
+      - PO11Y_STACK=readonly
+      - PO11Y_ALLOW_OPEN_BIND=${PO11Y_ALLOW_OPEN_BIND:-}
       # Optional "user:password" gate for the whole dashboard (see .env.example).
       - DASHBOARD_BASIC_AUTH=${DASHBOARD_BASIC_AUTH:-}
       # Form-trigger submit proxy. OFF by default here: on a shared team box
