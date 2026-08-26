@@ -26,8 +26,9 @@ CONFIGMAPS=deploy/k8s/02-configmaps.yaml
 GRAFANA=deploy/k8s/40-grafana.yaml
 SECRETS=deploy/k8s/01-secrets.yaml
 NGINX=nginx.conf
+BOOTSTRAP=bootstrap.sh
 
-for f in "$CONFIGMAPS" "$GRAFANA" "$SECRETS" "$NGINX"; do
+for f in "$CONFIGMAPS" "$GRAFANA" "$SECRETS" "$NGINX" "$BOOTSTRAP"; do
   [ -f "$f" ] || fail "$f not found — run from the repo root"
 done
 
@@ -54,6 +55,28 @@ for stmt in 'CREATE ROLE po11y_ro' 'GRANT SELECT ON ALL TABLES' 'REVOKE ALL ON T
   grep -q "$stmt" "$GRAFANA" \
     || fail "$GRAFANA: the init container does not run \"$stmt\" — the role would not match bootstrap.sh's"
 done
+
+# ---- 2b. the role's privileges are reasserted, not only created --------------
+# CREATE ROLE runs only when the role is missing. A po11y_ro that already
+# existed — created by hand, or by an earlier version — keeps whatever
+# attributes and role memberships it had, and the table-level REVOKE removes
+# none of them. The ALTER must therefore restate the restrictive attributes on
+# every run.
+grep -q 'ALTER ROLE po11y_ro LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT' "$GRAFANA" \
+  || fail "$GRAFANA: the init container does not reassert po11y_ro's restrictive attributes — a pre-existing role keeps SUPERUSER or BYPASSRLS"
+
+# The same SQL runs in two places (bootstrap.sh for compose, the init container
+# for k8s). Compare the heredoc bodies so a fix applied to one cannot silently
+# miss the other — the drift that motivated this whole check.
+sql_of() {
+  awk "/<<'SQL'\$/ { in_sql = 1; next }
+       in_sql && /^[[:space:]]*SQL\$/ { exit }
+       in_sql { sub(/^[[:space:]]*/, \"\"); print }" "$1"
+}
+[ -n "$(sql_of "$BOOTSTRAP")" ] || fail "$BOOTSTRAP: could not find the po11y_ro SQL heredoc"
+[ -n "$(sql_of "$GRAFANA")" ] || fail "$GRAFANA: could not find the po11y_ro SQL heredoc"
+[ "$(sql_of "$BOOTSTRAP")" = "$(sql_of "$GRAFANA")" ] \
+  || fail "the po11y_ro SQL drifted between $BOOTSTRAP and $GRAFANA — sync the fix into both"
 
 # ---- 3. the /grafana/ proxy scrubs what the compose one scrubs ---------------
 # The expected list is READ OUT OF nginx.conf rather than written here, so a

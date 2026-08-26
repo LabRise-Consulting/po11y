@@ -98,7 +98,31 @@ spec:
                   CREATE ROLE po11y_ro LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
                 END IF;
               END $$;
-              ALTER ROLE po11y_ro PASSWORD :'pw';
+              -- Reasserted on every run, not only at CREATE: a pre-existing po11y_ro keeps
+              -- whatever attributes it was created with, and the table-level REVOKE below
+              -- removes none of them. NOINHERIT also stops any leftover role membership
+              -- from conferring its privileges.
+              ALTER ROLE po11y_ro LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD :'pw';
+              -- Strip role memberships the same way. Each REVOKE may fail when this user
+              -- lacks ADMIN OPTION on the granted role — warn rather than abort, since
+              -- NOINHERIT above already neutralises what the membership would confer.
+              DO $$
+              DECLARE g name;
+              BEGIN
+                FOR g IN
+                  SELECT p.rolname FROM pg_auth_members m
+                  JOIN pg_roles p ON p.oid = m.roleid
+                  JOIN pg_roles c ON c.oid = m.member
+                  WHERE c.rolname = 'po11y_ro'
+                LOOP
+                  BEGIN
+                    EXECUTE format('REVOKE %I FROM po11y_ro', g);
+                    RAISE NOTICE 'po11y_ro: revoked membership in %', g;
+                  EXCEPTION WHEN OTHERS THEN
+                    RAISE WARNING 'po11y_ro: could not revoke membership in % — %', g, SQLERRM;
+                  END;
+                END LOOP;
+              END $$;
               GRANT USAGE ON SCHEMA public TO po11y_ro;
               GRANT SELECT ON ALL TABLES IN SCHEMA public TO po11y_ro;
               REVOKE ALL ON TABLE credentials_entity, execution_data FROM po11y_ro;
