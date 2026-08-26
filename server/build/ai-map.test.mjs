@@ -299,3 +299,14 @@ test('14. a workflow without a name still sorts (no localeCompare on undefined)'
   assert.equal(r.action, 'publish');
   assert.equal(r.map.nodes.length, 2);
 });
+
+test('16. every kind gets its own hue — no shared or grey palette slots', async () => {
+  // schedule used to share the workflow blue ("sky" vs "cyan") and file/
+  // external were twin greys ("sink"/"neutral"); the renderer's tokens keep
+  // them apart now, so the map must name distinct hues per kind.
+  const r = await buildAiMap(core, { now: 0, aiConfigured: false, prev: null });
+  assert.deepEqual(r.map.kinds, {
+    schedule: 'rose', form: 'amber', webhook: 'violet', entry: 'cyan',
+    worker: 'emerald', file: 'orange', external: 'plum',
+  });
+});
