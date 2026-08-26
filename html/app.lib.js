@@ -19,9 +19,19 @@ export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
  * `javascript:` never lands. `//host/path` is excluded on purpose: it looks
  * relative but is a full cross-origin URL, so a feed could otherwise retarget
  * a dashboard link at any host it liked.
+ *
+ * Backslashes are refused outright, wherever they appear. A browser does not
+ * treat `\` as a path character: in a special scheme the URL parser normalises
+ * every one of them to `/` before resolving, so `/\evil.test/x` resolves to
+ * `http://evil.test/x` — the same cross-origin retarget the `//` check above
+ * exists to stop, spelled the way that check misses. Rejecting the character
+ * rather than normalising it keeps one rule instead of two: nothing po11y
+ * links to needs a backslash, and a value carrying one is either a mistake or
+ * an attempt at exactly this.
  */
 export const safeUrl = (u) => {
   const s = String(u ?? '');
+  if (s.includes('\\')) return '#';
   if (s.startsWith('//')) return '#';
   return /^(https?:\/\/|\/)/i.test(s) ? esc(s) : '#';
 };

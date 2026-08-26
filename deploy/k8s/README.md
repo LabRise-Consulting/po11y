@@ -26,12 +26,24 @@ kubectl create namespace po11y
 
 kubectl -n po11y create secret generic po11y-secrets \
   --from-literal=DB_POSTGRESDB_PASSWORD="$(openssl rand -base64 24)" \
+  --from-literal=PO11Y_RO_PASSWORD="$(openssl rand -base64 24)" \
   --from-literal=GRAFANA_ADMIN_PASSWORD="$(openssl rand -base64 24)" \
   --from-literal=N8N_OWNER_PASSWORD='Chang3Me!'
 
 kubectl -n po11y create secret generic po11y-ai-map \
   --from-file=ai-map.json=./secrets/ai-map.json
 ```
+
+`PO11Y_RO_PASSWORD` must differ from `DB_POSTGRESDB_PASSWORD`. It belongs to
+`po11y_ro`, a SELECT-only Postgres role that the `create-readonly-role` init
+container on the grafana Deployment creates before Grafana starts, mirroring
+what `bootstrap.sh` does on the compose stack. Grafana's `n8n-postgres`
+datasource authenticates as that role and never holds n8n's own database
+credentials. This matters because Grafana runs with anonymous Viewer access, a
+Viewer may run arbitrary SQL through `/api/ds/query`, and the dashboard proxies
+`/grafana/` without authentication: whatever the datasource can read is
+readable by anyone who can reach the dashboard. The role has
+`credentials_entity` and `execution_data` revoked.
 
 ### 3. Create ConfigMaps
 
@@ -99,7 +111,7 @@ dashboard's Grafana and Prometheus panels work; the status feeds do not.
 
 ## Other differences between Kubernetes and Docker Compose
 
-- **No default authentication**: The Kubernetes Nginx ConfigMap does not include authentication. Protect the dashboard service using an authenticating Ingress.
+- **No default authentication**: The Kubernetes Nginx ConfigMap does not include authentication. Protect the dashboard service using an authenticating Ingress. Note what that Ingress sits in front of: `/grafana/` reaches a Grafana that grants every anonymous visitor the Viewer role, and a Viewer can query the `n8n-postgres` datasource directly. The datasource is limited to the SELECT-only `po11y_ro` role for that reason (see step 2), but the dashboard itself is otherwise open until you put authentication in front of it.
 - **MCP server unavailable**: No Deployment or `/mcp/` route is configured (see above — this is the same underlying gap as the missing `server` Deployment).
 - **Container status panel is permanently gone**: this is not a Kubernetes-specific gap — see [docs/server.md](../../docs/server.md#accepted-regressions), which applies here too, once feeds work at all.
 - **Replica constraints**: Deployments use `Recreate` update strategies and must run with `replicas: 1`.

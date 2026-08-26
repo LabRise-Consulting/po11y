@@ -35,6 +35,75 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+      # Grafana's n8n-postgres datasource used to authenticate as n8n's own
+      # database user, while GF_AUTH_ANONYMOUS_ENABLED below hands every
+      # unauthenticated visitor the Viewer role — and a Viewer may run arbitrary
+      # SQL against a datasource through /api/ds/query. Anyone who could reach
+      # Grafana could therefore read credentials_entity and execution_data.
+      # The compose stack does not have this problem because bootstrap.sh
+      # creates a SELECT-only role first; these manifests had no equivalent, and
+      # the divergence was noted in 02-configmaps.yaml rather than fixed.
+      #
+      # This is that equivalent. It runs the same SQL bootstrap.sh does, on
+      # every rollout, so a role that drifts (or a database restored without it)
+      # is repaired rather than left to fail closed at query time. It is the
+      # only place in this Deployment that holds DB_POSTGRESDB_PASSWORD.
+      #
+      # Deny-by-default, exactly as on compose: no ALTER DEFAULT PRIVILEGES, so
+      # tables added by a future n8n migration stay unreadable until this runs
+      # again — which a rollout does.
+      initContainers:
+        - name: create-readonly-role
+          image: postgres:16-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PGHOST
+              value: "postgres"
+            - name: PGUSER
+              value: "n8n"
+            - name: PGDATABASE
+              value: "n8n"
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: po11y-secrets
+                  key: DB_POSTGRESDB_PASSWORD
+            - name: PO11Y_RO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: po11y-secrets
+                  key: PO11Y_RO_PASSWORD
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              # postgres has its own readiness probe, but a Deployment rollout
+              # can still land while it is restarting. Wait rather than crash-loop.
+              i=0
+              until pg_isready -q; do
+                i=$((i+1))
+                [ "$i" -lt 60 ] || { echo "postgres did not become ready"; exit 1; }
+                sleep 2
+              done
+              # -v pw so the password is a bound literal, never string-pasted
+              # into the statement.
+              psql -v ON_ERROR_STOP=1 -v pw="$PO11Y_RO_PASSWORD" <<'SQL'
+              DO $$ BEGIN
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'po11y_ro') THEN
+                  CREATE ROLE po11y_ro LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+                END IF;
+              END $$;
+              ALTER ROLE po11y_ro PASSWORD :'pw';
+              GRANT USAGE ON SCHEMA public TO po11y_ro;
+              GRANT SELECT ON ALL TABLES IN SCHEMA public TO po11y_ro;
+              REVOKE ALL ON TABLE credentials_entity, execution_data FROM po11y_ro;
+              SQL
+              echo "po11y_ro role granted (read-only, credentials/execution payloads denied)"
       containers:
         - name: grafana
           image: grafana/grafana-oss:11.3.1
@@ -61,13 +130,18 @@ spec:
               value: "false"
             - name: DB_POSTGRESDB_DATABASE
               value: "n8n"
-            - name: DB_POSTGRESDB_USER
-              value: "n8n"
-            - name: DB_POSTGRESDB_PASSWORD
+            # The datasource authenticates as po11y_ro, never as n8n's own DB
+            # user — same posture as the compose stack, where bootstrap.sh
+            # creates the role. This container therefore never holds
+            # DB_POSTGRESDB_PASSWORD; only the init container above does, and
+            # only long enough to create the role.
+            - name: PO11Y_RO_USER
+              value: "po11y_ro"
+            - name: PO11Y_RO_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: po11y-secrets
-                  key: DB_POSTGRESDB_PASSWORD
+                  key: PO11Y_RO_PASSWORD
             # The address this stack publishes on.
             - name: BIND_ADDR
               value: "127.0.0.1"
