@@ -50,6 +50,8 @@
                  font: 14px/1 system-ui, sans-serif; padding: 0; }
   .zoom button:hover { border-color: var(--fg); }
   .zoom button:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+  /* Fullscreened element paints over a black backdrop — give it the page bg. */
+  #viewport:fullscreen { background: var(--bg); }
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex;
              align-items: center; justify-content: center; padding: 20px; z-index: 20; }
   .overlay[hidden] { display: none; }
@@ -71,6 +73,7 @@
     <button id="z-out" aria-label="zoom out" title="Zoom out (−)">−</button>
     <button id="z-in" aria-label="zoom in" title="Zoom in (+)">+</button>
     <button id="z-fit" aria-label="fit map to view" title="Fit to view (0)">⤢</button>
+    <button id="z-full" aria-label="toggle full screen" title="Full screen (f)">⛶</button>
   </div>
 </div>
 <div class="overlay" id="overlay" hidden>
@@ -152,6 +155,18 @@ document.getElementById('zoom').addEventListener('pointerdown', (e) => e.stopPro
 document.getElementById('z-in').addEventListener('click', () => zoomBy(1.25));
 document.getElementById('z-out').addEventListener('click', () => zoomBy(1 / 1.25));
 document.getElementById('z-fit').addEventListener('click', () => { touched = false; fit(); });
+// Full screen on the viewport itself. document.fullscreenEnabled is false when
+// the embedding iframe lacks allowfullscreen (or the platform has no element
+// fullscreen at all) — hide the button rather than offer a dead control.
+const zFull = document.getElementById('z-full');
+if (!document.fullscreenEnabled) zFull.hidden = true;
+zFull.addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else viewport.requestFullscreen().catch(() => { /* denied */ });
+});
+// Entering/leaving fullscreen resizes the viewport without a window resize
+// event, so refit here under the same touched rule.
+addEventListener('fullscreenchange', () => { if (!touched) fit(); });
 viewport.addEventListener('dblclick', (e) => {
   const r = viewport.getBoundingClientRect();
   zoomBy(1.5, { x: e.clientX - r.left, y: e.clientY - r.top });
@@ -161,6 +176,7 @@ addEventListener('keydown', (e) => {
   if (e.key === '+' || e.key === '=') zoomBy(1.25);
   else if (e.key === '-') zoomBy(1 / 1.25);
   else if (e.key === '0') { touched = false; fit(); }
+  else if (e.key === 'f' && !zFull.hidden) zFull.click();
 });
 // Refit on resize only while the reader has not framed it themselves.
 addEventListener('resize', () => { if (!touched) fit(); });

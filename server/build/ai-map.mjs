@@ -132,7 +132,6 @@ export async function buildAiMap(workflows, {
   const KIND_LABEL = { schedule: 'Schedule trigger', form: 'Form trigger', webhook: 'Webhook trigger',
     entry: 'Workflow', worker: 'Sub-workflow', file: 'Published feed', external: 'External service' };
   const map = {
-    eyebrow: 'po11y · architecture',
     title: 'How the workflows link',
     lede: 'Triggers on the left start the workflows; edges follow real references (sub-workflow calls, published feeds, external services).',
     columns: ['Triggers', 'Workflows', 'Sub-workflows', 'Outputs'],

@@ -201,7 +201,7 @@ function buildChrome() {
     // src set on first show — don't load every iframe up front
     sec.innerHTML = strip + e.tabs.map((t) =>
       `<iframe class="tabframe" data-sub-pane="${esc(t.id)}" data-src="${safeUrl(withHost(scopedSrc(withTab(t))))}"
-        title="${esc(t.label)}"${t.id === open ? '' : ' hidden'}></iframe>`).join('');
+        title="${esc(t.label)}" allowfullscreen${t.id === open ? '' : ' hidden'}></iframe>`).join('');
     $('main').appendChild(sec);
   });
   // Notifications view: the feed list plus its all/ok/fail filter. Opening it

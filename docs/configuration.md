@@ -253,7 +253,6 @@ Rendered by [`site/ai-map.html`](../site/ai-map.html). Contains structured diagr
 {
   "generated_at": "2026-07-10T12:00:00Z",
   "model": "auto/best-free",
-  "eyebrow": "Architecture Map",
   "title": "System Architecture",
   "lede": "Overview of active workflows",
   "columns": ["Triggers", "Actions"],
