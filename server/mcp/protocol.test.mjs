@@ -24,6 +24,20 @@ test('notifications/initialized produces no response', async () => {
   assert.equal(await dispatch({ jsonrpc: '2.0', method: 'notifications/initialized' }), null);
 });
 
+test('any method without an id is a notification: no response body', async () => {
+  for (const method of ['initialize', 'ping', 'tools/list', 'resources/list', 'nonsense']) {
+    assert.equal(await dispatch({ jsonrpc: '2.0', method }), null, method);
+  }
+});
+
+test('a tools/call notification does not run the handler', async () => {
+  let calls = 0;
+  const d = createDispatcher({ serverInfo: {}, resources: [], tools: [
+    { name: 'count', inputSchema: {}, handler: async () => { calls += 1; return {}; } }] });
+  assert.equal(await d({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'count' } }), null);
+  assert.equal(calls, 0);
+});
+
 test('tools/list exposes every tool without its handler', async () => {
   const out = await dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   assert.equal(out.result.tools.length, 1);
