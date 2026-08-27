@@ -120,6 +120,21 @@ Notable changes to Po11y. Format follows
 
 ### Fixed
 
+- `AI_MAP_MAX_TOKENS` and `ALERT_RULES_FILE` were documented — in
+  `.env.example` and `docs/server.md` — but passed to the server by neither
+  compose file, so setting either in `.env` did nothing: the annotation call
+  always used the built-in 16000-token budget, and per-workflow alert budgets
+  were unreachable in every shipped deployment. Both compose files now pass
+  them through. `ALERT_RULES_FILE` names a path inside the read-only server
+  container; `.env.example` and `docs/server.md` now spell out the
+  `/data/alert-rules.json` + `docker compose cp` + restart recipe, `/data`
+  being the container's only writable mount and the file being read once at
+  startup. Compose also no longer defaults `ALERTS_ENABLED` to `"true"` inside
+  the container: it passes `''` when the host leaves it unset and the server
+  treats that as unset — the same convention `envNumber` applies to the
+  numeric vars — because a baked-in `"true"` made the rules file's
+  `"enabled": false` unreachable in every shipped deployment. An explicit
+  `ALERTS_ENABLED=true/false` still wins over the file in both directions. (#7)
 - `get_env` in `bootstrap.sh` and `scripts/readonly-preflight.sh` truncated
   `.env` values at a bare `#`, while compose keeps reading to the end of the
   line unless whitespace precedes the `#`. A hand-set secret containing one —
