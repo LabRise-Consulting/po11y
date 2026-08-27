@@ -109,6 +109,15 @@ Notable changes to Po11y. Format follows
 
 ### Fixed
 
+- `AI_MAP_MAX_TOKENS` and `ALERT_RULES_FILE` were documented — in
+  `.env.example` and `docs/server.md` — but passed to the server by neither
+  compose file, so setting either in `.env` did nothing: the annotation call
+  always used the built-in 16000-token budget, and per-workflow alert budgets
+  were unreachable in every shipped deployment. Both compose files now pass
+  them through. `ALERT_RULES_FILE` names a path inside the read-only server
+  container; `.env.example` and `docs/server.md` now spell out the
+  `/data/alert-rules.json` + `docker compose cp` recipe, `/data` being the
+  container's only writable mount. (#7)
 - `PO11Y_ALLOW_OPEN_BIND=1` set in `.env` — where `.env.example` documents it —
   did not reach `bootstrap.sh` or `scripts/readonly-preflight.sh`. The guard
   reads it from the process environment, compose reads it from `.env` for the

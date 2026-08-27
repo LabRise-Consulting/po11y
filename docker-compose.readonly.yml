@@ -189,12 +189,16 @@ services:
       AI_MAP_BASE_URL: ${AI_MAP_BASE_URL:-}
       AI_MAP_API_KEY: ${AI_MAP_API_KEY:-}
       AI_MAP_MODEL: ${AI_MAP_MODEL:-}
+      AI_MAP_MAX_TOKENS: ${AI_MAP_MAX_TOKENS:-16000}
       ALERTS_ENABLED: ${ALERTS_ENABLED:-true}
       ALERT_MIN_ERRORS: ${ALERT_MIN_ERRORS:-}
       ALERT_ERROR_RATE: ${ALERT_ERROR_RATE:-}
       ALERT_STALE_AFTER_MIN: ${ALERT_STALE_AFTER_MIN:-}
       ALERT_STUCK_AFTER_MIN: ${ALERT_STUCK_AFTER_MIN:-}
       ALERT_IGNORE: ${ALERT_IGNORE:-}
+      # A path INSIDE this read-only container: /data (the po11y_store volume)
+      # is its only writable mount — see .env.example for the copy recipe.
+      ALERT_RULES_FILE: ${ALERT_RULES_FILE:-}
       ALERT_RENOTIFY_MIN: ${ALERT_RENOTIFY_MIN:-}
       ALERT_FEED_MAX: ${ALERT_FEED_MAX:-}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
