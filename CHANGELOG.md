@@ -109,6 +109,15 @@ Notable changes to Po11y. Format follows
 
 ### Fixed
 
+- `get_env` in `bootstrap.sh` and `scripts/readonly-preflight.sh` truncated
+  `.env` values at a bare `#`, while compose keeps reading to the end of the
+  line unless whitespace precedes the `#`. A hand-set secret containing one —
+  `PO11Y_RO_PASSWORD=p#ss` — was therefore installed truncated by bootstrap
+  (`ALTER ROLE po11y_ro PASSWORD`, the n8n owner sign-in) while compose handed
+  the full value to Grafana and n8n, so the two halves of the stack
+  disagreed about the password and bootstrap still printed success. The `sed`
+  now requires whitespace before `#`, matching compose; generated secrets are
+  hex and were never affected. (#6)
 - `PO11Y_ALLOW_OPEN_BIND=1` set in `.env` — where `.env.example` documents it —
   did not reach `bootstrap.sh` or `scripts/readonly-preflight.sh`. The guard
   reads it from the process environment, compose reads it from `.env` for the

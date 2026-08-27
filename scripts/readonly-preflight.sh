@@ -38,7 +38,9 @@ done
 
 [ -f "$ENV_FILE" ] || { echo "preflight: $ENV_FILE not found — cp .env.example .env first"; exit 1; }
 
-get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*//'; }
+# Inline comments require whitespace before '#', exactly as compose reads the
+# same file — a bare '#' inside a value (a hand-set password) is the value.
+get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/[[:space:]]\{1,\}#.*//'; }
 set_env() { # set_env KEY VALUE
   if grep -q "^$1=" "$ENV_FILE"; then
     sed -i.bak "s|^$1=.*|$1=$2|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
