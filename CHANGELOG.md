@@ -331,6 +331,17 @@ Notable changes to Po11y. Format follows
   `http://host/path` and retargeted a dashboard link off the box, which is
   exactly what the `//` check exists to prevent. Backslashes are now refused
   anywhere in a URL — nothing po11y links to needs one.
+- The `po11y_ro` setup — `bootstrap.sh` and the k8s init container alike — only
+  created the role with restrictive attributes; when the role already existed,
+  it reset nothing but the password. A `po11y_ro` that predated the script, or
+  was created by hand with `SUPERUSER` or `BYPASSRLS`, kept those bits, and the
+  table-level `REVOKE` removes role-level privileges from neither. The `ALTER
+  ROLE` now restates `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+  NOBYPASSRLS NOINHERIT` on every run and revokes leftover role memberships
+  (warning rather than aborting where it lacks `ADMIN OPTION` — `NOINHERIT`
+  already neutralises what such a membership would confer).
+  `ci/check-k8s-grafana.sh` now compares the two SQL copies byte for byte, so a
+  fix applied to one cannot silently miss the other.
 
 ## [0.1.0] - 2026-08-20
 
