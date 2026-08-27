@@ -190,7 +190,9 @@ services:
       AI_MAP_API_KEY: ${AI_MAP_API_KEY:-}
       AI_MAP_MODEL: ${AI_MAP_MODEL:-}
       AI_MAP_MAX_TOKENS: ${AI_MAP_MAX_TOKENS:-16000}
-      ALERTS_ENABLED: ${ALERTS_ENABLED:-true}
+      # Empty (not "true") when the host leaves it unset, so a rules file's
+      # "enabled": false still applies — the server treats '' as unset.
+      ALERTS_ENABLED: ${ALERTS_ENABLED:-}
       ALERT_MIN_ERRORS: ${ALERT_MIN_ERRORS:-}
       ALERT_ERROR_RATE: ${ALERT_ERROR_RATE:-}
       ALERT_STALE_AFTER_MIN: ${ALERT_STALE_AFTER_MIN:-}

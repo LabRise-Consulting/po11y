@@ -39,16 +39,18 @@ export function loadAlertConfig(env = process.env, log = console.error) {
 
   return {
     ...file,
-    // Presence, not truthiness: `=== 'true'` alone made ALERTS_ENABLED=false a
-    // no-op against a file that enabled alerting, so the kill switch could only
-    // ever switch alerting ON. Every sibling field below already reads env as an
-    // override of the file value; this one now matches them.
+    // Non-empty, not merely present: compose passes ${ALERTS_ENABLED:-}, so an
+    // operator who left the variable alone reaches this as '' — that must fall
+    // through to the file, or file.enabled is unreachable in every shipped
+    // deployment. Same convention as the numeric siblings below (envNumber
+    // treats '' as unset). A set value still wins in BOTH directions, so
+    // ALERTS_ENABLED=false silences a file that enables alerting.
     // Default ON: the watchdog reuses the executions window the poll already
     // fetched (no extra n8n calls) and pushes nowhere unless ALERT_WEBHOOK_URL
     // is set, so the safe default is the one that makes notifications.json
     // exist instead of 404 on a fresh install. ALERTS_ENABLED=false or a rules
     // file with enabled:false opt out.
-    enabled: env.ALERTS_ENABLED !== undefined
+    enabled: env.ALERTS_ENABLED
       ? env.ALERTS_ENABLED === 'true'
       : (file.enabled ?? true),
     staleAfterMin: num(env.ALERT_STALE_AFTER_MIN, file.staleAfterMin ?? 0, 'ALERT_STALE_AFTER_MIN'),

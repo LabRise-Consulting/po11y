@@ -66,7 +66,7 @@ mount) and talks to n8n's public API read-only.
 | `ALERT_STALE_AFTER_MIN` / `ALERT_STUCK_AFTER_MIN` | `0` / `0` | Off by default; see `.env.example`'s watchdog section. |
 | `ALERT_MIN_ERRORS` / `ALERT_ERROR_RATE` | `3` / `0.5` | The `failing` rule's floors — both must be cleared. |
 | `ALERT_IGNORE` | *(empty)* | Comma-separated workflow names/ids excluded from every rule. |
-| `ALERT_RULES_FILE` | *(empty)* | Optional JSON file for per-workflow budgets, read by `server/alert-config.mjs`. The path is resolved inside the server container, which is read-only apart from its `/data` volume: set `/data/alert-rules.json` and place the file with `docker compose cp alert-rules.json server:/data/`, or bind-mount your own read-only path in a compose override. |
+| `ALERT_RULES_FILE` | *(empty)* | Optional JSON file for per-workflow budgets, read by `server/alert-config.mjs`. The path is resolved inside the server container, which is read-only apart from its `/data` volume: set `/data/alert-rules.json`, place the file with `docker compose cp alert-rules.json server:/data/`, then `docker compose restart server` — the file is read once, at startup. Or bind-mount your own read-only path in a compose override before the first start. |
 | `ALERT_RENOTIFY_MIN` | `360` | Minutes before an alert that is still true is repeated. `0` says it once only. Also gates expectation-pack re-firing. |
 | `ALERT_FEED_MAX` | `50` | Maximum entries kept in `notifications.json`. |
 | `ALERT_WEBHOOK_URL` | *(empty)* | Outbound alert push. Empty = alerts only land in `notifications.json`. **Set it here and nowhere else** — a second pusher delivers every alert twice. A credential: logged as scheme + host only. |

@@ -116,8 +116,14 @@ Notable changes to Po11y. Format follows
   were unreachable in every shipped deployment. Both compose files now pass
   them through. `ALERT_RULES_FILE` names a path inside the read-only server
   container; `.env.example` and `docs/server.md` now spell out the
-  `/data/alert-rules.json` + `docker compose cp` recipe, `/data` being the
-  container's only writable mount. (#7)
+  `/data/alert-rules.json` + `docker compose cp` + restart recipe, `/data`
+  being the container's only writable mount and the file being read once at
+  startup. Compose also no longer defaults `ALERTS_ENABLED` to `"true"` inside
+  the container: it passes `''` when the host leaves it unset and the server
+  treats that as unset — the same convention `envNumber` applies to the
+  numeric vars — because a baked-in `"true"` made the rules file's
+  `"enabled": false` unreachable in every shipped deployment. An explicit
+  `ALERTS_ENABLED=true/false` still wins over the file in both directions. (#7)
 - `PO11Y_ALLOW_OPEN_BIND=1` set in `.env` — where `.env.example` documents it —
   did not reach `bootstrap.sh` or `scripts/readonly-preflight.sh`. The guard
   reads it from the process environment, compose reads it from `.env` for the

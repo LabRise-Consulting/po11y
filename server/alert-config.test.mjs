@@ -50,6 +50,20 @@ test('the rules file still decides when ALERTS_ENABLED is unset', () => {
   } finally { cleanup(); }
 });
 
+test('ALERTS_ENABLED="" reads as unset: the rules file can still disable', () => {
+  // Compose passes ${ALERTS_ENABLED:-}, so an operator who left the variable
+  // alone reaches the server as '' — the same empty-as-unset convention
+  // envNumber applies to the numeric vars.
+  const { path, cleanup } = rulesFile({ enabled: false });
+  try {
+    assert.equal(loadAlertConfig({ ALERT_RULES_FILE: path, ALERTS_ENABLED: '' }).enabled, false);
+  } finally { cleanup(); }
+});
+
+test('ALERTS_ENABLED="" without a rules file keeps the default on', () => {
+  assert.equal(loadAlertConfig({ ALERTS_ENABLED: '' }).enabled, true);
+});
+
 test('numeric env vars win over their file counterparts', () => {
   const { path, cleanup } = rulesFile({ staleAfterMin: 60, minErrors: 9 });
   try {
