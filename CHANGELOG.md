@@ -6,6 +6,17 @@ Notable changes to Po11y. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The MCP dispatcher now answers every JSON-RPC notification (a message
+  without an `id`) with silence, as the spec requires, instead of returning a
+  response body whose `id` key had merely been dropped by serialisation. The
+  notification check existed but was consulted only for unknown methods;
+  `ping`, `initialize`, the list methods and `tools/call` all responded — and
+  `tools/call` also ran the tool. Notifications now return before the method
+  switch, so the HTTP layer's existing 202-with-empty-body path finally
+  applies to all of them, and a notification never executes a handler. (#8)
+
 ### Added
 
 - `po11y_workflow_executions_total`, a per-workflow counter of executions
@@ -124,6 +135,15 @@ Notable changes to Po11y. Format follows
   numeric vars — because a baked-in `"true"` made the rules file's
   `"enabled": false` unreachable in every shipped deployment. An explicit
   `ALERTS_ENABLED=true/false` still wins over the file in both directions. (#7)
+- `get_env` in `bootstrap.sh` and `scripts/readonly-preflight.sh` truncated
+  `.env` values at a bare `#`, while compose keeps reading to the end of the
+  line unless whitespace precedes the `#`. A hand-set secret containing one —
+  `PO11Y_RO_PASSWORD=p#ss` — was therefore installed truncated by bootstrap
+  (`ALTER ROLE po11y_ro PASSWORD`, the n8n owner sign-in) while compose handed
+  the full value to Grafana and n8n, so the two halves of the stack
+  disagreed about the password and bootstrap still printed success. The `sed`
+  now requires whitespace before `#`, matching compose; generated secrets are
+  hex and were never affected. (#6)
 - `PO11Y_ALLOW_OPEN_BIND=1` set in `.env` — where `.env.example` documents it —
   did not reach `bootstrap.sh` or `scripts/readonly-preflight.sh`. The guard
   reads it from the process environment, compose reads it from `.env` for the

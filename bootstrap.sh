@@ -75,7 +75,9 @@ set_env() { # set_env KEY VALUE
     printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"
   fi
 }
-get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*//'; }
+# Inline comments require whitespace before '#', exactly as compose reads the
+# same file — a bare '#' inside a value (a hand-set password) is the value.
+get_env() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | sed 's/[[:space:]]\{1,\}#.*//'; }
 
 # Generated secrets (kept if already set). N8N_OWNER_PASSWORD gets an 'A1'
 # prefix so it always satisfies n8n's policy (>=8 chars, number, capital).
