@@ -6,6 +6,17 @@ Notable changes to Po11y. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The MCP dispatcher now answers every JSON-RPC notification (a message
+  without an `id`) with silence, as the spec requires, instead of returning a
+  response body whose `id` key had merely been dropped by serialisation. The
+  notification check existed but was consulted only for unknown methods;
+  `ping`, `initialize`, the list methods and `tools/call` all responded — and
+  `tools/call` also ran the tool. Notifications now return before the method
+  switch, so the HTTP layer's existing 202-with-empty-body path finally
+  applies to all of them, and a notification never executes a handler. (#8)
+
 ### Added
 
 - `po11y_workflow_executions_total`, a per-workflow counter of executions

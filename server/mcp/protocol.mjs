@@ -36,7 +36,13 @@ export function createDispatcher({ tools = [], resources = [], serverInfo = {} }
       return failure(msg && msg.id !== undefined ? msg.id : null, -32600, 'invalid request');
     }
     const { id, method, params = {} } = msg;
-    const isNotification = id === undefined;
+    // JSON-RPC 2.0: a notification (no id) gets no response — not a result,
+    // not an error — and this server does not execute its method either: every
+    // method here exists to produce an answer, so running one with nobody
+    // listening is pure cost. This also covers notifications/initialized and
+    // notifications/cancelled, so the switch below only ever sees requests.
+    // http.mjs turns the null into a 202 with an empty body.
+    if (id === undefined) return null;
 
     try {
       switch (method) {
@@ -46,11 +52,6 @@ export function createDispatcher({ tools = [], resources = [], serverInfo = {} }
             capabilities: { tools: {}, resources: {} },
             serverInfo,
           });
-
-        // Client lifecycle notifications: acknowledged by silence.
-        case 'notifications/initialized':
-        case 'notifications/cancelled':
-          return null;
 
         case 'ping':
           return result(id, {});
@@ -79,12 +80,12 @@ export function createDispatcher({ tools = [], resources = [], serverInfo = {} }
         }
 
         default:
-          return isNotification ? null : failure(id, -32601, `unknown method: ${method}`);
+          return failure(id, -32601, `unknown method: ${method}`);
       }
     } catch (e) {
       // Handlers redact their own messages (see mcp/sources.mjs); this is the
       // last net, so it forwards the message rather than the whole error.
-      return failure(id === undefined ? null : id, -32603, String((e && e.message) || e));
+      return failure(id, -32603, String((e && e.message) || e));
     }
   };
 }
