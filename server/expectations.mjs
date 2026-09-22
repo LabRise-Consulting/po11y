@@ -38,6 +38,21 @@ export function loadPack(text) {
     if (!SELECT_ONLY.test(e.sql) || e.sql.replace(/;\s*$/, '').includes(';')) {
       throw new Error(`expectation ${e.name}: sql must be a single SELECT`);
     }
+    // NULL is not 0. COUNT(*) returns 0 on an empty set, but SUM(...) and a
+    // scalar subquery with no row return NULL — "could not be computed", not
+    // "counted zero". Opting in is the author declaring which one they mean;
+    // making it the default would turn a SUM over an empty window from a
+    // caught failure into silence, the failure mode packs exist to catch.
+    if (e.nullIsPending !== undefined) {
+      if (typeof e.nullIsPending !== 'boolean') {
+        throw new Error(`expectation ${e.name}: nullIsPending must be true or false`);
+      }
+      // Rejected rather than ignored on the other kind: a missing timestamp is
+      // stale by design there, so the flag would be a silent no-op.
+      if (e.kind !== 'min-count') {
+        throw new Error(`expectation ${e.name}: nullIsPending applies to min-count only`);
+      }
+    }
     const want = e.windowMinutes ? 1 : 0;
     if (placeholders(e.sql) !== want) {
       throw new Error(
@@ -68,6 +83,12 @@ export function evaluate(db, pack, now = Date.now()) {
     }
     const window = e.windowMinutes ? ` in the last ${e.windowMinutes} min` : '';
     if (e.kind === 'min-count') {
+      // A third outcome, for queries that can legitimately answer "not yet":
+      // a delta needs one sample older than the window, and on a fresh store
+      // there is none. Only when the author asked for it — see loadPack.
+      if (value == null && e.nullIsPending) {
+        return { name: e.name, pending: true, detail: `no baseline sample yet${window}` };
+      }
       // Number(null) is 0, which is the answer we want here — no rows IS the
       // failure — but it is written out so the intent is not read as an
       // accident (the max-age branch below needs the opposite guard).
@@ -116,6 +137,14 @@ export function reconcileExpectations(results, prevState, { now = Date.now(), re
 
   for (const r of Array.isArray(results) ? results : []) {
     const was = prev[r.name];
+    // Pending is neither true nor false, so it must be answered before the
+    // `!r.ok` test below would read it as a failure. Carrying the previous
+    // entry forward is what stops "no data" publishing a recovery, and stops
+    // a failure that returns being announced as brand new.
+    if (r.pending) {
+      if (was) state[r.name] = was;
+      continue;
+    }
     if (!r.ok) {
       if (!was || !was.failing) {
         fire.push({ name: r.name, detail: r.detail, kind: 'firing' });
