@@ -191,6 +191,130 @@ test('ignored workflows produce no alerts of any kind', () => {
   assert.deepEqual(evaluateAlerts(sum(execs), [wf('a', 'A')], cfg, { now: NOW }), []);
 });
 
+// ---- stale derived from the Schedule Trigger (issue #15) -------------------
+// "default budget" below means the rule enabled globally with NO per-workflow
+// override — the case the flat budget got wrong every weekend.
+const scheduled = (interval, extra = {}) => wf('a', 'A', {
+  nodes: [{
+    name: 'Schedule Trigger',
+    type: 'n8n-nodes-base.scheduleTrigger',
+    parameters: { rule: { interval } },
+  }],
+  ...extra,
+});
+const cronWf = (expression, extra = {}) => scheduled([{ field: 'cronExpression', expression }], extra);
+const ok = (iso) => [{ workflowId: 'a', status: 'success', startedAt: iso }];
+const at = (iso) => new Date(iso).getTime();
+// The rule on, a generous flat budget that WOULD fire, and `failing` muted.
+const DERIVED = { enabled: true, staleAfterMin: 360, staleGraceMin: 15, minErrors: 99 };
+
+test('a Mon-Fri workflow is not stale on Saturday, though the flat budget would fire', () => {
+  const now = at('2026-08-01T12:00:00Z'); // Saturday
+  const execs = ok('2026-07-31T09:01:00Z'); // Friday's run, ~27h ago
+  const out = evaluateAlerts(summarizeExecutions(execs, { now }), [cronWf('0 9 * * 1-5')], DERIVED, { now });
+  assert.deepEqual(out, []);
+});
+
+test('the same workflow goes stale on Tuesday once the 09:00 run is past its grace', () => {
+  const now = at('2026-07-28T09:20:00Z'); // Tuesday, 20 min after the expected run
+  const execs = ok('2026-07-27T09:01:00Z'); // Monday succeeded, Tuesday did not
+  const out = evaluateAlerts(summarizeExecutions(execs, { now }), [cronWf('0 9 * * 1-5')], DERIVED, { now });
+  assert.deepEqual(rules(out), ['stale:a']);
+  assert.match(out[0].message, /expected run/i, 'the message says what was expected, not just an age');
+});
+
+test('a run that is merely late is inside the grace and does not alert', () => {
+  const now = at('2026-07-28T09:10:00Z'); // 10 min after the expected run, grace 15
+  const execs = ok('2026-07-27T09:01:00Z');
+  const out = evaluateAlerts(summarizeExecutions(execs, { now }), [cronWf('0 9 * * 1-5')], DERIVED, { now });
+  assert.deepEqual(out, []);
+});
+
+test('a schedule does not switch the rule on by itself — the global budget is the switch', () => {
+  const now = at('2026-07-28T09:20:00Z');
+  const cfg = { enabled: true, staleAfterMin: 0, minErrors: 99 };
+  const out = evaluateAlerts(new Map(), [cronWf('0 9 * * 1-5')], cfg, { now });
+  assert.deepEqual(out, []);
+});
+
+test('an explicit perWorkflow staleAfterMin overrides the derived budget', () => {
+  const now = at('2026-08-01T12:00:00Z'); // Saturday: the derived budget says fine
+  const execs = ok('2026-07-31T09:01:00Z');
+  const cfg = { ...DERIVED, perWorkflow: { A: { staleAfterMin: 30 } } };
+  const out = evaluateAlerts(summarizeExecutions(execs, { now }), [cronWf('0 9 * * 1-5')], cfg, { now });
+  assert.deepEqual(rules(out), ['stale:a']);
+});
+
+test('an unparseable cron falls back to the flat budget and reports itself once', () => {
+  const now = at('2026-07-28T12:00:00Z');
+  const seen = [];
+  const out = evaluateAlerts(new Map(), [cronWf('every other tuesday')], DERIVED, {
+    now, onScheduleError: (e) => seen.push(e),
+  });
+  assert.deepEqual(rules(out), ['stale:a'], 'the flat budget still applies');
+  assert.deepEqual(seen, [{ workflowId: 'a', workflowName: 'A', expression: 'every other tuesday' }]);
+});
+
+test('a workflow with no Schedule Trigger keeps the flat budget', () => {
+  const now = at('2026-07-28T12:00:00Z');
+  const execs = ok('2026-07-28T05:00:00Z'); // 7h ago, flat budget 360 min
+  const out = evaluateAlerts(summarizeExecutions(execs, { now }), [wf('a', 'A')], DERIVED, { now });
+  assert.deepEqual(rules(out), ['stale:a']);
+});
+
+test('the instance timezone decides when the expected run was', () => {
+  // 06:20Z is 08:20 in Berlin — before the 09:00 run. Read as UTC the workflow
+  // would already have missed a 09:00 run yesterday and be stale.
+  const now = at('2026-07-28T06:20:00Z');
+  const execs = ok('2026-07-27T07:01:00Z'); // Monday 09:01 Berlin
+  const out = evaluateAlerts(summarizeExecutions(execs, { now }), [cronWf('0 9 * * 1-5')], DERIVED, {
+    now, instanceTimezone: 'Europe/Berlin',
+  });
+  assert.deepEqual(out, []);
+});
+
+test('winter time moves the expected run with the clock', () => {
+  // 2026-10-26 is the Monday after the European switch to CET (UTC+1), so the
+  // 09:00 Berlin run is 08:00Z. At 08:10Z it is 10 min old and inside grace;
+  // reading the zone as summer time would place it an hour earlier and alert.
+  const now = at('2026-10-26T08:10:00Z');
+  const execs = ok('2026-10-23T07:01:00Z'); // Friday 09:01 CEST
+  const out = evaluateAlerts(summarizeExecutions(execs, { now }), [cronWf('0 9 * * 1-5')], DERIVED, {
+    now, instanceTimezone: 'Europe/Berlin',
+  });
+  assert.deepEqual(out, []);
+});
+
+test('an interval schedule goes stale after one cadence plus grace', () => {
+  const now = at('2026-07-28T12:00:00Z');
+  const every30 = scheduled([{ field: 'minutes', minutesInterval: 30 }]);
+  const late = summarizeExecutions(ok('2026-07-28T11:10:00Z'), { now }); // 50 min
+  assert.deepEqual(rules(evaluateAlerts(late, [every30], DERIVED, { now })), ['stale:a']);
+  const fresh = summarizeExecutions(ok('2026-07-28T11:25:00Z'), { now }); // 35 min
+  assert.deepEqual(evaluateAlerts(fresh, [every30], DERIVED, { now }), []);
+});
+
+test('staleGraceFactor widens the grace in proportion to the cadence', () => {
+  const now = at('2026-07-28T12:00:00Z');
+  const every30 = scheduled([{ field: 'minutes', minutesInterval: 30 }]);
+  const late = summarizeExecutions(ok('2026-07-28T11:10:00Z'), { now }); // 50 min
+  const cfg = { ...DERIVED, staleGraceFactor: 1 }; // grace = max(15, 30) = 30
+  assert.deepEqual(evaluateAlerts(late, [every30], cfg, { now }), []);
+});
+
+test('a perWorkflow staleGraceMin overrides the global grace', () => {
+  const now = at('2026-07-28T09:20:00Z');
+  const execs = summarizeExecutions(ok('2026-07-27T09:01:00Z'), { now });
+  const cfg = { ...DERIVED, perWorkflow: { A: { staleGraceMin: 60 } } };
+  assert.deepEqual(evaluateAlerts(execs, [cronWf('0 9 * * 1-5')], cfg, { now }), []);
+});
+
+test('a scheduled workflow that has never run goes stale on the derived budget', () => {
+  const now = at('2026-07-28T09:20:00Z');
+  const out = evaluateAlerts(new Map(), [cronWf('0 9 * * 1-5')], DERIVED, { now });
+  assert.deepEqual(rules(out), ['stale:a']);
+});
+
 test('staleAfterMin unset means the stale rule is off entirely', () => {
   const execs = [{ workflowId: 'a', status: 'success', startedAt: '2020-01-01T00:00:00Z' }];
   assert.deepEqual(evaluateAlerts(sum(execs), [wf('a', 'A')], { enabled: true }, { now: NOW }), []);

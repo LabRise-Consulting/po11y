@@ -217,6 +217,8 @@ services:
       ALERT_MIN_ERRORS: ${ALERT_MIN_ERRORS:-}
       ALERT_ERROR_RATE: ${ALERT_ERROR_RATE:-}
       ALERT_STALE_AFTER_MIN: ${ALERT_STALE_AFTER_MIN:-}
+      ALERT_STALE_GRACE_MIN: ${ALERT_STALE_GRACE_MIN:-}
+      ALERT_STALE_GRACE_FACTOR: ${ALERT_STALE_GRACE_FACTOR:-}
       ALERT_STUCK_AFTER_MIN: ${ALERT_STUCK_AFTER_MIN:-}
       ALERT_IGNORE: ${ALERT_IGNORE:-}
       # A path INSIDE this read-only container: /data (the po11y_store volume)
@@ -232,6 +234,10 @@ services:
       ALERT_HEARTBEAT_URL: ${ALERT_HEARTBEAT_URL:-}
       ALERT_HEARTBEAT_TIMEOUT_MS: ${ALERT_HEARTBEAT_TIMEOUT_MS:-10000}
       # MCP sources (docs/mcp.md "Source support" section).
+      # The timezone the stale rule reads Schedule Triggers in. This stack runs
+      # its own n8n, whose GENERIC_TIMEZONE is the same ${TZ} — so deriving it
+      # here cannot drift from the instance it is describing.
+      N8N_TIMEZONE: ${TZ:-Europe/Berlin}
       PROMETHEUS_URL: http://prometheus:9090
       GRAFANA_URL: ${MCP_GRAFANA_URL-http://grafana:3000}
       GRAFANA_SA_TOKEN: ${MCP_GRAFANA_SA_TOKEN:-}
