@@ -174,6 +174,28 @@ Schedules are read in `settings.timezone`, else `N8N_TIMEZONE` on the `server`
 service, else UTC. The bundled stack sets `N8N_TIMEZONE` from `TZ`. On the
 read-only stack, set it to the remote instance's `GENERIC_TIMEZONE`.
 
+##### `ALERT_RULES_FILE`
+
+Optional JSON file for per-workflow budgets. Env variables win over the file.
+
+```json
+{
+  "perWorkflow": {
+    "Monthly report": { "staleAfterMin": 44640 },
+    "Webhook intake": { "stuckAfterMin": 10, "staleAfterMin": 0 }
+  },
+  "ignore": ["Scratchpad"]
+}
+```
+
+- `perWorkflow` is keyed by workflow name, then by id. A key by id survives a rename.
+- Entry keys: `staleAfterMin`, `stuckAfterMin`, `staleGraceMin`, `staleGraceFactor`. `0` turns that rule off for that workflow.
+- Top-level keys `enabled`, `staleAfterMin`, `stuckAfterMin`, `minErrors`, `errorRate`, `staleGraceMin`, `staleGraceFactor` and `ignore` apply when the matching env variable is empty.
+
+The server re-reads the file on every feed rebuild when its mtime or size changed, and on `SIGHUP` (`docker compose kill -s HUP server`). Each reload logs the number of `perWorkflow` and `ignore` entries. A file that does not parse or validate keeps the previous rules and logs the reason once. At startup the same failure falls back to env only.
+
+An open alert on a workflow you add to `ignore` is dropped without a "recovered" entry.
+
 #### Webhook Push Notifications
 
 Set `ALERT_WEBHOOK_URL` to push notifications to external webhooks. Set `ALERT_WEBHOOK_FORMAT` to match your target platform:

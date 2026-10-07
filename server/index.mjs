@@ -21,7 +21,7 @@ import { buildRegistry } from './mcp/registry.mjs';
 import { createDispatcher } from './mcp/protocol.mjs';
 import { makeLlm } from './n8n.mjs';
 import { mergeNotifications, envNumber, DEFAULT_FEED_MAX } from './watchdog.mjs';
-import { loadAlertConfig } from './alert-config.mjs';
+import { createAlertConfig } from './alert-config.mjs';
 import { guardOutbound } from './outbound.mjs';
 import { pushAlerts, pingHeartbeat, redactUrl, FORMATS } from './notify.mjs';
 
@@ -82,7 +82,8 @@ const N8N_READ_API_KEY = process.env.N8N_READ_API_KEY || '';
 const RENOTIFY_MIN = num(process.env.ALERT_RENOTIFY_MIN, 360, 'ALERT_RENOTIFY_MIN');
 const EXPECTATION_STATE_KEY = 'expectation-state';
 const FEED_MAX = num(process.env.ALERT_FEED_MAX, DEFAULT_FEED_MAX, 'ALERT_FEED_MAX');
-const ALERTS = loadAlertConfig(process.env, console.error);
+// Live: ALERT_RULES_FILE is re-read on SIGHUP and when it changes (#18).
+const alertConfig = createAlertConfig(process.env);
 // The timezone the n8n INSTANCE runs its schedules in — its GENERIC_TIMEZONE,
 // not this container's TZ. The stale rule reads a workflow's Schedule Trigger
 // in it (server/schedule.mjs), and a workflow's own settings.timezone still
@@ -217,6 +218,10 @@ const { tools, resources } = buildRegistry(mcpSources, CONFIG_PATH);
 const mcpDispatch = createDispatcher({ tools, resources, serverInfo: { name: 'po11y', version: '1' } });
 
 async function rebuild() {
+  // One stat per rebuild; re-reads only an edited file. Before anything reads
+  // the config, so this rebuild already evaluates against the new budgets.
+  alertConfig.reloadIfChanged();
+  const ALERTS = alertConfig.current();
   const now = Date.now();
   const stamp = new Date(now).toISOString();
   const forced = forceAiMap;
@@ -353,7 +358,10 @@ function forceRebuild(why) {
   console.error(`server: ${why} — forcing a full ai-map rebuild`);
   refresh();
 }
-process.on('SIGHUP', () => forceRebuild('SIGHUP'));
+process.on('SIGHUP', () => {
+  alertConfig.reload();
+  forceRebuild('SIGHUP');
+});
 
 let refreshTimer = null;
 function scheduleRefresh(delayMs = 2000) {
@@ -481,7 +489,7 @@ server.listen(PORT, BIND_HOST, () => {
   console.error(
     `server: ${BIND_HOST}:${PORT}; store ${DB_PATH}; scope ${SCOPE}; n8n ${N8N_API_URL}; ` +
     `sync ${SYNC_INTERVAL}s; poll ${POLL_INTERVAL}s; retention ${RETENTION_DAYS}d; ` +
-    `expectations ${pack.expectations.length}; alerts ${ALERTS.enabled ? 'on' : 'off'}; ` +
+    `expectations ${pack.expectations.length}; alerts ${alertConfig.current().enabled ? 'on' : 'off'}; ` +
     `push ${PUSH.url ? 'on' : 'off'}; heartbeat ${HEARTBEAT.url ? 'on' : 'off'}; ` +
     `ingest ${INGEST_TOKEN ? 'on' : 'off'}; datatables ${TABLES.length ? TABLES.join(',') : 'off'}; ` +
     `mcp ${tools.length} tools; n8n timeout ${N8N_TIMEOUT_MS}ms`,

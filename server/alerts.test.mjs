@@ -250,3 +250,11 @@ test('the instance timezone reaches the stale rule', () => {
   assert.equal(call(db, { ...over, instanceTimezone: 'Europe/Berlin' }).notifications.length, 0);
   assert.equal(call(openDb(':memory:'), over).notifications.length, 1, 'UTC would alert here');
 });
+
+test('ignoring a workflow at runtime drops its open alert without a recovery', () => {
+  const db = openDb(':memory:');
+  assert.equal(call(db).notifications.length, 1);
+  const out = call(db, { cfg: { ...CFG, ignore: ['Ingest'] }, now: NOW + 60_000 });
+  assert.deepEqual(out.notifications, []);
+  assert.deepEqual(JSON.parse(getKv(db, 'alert-state')), {});
+});
