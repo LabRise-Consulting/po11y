@@ -193,9 +193,9 @@ the first page, the implementation trusts it and skips paging — see the
 comment at the top of `server/datatables.mjs`.)
 
 **One-day warm-up.** A growth expectation's delta needs two samples that
-straddle its window; until then the query returns `NULL`, which
-`min-count` treats as `0` and reports as a failure. That is one loud day,
-not a silently-passing one — see the note at the end of the next section.
+straddle its window. Until then the query returns `NULL`. With
+`nullIsPending` set the expectation is *pending* and notifies nothing; see
+the next section.
 
 ## Writing an expectation pack
 
@@ -206,7 +206,10 @@ failure. Two kinds ship:
 - `max-age-minutes` — the query's first value is a timestamp; fails if it
   is older than `maxAgeMinutes` (or missing).
 - `min-count` — the query's first value is a number; fails if it is below
-  `min`.
+  `min`. Optional `nullIsPending: true` makes a `NULL` value *pending*
+  ("no baseline sample yet") instead of `0`: no failure, no notification,
+  no state change. Use it only where `NULL` means "cannot be computed
+  yet", such as a delta with no baseline.
 
 Each kind needs its own threshold (`min`, `maxAgeMinutes`), and a pack that
 omits one does not load. A misspelled key would otherwise compare against
@@ -253,17 +256,25 @@ the fourth expectation in the shipped pack, watching `orders`:
   "kind": "min-count",
   "min": 1,
   "windowMinutes": 1560,
+  "nullIsPending": true,
   "sql": "SELECT (SELECT rows FROM datatable_counts WHERE key = 'orders' ORDER BY sampled_at DESC LIMIT 1) - (SELECT rows FROM datatable_counts WHERE key = 'orders' AND sampled_at <= ? ORDER BY sampled_at DESC LIMIT 1)"
 }
 ```
 
 It only produces samples to watch when `PO11Y_DATATABLES` includes
-`orders` (see the section above). It carries a one-day warm-up: until
-two samples straddle the window the delta query returns `NULL`, which
-`min-count` treats as `0` and reports as a failure. That is deliberate —
-one loud day rather than a silently-passing one, because "no baseline yet"
-and "genuinely zero growth" are both conditions an operator wants to see,
-not conditions to special-case away.
+`orders` (see the section above), and it sets `nullIsPending: true`: until
+two samples straddle the window the delta returns `NULL` and the
+expectation is pending rather than failing. A warmed store with genuinely
+zero growth still fails, because the value is `0`, not `NULL`.
+
+Two traps come with that:
+
+- `PO11Y_RETENTION_DAYS` must exceed `windowMinutes`, or the baseline
+  sample is pruned and the delta is pending forever.
+- `COUNT(*)` returns `0` on an empty set, but `SUM(...)` returns `NULL`.
+  If you mean zero, write `COALESCE(SUM(...), 0)` or `TOTAL(...)` — do not
+  reach for `nullIsPending`, which would turn a real empty window into
+  silence.
 
 ## Backup
 

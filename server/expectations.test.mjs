@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { openDb, upsertExecutions, getKv, setKv } from './db.mjs';
 import { loadPack, evaluate, reconcileExpectations, toNotifications } from './expectations.mjs';
 
@@ -183,4 +184,97 @@ test('reconciliation state round-trips through kv across two calls', () => {
   const second = reconcileExpectations([bad('x')], read(), { now: NOW + 1000, renotifyMin: 60 });
   setKv(db, 'expectation-state', JSON.stringify(second.state));
   assert.equal(second.fire.length, 0, 'the persisted state survived the round trip and suppressed the repeat');
+});
+
+// ---- nullIsPending: NULL means "cannot be computed", not "counted zero" -----
+const one = (extra) => loadPack(JSON.stringify({ expectations: [
+  { name: 'x', kind: 'min-count', min: 1, ...extra }] }));
+
+test('loadPack rejects a non-boolean nullIsPending', () => {
+  assert.throws(() => one({ nullIsPending: 'yes', sql: 'SELECT 1' }), /nullIsPending/);
+  assert.doesNotThrow(() => one({ nullIsPending: true, sql: 'SELECT 1' }));
+  assert.doesNotThrow(() => one({ sql: 'SELECT 1' }), 'absent is the default');
+});
+
+test('loadPack rejects nullIsPending on a max-age expectation, where it does nothing', () => {
+  assert.throws(() => loadPack(JSON.stringify({ expectations: [
+    { name: 'x', kind: 'max-age-minutes', maxAgeMinutes: 60, nullIsPending: true,
+      sql: 'SELECT MAX(started_at) FROM executions' }] })), /nullIsPending/);
+});
+
+test('a NULL min-count still fails when the expectation did not opt in', () => {
+  // SUM over an empty set is NULL in SQLite, and an operator who wrote it
+  // means "nothing happened" — the failure expectation packs exist to catch.
+  const db = seed('2026-08-11T05:00:00.000Z');
+  const pack = one({ sql: "SELECT SUM(1) FROM executions WHERE status = 'error'" });
+  assert.deepEqual(evaluate(db, pack, NOW), [{ name: 'x', ok: false, detail: '0 < 1' }]);
+});
+
+test('an opted-in expectation reports NULL as pending, not as a failure', () => {
+  const db = seed('2026-08-11T05:00:00.000Z');
+  const pack = one({ nullIsPending: true, sql: "SELECT SUM(1) FROM executions WHERE status = 'error'" });
+  const [r] = evaluate(db, pack, NOW);
+  assert.equal(r.pending, true);
+  assert.equal(r.ok, undefined, 'pending is a third outcome, not a quiet pass');
+  assert.match(r.detail, /no baseline sample yet/);
+});
+
+test('a genuine zero still fails even with nullIsPending set', () => {
+  const db = seed('2026-08-11T05:00:00.000Z');
+  const pack = one({ nullIsPending: true, sql: "SELECT COUNT(*) FROM executions WHERE status = 'error'" });
+  assert.deepEqual(evaluate(db, pack, NOW), [{ name: 'x', ok: false, detail: '0 < 1' }]);
+});
+
+test('a broken query fails rather than going pending', () => {
+  const db = seed('2026-08-11T05:00:00.000Z');
+  const pack = one({ nullIsPending: true, sql: 'SELECT nope FROM executions' });
+  const [r] = evaluate(db, pack, NOW);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /query failed/);
+});
+
+test('a pending result notifies nothing and starts no state', () => {
+  const { fire, state } = reconcileExpectations(
+    [{ name: 'x', pending: true, detail: 'no baseline sample yet' }], null, { now: NOW },
+  );
+  assert.deepEqual(fire, []);
+  assert.deepEqual(state, {});
+});
+
+test('a pending result carries a prior failure forward instead of resolving it', () => {
+  // Preserving the entry matters twice: nothing publishes a recovery the data
+  // does not support, and a failure that returns is not re-announced as new.
+  const prev = { x: { failing: true, lastNotifiedAt: '2026-08-11T05:00:00.000Z' } };
+  const { fire, state } = reconcileExpectations(
+    [{ name: 'x', pending: true, detail: 'no baseline sample yet' }], prev, { now: NOW, renotifyMin: 1 },
+  );
+  assert.deepEqual(fire, [], 'no recovery, and no renotify either');
+  assert.deepEqual(state, prev, 'the failure is still tracked');
+});
+
+// ---- the shipped pack ------------------------------------------------------
+const shippedPack = () => loadPack(readFileSync(new URL('./packs/example.json', import.meta.url), 'utf8'));
+const growth = (db, now) => evaluate(db, shippedPack(), now).find((r) => /orders grew/.test(r.name));
+const withSamples = (...samples) => {
+  const db = seed('2026-08-11T05:00:00.000Z');
+  for (const [rows, sampledAt] of samples) {
+    db.prepare('INSERT INTO datatable_counts (key, rows, sampled_at) VALUES (?, ?, ?)').run('orders', rows, sampledAt);
+  }
+  return db;
+};
+
+test('the shipped growth expectation is pending on a store with no baseline yet', () => {
+  const r = growth(withSamples([120, '2026-08-11T05:00:00.000Z']), NOW);
+  assert.equal(r.pending, true);
+  assert.equal(r.ok, undefined);
+});
+
+test('the shipped growth expectation passes once a baseline straddles the window', () => {
+  const db = withSamples([100, '2026-08-09T00:00:00.000Z'], [120, '2026-08-11T05:00:00.000Z']);
+  assert.equal(growth(db, NOW).ok, true);
+});
+
+test('the shipped growth expectation still fails on a warmed store that did not grow', () => {
+  const db = withSamples([120, '2026-08-09T00:00:00.000Z'], [120, '2026-08-11T05:00:00.000Z']);
+  assert.equal(growth(db, NOW).ok, false);
 });

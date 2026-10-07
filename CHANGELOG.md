@@ -6,6 +6,20 @@ Notable changes to Po11y. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- An expectation whose query returns `NULL` can now report a third outcome,
+  `pending`, instead of being coerced to `0` and failing. A delta over a
+  self-sampled series has no baseline on a fresh store, so the shipped "orders
+  grew in the last 26 hours" expectation raised a false alarm for one full
+  window after every fresh deployment. It is opt-in per expectation
+  (`nullIsPending: true`, validated at load and set on that one expectation):
+  `SUM(...)` over an empty window also returns `NULL`, and treating every
+  `NULL` as pending would turn a real failure into silence. `COUNT`-based
+  expectations and `max-age-minutes` are unchanged, and a genuine zero still
+  fails. A pending result notifies nothing and leaves reconciliation state
+  untouched, so it neither resolves nor re-fires an existing failure. (#16)
+
 ### Added
 
 - The `stale` watchdog rule now derives its budget from the workflow's own
