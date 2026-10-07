@@ -19,8 +19,9 @@ import { envNumber } from './watchdog.mjs';
  *
  * @param {Record<string,string|undefined>} [env] - defaults to process.env
  * @param {(msg: string) => void} [log] - defaults to console.error
- * @returns {{ enabled: boolean, staleAfterMin: number, stuckAfterMin: number,
- *   minErrors: number, errorRate: number, ignore: string[] }}
+ * @returns {{ enabled: boolean, staleAfterMin: number, staleGraceMin: number,
+ *   staleGraceFactor: number, stuckAfterMin: number, minErrors: number,
+ *   errorRate: number, ignore: string[] }}
  */
 export function loadAlertConfig(env = process.env, log = console.error) {
   const num = (v, dflt, name) => {
@@ -54,6 +55,14 @@ export function loadAlertConfig(env = process.env, log = console.error) {
       ? env.ALERTS_ENABLED === 'true'
       : (file.enabled ?? true),
     staleAfterMin: num(env.ALERT_STALE_AFTER_MIN, file.staleAfterMin ?? 0, 'ALERT_STALE_AFTER_MIN'),
+    // Grace on the schedule-derived stale budget (server/schedule.mjs): how
+    // long after an expected run a workflow may take to succeed before it
+    // counts as missed. Absolute minutes by default; the factor is the opt-in
+    // proportional form for operators whose runs take a share of the cadence.
+    // The larger of the two applies. Factor defaults to 0 on purpose — a
+    // proportional default would give a monthly schedule days of silence.
+    staleGraceMin: num(env.ALERT_STALE_GRACE_MIN, file.staleGraceMin ?? 15, 'ALERT_STALE_GRACE_MIN'),
+    staleGraceFactor: num(env.ALERT_STALE_GRACE_FACTOR, file.staleGraceFactor ?? 0, 'ALERT_STALE_GRACE_FACTOR'),
     stuckAfterMin: num(env.ALERT_STUCK_AFTER_MIN, file.stuckAfterMin ?? 0, 'ALERT_STUCK_AFTER_MIN'),
     minErrors: num(env.ALERT_MIN_ERRORS, file.minErrors ?? 3, 'ALERT_MIN_ERRORS'),
     errorRate: num(env.ALERT_ERROR_RATE, file.errorRate ?? 0.5, 'ALERT_ERROR_RATE'),

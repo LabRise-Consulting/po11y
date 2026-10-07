@@ -16,6 +16,7 @@
 // and across the trust boundary — the opposite of this module's posture.
 
 import { isFailed } from './exec-status.mjs';
+import { expectedSchedule } from './schedule.mjs';
 
 const MIN = 60_000;
 
@@ -72,10 +73,31 @@ const agoMin = (iso, now) => (iso ? Math.floor((now - new Date(iso).getTime()) /
  * workflow, which is why this distinguishes "absent" from "zero".
  */
 function budget(cfg, w, key) {
-  const over = cfg.perWorkflow?.[w.name] ?? cfg.perWorkflow?.[w.id];
+  const over = perWorkflow(cfg, w);
   const v = over?.[key] ?? cfg[key];
   return Number(v) || 0; // absent/0/NaN all mean "rule off"
 }
+
+/** The `perWorkflow` entry for a workflow, by name first and then by id. */
+const perWorkflow = (cfg, w) => cfg.perWorkflow?.[w.name] ?? cfg.perWorkflow?.[w.id];
+
+/**
+ * A tunable that has a real default, so "absent" cannot read as 0.
+ *
+ * budget() folds absent and 0 together because 0 means "rule off" there. A
+ * grace period has no such meaning — 0 minutes of grace is a legitimate
+ * setting, and so is leaving the key out — so it needs its own resolution.
+ */
+function tunable(cfg, over, key, dflt) {
+  const v = over?.[key] ?? cfg[key];
+  const n = Number(v);
+  return v === undefined || v === null || v === '' || !Number.isFinite(n) || n < 0 ? dflt : n;
+}
+
+// Grace on a schedule-derived budget, when the config carries none. Mirrors
+// the defaults in alert-config.mjs, for callers that build cfg by hand.
+const DEFAULT_STALE_GRACE_MIN = 15;
+const DEFAULT_STALE_GRACE_FACTOR = 0;
 
 /**
  * Apply the three rules to a summary and return the alerts currently true.
@@ -87,11 +109,16 @@ function budget(cfg, w, key) {
  * @param {Map<string, object>} summary - from summarizeExecutions
  * @param {object[]} workflows - the workflow list already fetched this poll
  * @param {object} cfg - the `alerts` block of config
- * @param {{ now?: number }} [opts]
+ * @param {{ now?: number, instanceTimezone?: string,
+ *   onScheduleError?: ((info: {workflowId: string, workflowName: string,
+ *   expression: string}) => void)|null }} [opts] - instanceTimezone is the n8n
+ *   instance default a workflow's own settings.timezone overrides;
+ *   onScheduleError is called for each schedule this module could not parse,
+ *   so the caller can log it without this one importing a logger.
  * @returns {{rule: string, workflowId: string, workflowName: string,
  *   severity: string, title: string, message: string, since: (string|null)}[]}
  */
-export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now() } = {}) {
+export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(), instanceTimezone = 'UTC', onScheduleError = null } = {}) {
   if (!cfg.enabled) return [];
   const out = [];
   const ignore = new Set(cfg.ignore || []);
@@ -120,17 +147,70 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now() 
     // With no successes on record we measure from updatedAt, so a workflow that
     // has been erroring since before the window still ages into an alert, and a
     // freshly-activated one gets its full budget before it can fire.
-    const staleAfterMin = budget(cfg, { id, name }, 'staleAfterMin');
-    if (staleAfterMin && w.active !== false) {
+    //
+    // The budget is derived from the Schedule Trigger where there is one, so a
+    // Mon–Fri workflow is not stale on Saturday and a missed Tuesday run is
+    // caught on Tuesday rather than three days later (issue #15). Precedence,
+    // in order:
+    //   1. global staleAfterMin <= 0 — the rule is off for every workflow. A
+    //      schedule must never switch it on by itself: that would start paging
+    //      operators who never enabled it, on upgrade.
+    //   2. an explicit perWorkflow staleAfterMin — the operator's override
+    //      always wins, including an explicit 0 to silence one workflow.
+    //   3. a parseable Schedule Trigger — expected fire time (or cadence)
+    //      plus grace.
+    //   4. anything else, including an unparseable schedule — the enabled
+    //      global flat budget, as before.
+    const globalStale = Number(cfg.staleAfterMin) || 0;
+    if (globalStale > 0 && w.active !== false) {
+      const over = perWorkflow(cfg, { id, name });
       const ref = s?.lastOkAt || w.updatedAt || null;
       const age = agoMin(ref, now);
-      if (age >= staleAfterMin) {
+      const refMs = ref ? new Date(ref).getTime() : -Infinity;
+      const flat = (b) => (b > 0 && age >= b
+        ? (s?.lastOkAt
+          ? `Last success was ${age} min ago (budget ${b} min).`
+          : `No successful execution on record (budget ${b} min).`)
+        : null);
+
+      let message = null;
+      if (over?.staleAfterMin !== undefined && over?.staleAfterMin !== null) {
+        message = flat(Number(over.staleAfterMin) || 0);
+      } else {
+        const sched = expectedSchedule(w, { instanceTimezone, now });
+        if (sched.unparseable) {
+          onScheduleError?.({ workflowId: id, workflowName: name, expression: sched.unparseable });
+        }
+        if (sched.kind === 'fire' || sched.kind === 'cadence') {
+          const graceMs = Math.max(
+            tunable(cfg, over, 'staleGraceMin', DEFAULT_STALE_GRACE_MIN) * MIN,
+            tunable(cfg, over, 'staleGraceFactor', DEFAULT_STALE_GRACE_FACTOR) * sched.cadenceMs,
+          );
+          const graceMin = Math.round(graceMs / MIN);
+          if (sched.kind === 'fire') {
+            // Two conditions, not one. `refMs < sched.at` is "the run that was
+            // due has not succeeded"; `now >= sched.at + grace` is "and it has
+            // had its grace to do so". Dropping the second would alert the
+            // instant a schedule came due, before the run could finish.
+            if (refMs < sched.at && now >= sched.at + graceMs) {
+              message = `No success since the expected run at ${new Date(sched.at).toISOString()} (grace ${graceMin} min).`;
+            }
+          } else if (now - refMs >= sched.cadenceMs + graceMs) {
+            const everyMin = Math.max(1, Math.round(sched.cadenceMs / MIN));
+            message = s?.lastOkAt
+              ? `Last success was ${age} min ago (expected every ${everyMin} min, grace ${graceMin} min).`
+              : `No successful execution on record (expected every ${everyMin} min, grace ${graceMin} min).`;
+          }
+        } else {
+          message = flat(globalStale);
+        }
+      }
+
+      if (message) {
         out.push({
           rule: 'stale', workflowId: id, workflowName: name, severity: 'failure',
           title: `${name} has not succeeded recently`,
-          message: s?.lastOkAt
-            ? `Last success was ${age} min ago (budget ${staleAfterMin} min).`
-            : `No successful execution on record (budget ${staleAfterMin} min).`,
+          message,
           since: ref,
         });
       }

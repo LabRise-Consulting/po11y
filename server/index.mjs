@@ -83,6 +83,12 @@ const RENOTIFY_MIN = num(process.env.ALERT_RENOTIFY_MIN, 360, 'ALERT_RENOTIFY_MI
 const EXPECTATION_STATE_KEY = 'expectation-state';
 const FEED_MAX = num(process.env.ALERT_FEED_MAX, DEFAULT_FEED_MAX, 'ALERT_FEED_MAX');
 const ALERTS = loadAlertConfig(process.env, console.error);
+// The timezone the n8n INSTANCE runs its schedules in — its GENERIC_TIMEZONE,
+// not this container's TZ. The stale rule reads a workflow's Schedule Trigger
+// in it (server/schedule.mjs), and a workflow's own settings.timezone still
+// wins. It has to be its own variable: on the read-only stack n8n runs
+// somewhere else entirely, so the local clock says nothing about it.
+const N8N_TIMEZONE = process.env.N8N_TIMEZONE || 'UTC';
 
 const AI_BASE = process.env.AI_MAP_BASE_URL || '';
 const AI_KEY = process.env.AI_MAP_API_KEY || '';
@@ -267,6 +273,7 @@ async function rebuild() {
     executions: built.executions, workflows: built.workflows, names: built.names,
     cfg: ALERTS, now, renotifyMin: RENOTIFY_MIN, baseUrl: N8N_PUBLIC_URL,
     rules: n8nOk ? null : ['failing', 'stale', 'stuck'],
+    instanceTimezone: N8N_TIMEZONE,
   });
   // Gated on an actual recorded failure, not merely `!n8nOk`: before the
   // first sync outcome (or permanently, with the sync loop disabled —

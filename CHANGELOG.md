@@ -20,6 +20,30 @@ Notable changes to Po11y. Format follows
   fails. A pending result notifies nothing and leaves reconciliation state
   untouched, so it neither resolves nor re-fires an existing failure. (#16)
 
+### Added
+
+- The `stale` watchdog rule now derives its budget from the workflow's own
+  Schedule Trigger instead of a flat number of minutes. A Mon–Fri job on a
+  six-hour budget raised `stale` every Saturday morning, and the only
+  workaround — a 72-hour budget — delayed a genuinely missed Tuesday run by
+  three days. po11y reads the trigger's interval rules and cron expressions,
+  computes the most recent run the schedule expected, and alerts only when no
+  success followed it and a grace period has passed.
+
+  `ALERT_STALE_AFTER_MIN` stays the on/off switch, so a schedule never enables
+  alerting on its own, and an explicit `perWorkflow.<name>.staleAfterMin` still
+  wins as a flat budget. A schedule po11y cannot read falls back to that flat
+  budget with one logged line. Grace is the larger of `ALERT_STALE_GRACE_MIN`
+  (default 15) and `ALERT_STALE_GRACE_FACTOR` times the cadence (default 0),
+  both overridable per workflow.
+
+  Schedules are read in `settings.timezone`, else the new `N8N_TIMEZONE`, else
+  UTC. The bundled stack derives it from `TZ`; the read-only stack cannot,
+  because n8n is a different machine — set it by hand there. The cron parser
+  and DST arithmetic are hand-written in `server/schedule.mjs`, since `server/`
+  carries no npm dependencies. The Grafana `Po11yWorkflowStale` rule reads
+  Postgres and keeps its flat six-hour window. (#15)
+
 ## [0.2.0] - 2026-08-27
 
 ### Added

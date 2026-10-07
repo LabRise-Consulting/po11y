@@ -209,3 +209,44 @@ test('alerts disabled means no ai-map notification either', () => {
   const db = openDb(':memory:');
   assert.deepEqual(aiMap(db, { cfg: { ...CFG, enabled: false } }), { notifications: [], fire: [] });
 });
+
+test('an unparseable schedule is logged once per workflow, not on every poll', () => {
+  const db = openDb(':memory:');
+  const said = [];
+  const broken = [{
+    id: 'wf9', name: 'Odd schedule', active: true, updatedAt: '2026-01-01T00:00:00.000Z',
+    nodes: [{
+      type: 'n8n-nodes-base.scheduleTrigger',
+      parameters: { rule: { interval: [{ field: 'cronExpression', expression: 'every other tuesday' }] } },
+    }],
+  }];
+  const over = {
+    executions: [], workflows: broken, names: new Map(),
+    cfg: { ...CFG, staleAfterMin: 60 }, log: (m) => said.push(m),
+  };
+  call(db, over);
+  call(db, over);
+  const lines = said.filter((m) => /unparseable/.test(m));
+  assert.equal(lines.length, 1, 'once per workflow and expression, however many polls run');
+  assert.match(lines[0], /Odd schedule/);
+  assert.match(lines[0], /every other tuesday/);
+});
+
+test('the instance timezone reaches the stale rule', () => {
+  const db = openDb(':memory:');
+  // 06:00Z is 08:00 in Berlin, before the 09:00 run — so nothing is stale.
+  // Read as UTC the workflow would have missed yesterday's 09:00 and alert.
+  const berlin = [{
+    id: 'wf9', name: 'Morning report', active: true, updatedAt: '2026-01-01T00:00:00.000Z',
+    nodes: [{
+      type: 'n8n-nodes-base.scheduleTrigger',
+      parameters: { rule: { interval: [{ field: 'cronExpression', expression: '0 9 * * *' }] } },
+    }],
+  }];
+  const over = {
+    executions: [{ id: '9', workflowId: 'wf9', status: 'success', startedAt: '2026-08-10T07:01:00.000Z' }],
+    workflows: berlin, names: new Map(), cfg: { ...CFG, staleAfterMin: 60 },
+  };
+  assert.equal(call(db, { ...over, instanceTimezone: 'Europe/Berlin' }).notifications.length, 0);
+  assert.equal(call(openDb(':memory:'), over).notifications.length, 1, 'UTC would alert here');
+});

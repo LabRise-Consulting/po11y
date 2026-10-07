@@ -140,7 +140,7 @@ The watchdog evaluates these rules against recent executions (`EXECUTIONS_LIMIT`
 | Rule | Description | Default Budget |
 |------|-------------|----------------|
 | `failing` | Triggers when error count and error rate exceed thresholds | `ALERT_MIN_ERRORS=3`, `ALERT_ERROR_RATE=0.5` |
-| `stale` | Triggers when a workflow has no successful executions within the budget | `ALERT_STALE_AFTER_MIN=0` (disabled by default) |
+| `stale` | Triggers when a workflow has no successful execution within its budget, derived from its Schedule Trigger where po11y can read one | `ALERT_STALE_AFTER_MIN=0` (disabled by default), `ALERT_STALE_GRACE_MIN=15`, `ALERT_STALE_GRACE_FACTOR=0` |
 | `stuck` | Triggers when an execution remains in `running` status past the budget | `ALERT_STUCK_AFTER_MIN=0` (disabled by default) |
 | `unreachable` | Triggers when n8n's API cannot be reached | Always enabled when watchdog is active |
 
@@ -148,6 +148,31 @@ Notes:
 - `unreachable` alerts trigger when n8n cannot be reached. When n8n is offline, existing workflow alerts remain unchanged until connectivity returns.
 - Staleness is calculated from the last successful run, not the last execution attempt.
 - When an alert condition clears, a `success` notification ("recovered") is appended.
+
+##### The `stale` budget
+
+`ALERT_STALE_AFTER_MIN` is the on/off switch. At `0` the rule is off for every
+workflow: a schedule alone does not switch it on. When the rule is on, po11y
+picks a budget per workflow in this order:
+
+1. An explicit `perWorkflow.<name>.staleAfterMin` in `ALERT_RULES_FILE`. `0`
+   silences that workflow.
+2. The workflow's Schedule Trigger. po11y computes the most recent run the
+   schedule expected. The workflow is stale when no success followed that run
+   and the grace period has passed.
+3. The flat `ALERT_STALE_AFTER_MIN` budget.
+
+po11y reads interval rules and cron expressions (5-field, and n8n's 6-field
+form with seconds). An expression it cannot read uses the flat budget and is
+logged once.
+
+Grace is the larger of `ALERT_STALE_GRACE_MIN` (default `15`) and
+`ALERT_STALE_GRACE_FACTOR` times the cadence (default `0`, off). `perWorkflow`
+overrides both as `staleGraceMin` and `staleGraceFactor`.
+
+Schedules are read in `settings.timezone`, else `N8N_TIMEZONE` on the `server`
+service, else UTC. The bundled stack sets `N8N_TIMEZONE` from `TZ`. On the
+read-only stack, set it to the remote instance's `GENERIC_TIMEZONE`.
 
 #### Webhook Push Notifications
 

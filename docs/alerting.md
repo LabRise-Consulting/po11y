@@ -57,6 +57,14 @@ The po11y `server` writes this feed, from its own store, on by default, on
 every deployment. The MCP `po11y_incidents` tool reads the same feed.
 
 - Set `ALERTS_ENABLED=false` to disable. Budget settings `ALERT_STALE_AFTER_MIN` and `ALERT_STUCK_AFTER_MIN` default to `0` (off), so default alerts cover only `failing` and `unreachable` states.
+- The `stale` rule derives its budget from the workflow's Schedule Trigger: the
+  most recent run the schedule expected, plus `ALERT_STALE_GRACE_MIN`. A Mon–Fri
+  workflow therefore stays quiet at the weekend, and a missed Tuesday run is
+  reported on Tuesday. `ALERT_STALE_AFTER_MIN` remains the on/off switch and the
+  budget for workflows po11y cannot derive one for. See
+  [docs/configuration.md](configuration.md) for the precedence and for
+  `N8N_TIMEZONE`, which read-only-stack operators must set to match their n8n
+  instance's `GENERIC_TIMEZONE`.
 - **Bundled stack**: the server needs its ops key (`MCP_N8N_API_KEY`) to have a store to evaluate. Without it nothing is published, and the tools report that rather than reporting zero incidents.
 - Alert rules count production executions only. Runs started by hand — n8n's `manual` and `evaluation` modes — are
   excluded, so debugging a workflow in the editor cannot raise a `failing` alert, and a hand-run success cannot
@@ -82,6 +90,7 @@ Grafana evaluates five rules in `observability/grafana/alerting/rules.yml` every
 To send alerts externally, set `GRAFANA_ALERT_WEBHOOK_URL`. If unset, rules still evaluate and display in the Grafana UI.
 
 Notes:
+- `Po11yWorkflowStale` keeps a flat 6-hour Postgres window and does not read Schedule Triggers, so weekend and monthly false positives remain possible on this path. The server's `stale` rule above is the schedule-aware one.
 - Grafana webhooks send Grafana alert JSON. Point `GRAFANA_ALERT_WEBHOOK_URL` to an n8n webhook or configure native Slack, Discord, or Telegram contact points directly in Grafana.
 - Four rules query internal n8n database tables (`execution_entity`, `workflow_entity`). Check these rules after upgrading n8n.
 

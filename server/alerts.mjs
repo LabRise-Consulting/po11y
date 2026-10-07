@@ -23,12 +23,30 @@ import { getKv, setKv } from './db.mjs';
 
 const STATE_KEY = 'alert-state';
 
+// Schedules this process has already complained about, as
+// `<workflowId>:<expression>`. evaluateAlerts runs on every rebuild, so
+// without this an instance with one bad cron expression would write the same
+// line to stderr every poll forever. Process-scoped on purpose: a restart is
+// exactly when an operator wants to see the boot-time complaint again.
+const reportedSchedules = new Set();
+
 export function alertNotifications(db, {
   executions, workflows, names = null, cfg, now = Date.now(),
   renotifyMin = 360, baseUrl = '', rules = null, log = console.error,
+  instanceTimezone = 'UTC',
 } = {}) {
   const nothing = { notifications: [], fire: [] };
   if (!cfg?.enabled) return nothing;
+
+  // Not a silent skip: a schedule the server cannot read means the workflow
+  // silently keeps the flat budget, and the only way an operator finds out is
+  // if we say so.
+  const onScheduleError = ({ workflowId, workflowName, expression }) => {
+    const key = `${workflowId}:${expression}`;
+    if (reportedSchedules.has(key)) return;
+    reportedSchedules.add(key);
+    log(`server: workflow "${workflowName}" has an unparseable schedule "${expression}" — using the flat stale budget`);
+  };
 
   let alerts;
   try {
@@ -38,7 +56,7 @@ export function alertNotifications(db, {
     // exec-status.mjs for why `integrated` stays in.
     const production = (Array.isArray(executions) ? executions : []).filter(isProduction);
     const summary = summarizeExecutions(production, { now, names });
-    alerts = evaluateAlerts(summary, workflows, cfg, { now });
+    alerts = evaluateAlerts(summary, workflows, cfg, { now, instanceTimezone, onScheduleError });
   } catch (e) {
     log(`server: alert evaluation failed — ${e.message}`);
     return nothing;
