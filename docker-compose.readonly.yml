@@ -196,6 +196,8 @@ services:
       ALERT_MIN_ERRORS: ${ALERT_MIN_ERRORS:-}
       ALERT_ERROR_RATE: ${ALERT_ERROR_RATE:-}
       ALERT_STALE_AFTER_MIN: ${ALERT_STALE_AFTER_MIN:-}
+      ALERT_STALE_GRACE_MIN: ${ALERT_STALE_GRACE_MIN:-}
+      ALERT_STALE_GRACE_FACTOR: ${ALERT_STALE_GRACE_FACTOR:-}
       ALERT_STUCK_AFTER_MIN: ${ALERT_STUCK_AFTER_MIN:-}
       ALERT_IGNORE: ${ALERT_IGNORE:-}
       # A path INSIDE this read-only container: /data (the po11y_store volume)
@@ -209,6 +211,11 @@ services:
       ALERT_WEBHOOK_TIMEOUT_MS: ${ALERT_WEBHOOK_TIMEOUT_MS:-10000}
       ALERT_HEARTBEAT_URL: ${ALERT_HEARTBEAT_URL:-}
       ALERT_HEARTBEAT_TIMEOUT_MS: ${ALERT_HEARTBEAT_TIMEOUT_MS:-10000}
+      # NOT derived from the local TZ: n8n runs on another machine here, and
+      # this host's clock says nothing about that instance's GENERIC_TIMEZONE.
+      # Set N8N_TIMEZONE in .env to match it, or every schedule-derived stale
+      # budget is off by the difference between the two zones.
+      N8N_TIMEZONE: ${N8N_TIMEZONE:-UTC}
       PROMETHEUS_URL: http://prometheus:9090
       N8N_READ_API_KEY: ${N8N_READ_API_KEY:-}
       CONFIG_PATH: /app/config.json

@@ -93,3 +93,31 @@ test('a malformed numeric env var falls back to the default and says so', () => 
   assert.equal(cfg.minErrors, 3);
   assert.match(said.join('\n'), /ALERT_MIN_ERRORS="lots" is not a valid number/);
 });
+
+test('the stale grace defaults to 15 minutes with no cadence factor', () => {
+  const cfg = loadAlertConfig({});
+  assert.equal(cfg.staleGraceMin, 15);
+  assert.equal(cfg.staleGraceFactor, 0);
+});
+
+test('ALERT_STALE_GRACE_MIN and ALERT_STALE_GRACE_FACTOR are read from env', () => {
+  const cfg = loadAlertConfig({ ALERT_STALE_GRACE_MIN: '45', ALERT_STALE_GRACE_FACTOR: '0.5' });
+  assert.equal(cfg.staleGraceMin, 45);
+  assert.equal(cfg.staleGraceFactor, 0.5);
+});
+
+test('a rules file supplies the grace when env is silent', () => {
+  const { path, cleanup } = rulesFile({ staleGraceMin: 90, staleGraceFactor: 2 });
+  try {
+    const cfg = loadAlertConfig({ ALERT_RULES_FILE: path });
+    assert.equal(cfg.staleGraceMin, 90);
+    assert.equal(cfg.staleGraceFactor, 2);
+  } finally { cleanup(); }
+});
+
+test('a malformed grace falls back to the default and says so', () => {
+  const said = [];
+  const cfg = loadAlertConfig({ ALERT_STALE_GRACE_MIN: 'soon' }, (m) => said.push(m));
+  assert.equal(cfg.staleGraceMin, 15);
+  assert.match(said.join('\n'), /ALERT_STALE_GRACE_MIN="soon" is not a valid number/);
+});
