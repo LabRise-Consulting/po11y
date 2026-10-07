@@ -75,11 +75,18 @@ export function evaluate(db, pack, now = Date.now()) {
     const params = e.windowMinutes
       ? [new Date(now - Number(e.windowMinutes) * 60000).toISOString()]
       : [];
+    // Structured evidence beside the prose detail (#17): the threshold the
+    // value was compared against and the window it was read over, so a feed
+    // entry can be re-evaluated after the pack changes.
+    const ev = {
+      threshold: e.kind === 'min-count' ? { min: e.min } : { maxAgeMinutes: e.maxAgeMinutes },
+      ...(e.windowMinutes ? { window: { minutes: Number(e.windowMinutes) } } : {}),
+    };
     let value;
     try {
       value = firstValue(db, e.sql, params);
     } catch (err) {
-      return { name: e.name, ok: false, detail: `query failed — ${err.message}` };
+      return { name: e.name, ok: false, detail: `query failed — ${err.message}`, ...ev };
     }
     const window = e.windowMinutes ? ` in the last ${e.windowMinutes} min` : '';
     if (e.kind === 'min-count') {
@@ -87,28 +94,33 @@ export function evaluate(db, pack, now = Date.now()) {
       // a delta needs one sample older than the window, and on a fresh store
       // there is none. Only when the author asked for it — see loadPack.
       if (value == null && e.nullIsPending) {
-        return { name: e.name, pending: true, detail: `no baseline sample yet${window}` };
+        return { name: e.name, pending: true, detail: `no baseline sample yet${window}`, ...ev, observed: { value: null } };
       }
       // Number(null) is 0, which is the answer we want here — no rows IS the
       // failure — but it is written out so the intent is not read as an
       // accident (the max-age branch below needs the opposite guard).
       const n = Number(value ?? 0);
       return n >= e.min
-        ? { name: e.name, ok: true, detail: `${n} >= ${e.min}${window}` }
-        : { name: e.name, ok: false, detail: `${n} < ${e.min}${window}` };
+        ? { name: e.name, ok: true, detail: `${n} >= ${e.min}${window}`, ...ev, observed: { value: n } }
+        : { name: e.name, ok: false, detail: `${n} < ${e.min}${window}`, ...ev, observed: { value: n } };
     }
     // max-age-minutes: a missing stamp is stale, never fresh. new Date(null) is
     // the epoch, which would read as "infinitely old" by luck rather than by
     // design, so guard it explicitly.
     if (value == null) {
-      return { name: e.name, ok: false, detail: `no rows — older than ${e.maxAgeMinutes} min` };
+      return { name: e.name, ok: false, detail: `no rows — older than ${e.maxAgeMinutes} min`, ...ev, observed: { ageMin: null } };
     }
     const ageMin = Math.floor((now - Date.parse(value)) / 60000);
     return ageMin <= e.maxAgeMinutes
-      ? { name: e.name, ok: true, detail: `${ageMin} min old` }
-      : { name: e.name, ok: false, detail: `${ageMin} min old — older than ${e.maxAgeMinutes} min` };
+      ? { name: e.name, ok: true, detail: `${ageMin} min old`, ...ev, observed: { ageMin } }
+      : { name: e.name, ok: false, detail: `${ageMin} min old — older than ${e.maxAgeMinutes} min`, ...ev, observed: { ageMin } };
   });
 }
+
+/** The structured fields of a result, without its verdict. */
+const evidence = ({ threshold, observed, window }) => ({
+  ...(threshold ? { threshold } : {}), ...(observed ? { observed } : {}), ...(window ? { window } : {}),
+});
 
 const agoMin = (iso, now) => (iso ? Math.floor((now - new Date(iso).getTime()) / MIN) : Infinity);
 
@@ -147,18 +159,18 @@ export function reconcileExpectations(results, prevState, { now = Date.now(), re
     }
     if (!r.ok) {
       if (!was || !was.failing) {
-        fire.push({ name: r.name, detail: r.detail, kind: 'firing' });
+        fire.push({ ...evidence(r), name: r.name, detail: r.detail, kind: 'firing' });
         state[r.name] = { failing: true, lastNotifiedAt: stamp };
         continue;
       }
       const due = renotifyMin > 0 && agoMin(was.lastNotifiedAt, now) >= renotifyMin;
-      if (due) fire.push({ name: r.name, detail: r.detail, kind: 'firing' });
+      if (due) fire.push({ ...evidence(r), name: r.name, detail: r.detail, kind: 'firing' });
       state[r.name] = { failing: true, lastNotifiedAt: due ? stamp : was.lastNotifiedAt };
       continue;
     }
     // ok, and it was not tracked as failing: nothing to do, nothing to notify.
     if (was?.failing) {
-      fire.push({ name: r.name, detail: r.detail, kind: 'resolved' });
+      fire.push({ ...evidence(r), name: r.name, detail: r.detail, kind: 'resolved' });
     }
   }
   return { fire, state };
@@ -175,15 +187,21 @@ export function reconcileExpectations(results, prevState, { now = Date.now(), re
  */
 export function toNotifications(fire, now = Date.now()) {
   const ts = new Date(now).toISOString();
-  return (Array.isArray(fire) ? fire : []).map((r) => (r.kind === 'resolved' ? {
-    ts,
-    title: `Expectation recovered: ${r.name}`,
-    message: 'The condition that triggered this failure is no longer true.',
-    status: 'success',
-  } : {
-    ts,
-    title: `Expectation failed: ${r.name}`,
-    message: r.detail,
-    status: 'failure',
+  return (Array.isArray(fire) ? fire : []).map((r) => ({
+    ...(r.kind === 'resolved' ? {
+      ts,
+      title: `Expectation recovered: ${r.name}`,
+      message: 'The condition that triggered this failure is no longer true.',
+      status: 'success',
+    } : {
+      ts,
+      title: `Expectation failed: ${r.name}`,
+      message: r.detail,
+      status: 'failure',
+    }),
+    // Optional structured fields (#17), the same names the watchdog uses.
+    rule: 'expectation',
+    name: r.name,
+    ...evidence(r),
   }));
 }

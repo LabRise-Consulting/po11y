@@ -488,3 +488,13 @@ test('sql: the adapter\'s own truncation flag survives even under the cap', asyn
   const out = await sqlTool({ grafana }).handler({ sql: 'SELECT id FROM execution_entity' });
   assert.equal(out.truncated, true);
 });
+
+test('incidents: structured fields on a feed entry come back unchanged (#17)', async () => {
+  const entry = {
+    ts: '2026-08-01T09:00:00Z', title: 'Maps is failing', message: '3 of the last 5 executions errored.',
+    status: 'failure', rule: 'failing', workflowId: 'wf1', since: '2026-08-01T08:00:00Z',
+    threshold: { minErrors: 3, errorRate: 0.5 }, observed: { errors: 3, count: 5 }, window: { executions: 5 },
+  };
+  const out = await incidentsTool({ feeds: feedsWith({ 'notifications.json': [entry] }) }).handler({});
+  assert.deepEqual(out.incidents, [entry]);
+});

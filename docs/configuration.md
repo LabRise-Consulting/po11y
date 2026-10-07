@@ -133,6 +133,20 @@ Array of notifications sorted newest-first.
 
 `status` values: `success`, `failure`, `info`.
 
+Entries written by the po11y server also carry these optional fields. Consumers must ignore keys they do not know; the dashboard reads only the five above.
+
+| Field | Meaning |
+|---|---|
+| `rule` | `failing`, `stale`, `stuck`, `unreachable`, `ai-map-degraded` or `expectation` |
+| `workflowId` | n8n workflow id; absent for instance-level rules |
+| `name` | Expectation name, for `rule: expectation` |
+| `since` | Reference stamp: last success (`failing`, `stale`), oldest hung start (`stuck`), first seen (recoveries) |
+| `threshold` | Value(s) compared against, for example `{ "minErrors": 3, "errorRate": 0.5 }`, `{ "staleAfterMin": 360 }`, `{ "expectedAt": "…", "graceMin": 15 }`, `{ "cadenceMin": 60, "graceMin": 15 }`, `{ "stuckAfterMin": 60 }`, `{ "min": 1 }`, `{ "maxAgeMinutes": 30 }` |
+| `observed` | Value(s) seen, for example `{ "errors": 3, "count": 5 }`, `{ "ageMin": 400 }` (`null` with no success on record), `{ "running": 1, "oldestAgeMin": 120 }`, `{ "value": 0 }` |
+| `window` | `{ "executions": 5 }` for `failing`, `{ "minutes": 1560 }` for a windowed expectation |
+
+Recovery entries carry `rule` and `workflowId` (or `name`). The `raw` webhook format sends the same fields; the Slack, Discord and Telegram formats are unchanged.
+
 #### Watchdog Rules
 
 The watchdog evaluates these rules against recent executions (`EXECUTIONS_LIMIT`, default `250`). The po11y server runs them against its own store, from the same variables, on every deployment.

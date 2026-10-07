@@ -607,3 +607,84 @@ test('an open alert on a workflow that became ignored is dropped, not recovered'
   assert.deepEqual(next.fire, []);
   assert.deepEqual(Object.keys(next.state), ['stale:b']);
 });
+
+// ---- structured evidence (#17) ----------------------------------------------
+// The message text stays as it is; these fields carry the same evidence for a
+// consumer that should not have to parse prose.
+const evidence = ({ threshold, observed, window }) => ({ threshold, observed, window });
+
+test('a failing alert carries its thresholds, the observed counts and the window', () => {
+  const execs = [
+    { workflowId: 'a', status: 'error', startedAt: '2026-07-28T11:00:00Z' },
+    { workflowId: 'a', status: 'error', startedAt: '2026-07-28T11:01:00Z' },
+    { workflowId: 'a', status: 'success', startedAt: '2026-07-28T11:02:00Z' },
+  ];
+  const [a] = evaluateAlerts(sum(execs), [wf('a', 'A')], { enabled: true, minErrors: 2, errorRate: 0.5 }, { now: NOW });
+  assert.deepEqual(evidence(a), {
+    threshold: { minErrors: 2, errorRate: 0.5 },
+    observed: { errors: 2, count: 3 },
+    window: { executions: 3 },
+  });
+});
+
+test('a flat-budget stale alert carries the budget and the observed age', () => {
+  const s = sum([{ workflowId: 'a', status: 'success', startedAt: '2026-07-28T05:20:00Z' }]);
+  const [a] = evaluateAlerts(s, [wf('a', 'A')], { enabled: true, staleAfterMin: 360, minErrors: 99 }, { now: NOW });
+  assert.deepEqual(evidence(a), { threshold: { staleAfterMin: 360 }, observed: { ageMin: 400 }, window: undefined });
+});
+
+test('a stale alert with no success on record reports a null age, not Infinity', () => {
+  const [a] = evaluateAlerts(sum([]), [wf('a', 'A', { updatedAt: null })], { enabled: true, staleAfterMin: 360 }, { now: NOW });
+  assert.deepEqual(a.observed, { ageMin: null });
+  assert.equal(JSON.parse(JSON.stringify(a)).observed.ageMin, null);
+});
+
+test('a schedule-derived stale alert carries the expected run and the grace', () => {
+  const [a] = evaluateAlerts(sum(ok('2026-07-27T09:00:00Z')), [cronWf('0 9 * * *')], DERIVED, { now: NOW });
+  assert.deepEqual(a.threshold, { expectedAt: '2026-07-28T09:00:00.000Z', graceMin: 15 });
+  assert.deepEqual(a.observed, { ageMin: 1620 });
+});
+
+test('a cadence-derived stale alert carries the cadence and the grace', () => {
+  const [a] = evaluateAlerts(
+    sum(ok('2026-07-28T09:00:00Z')),
+    [scheduled([{ field: 'hours', hoursInterval: 1 }])], DERIVED, { now: NOW },
+  );
+  assert.deepEqual(a.threshold, { cadenceMin: 60, graceMin: 15 });
+  assert.deepEqual(a.observed, { ageMin: 180 });
+});
+
+test('a stuck alert carries its budget and the hung executions', () => {
+  const s = sum([{ id: 'e1', workflowId: 'a', status: 'running', startedAt: '2026-07-28T10:00:00Z' }]);
+  const [a] = evaluateAlerts(s, [wf('a', 'A')], { enabled: true, stuckAfterMin: 60, minErrors: 99 }, { now: NOW });
+  assert.deepEqual(evidence(a), { threshold: { stuckAfterMin: 60 }, observed: { running: 1, oldestAgeMin: 120 }, window: undefined });
+});
+
+test('a firing notification carries rule, workflowId, since and the evidence', () => {
+  const a = {
+    ...alert('failing', 'a'), since: '2026-07-28T09:00:00Z',
+    threshold: { minErrors: 3, errorRate: 0.5 }, observed: { errors: 3, count: 5 }, window: { executions: 5 },
+  };
+  const [n] = alertsToNotifications([{ ...a, kind: 'firing' }], { now: NOW });
+  assert.deepEqual(n, {
+    ts: iso(NOW), title: 'a bad', message: a.message, status: 'failure',
+    rule: 'failing', workflowId: 'a', since: '2026-07-28T09:00:00Z',
+    threshold: a.threshold, observed: a.observed, window: a.window,
+  });
+});
+
+test('a recovery notification carries rule and workflowId too', () => {
+  const first = reconcileAlerts([alert('stale', 'a')], {}, { now: NOW });
+  const cleared = reconcileAlerts([], first.state, { now: NOW + 60_000 });
+  const [n] = alertsToNotifications(cleared.fire, { now: NOW });
+  assert.equal(n.rule, 'stale');
+  assert.equal(n.workflowId, 'a');
+  assert.equal(n.since, iso(NOW));
+});
+
+test('an instance-level alert has a rule but no empty workflowId field', () => {
+  const [n] = alertsToNotifications([{ ...unreachableAlert(new Error('x')), kind: 'firing' }], { now: NOW });
+  assert.equal(n.rule, 'unreachable');
+  assert.equal('workflowId' in n, false);
+  assert.equal('threshold' in n, false);
+});
