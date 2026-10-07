@@ -56,6 +56,7 @@ The Notifications panel displays entries from `notifications.json`.
 The po11y `server` writes this feed, from its own store, on by default, on
 every deployment. The MCP `po11y_incidents` tool reads the same feed.
 
+- Per-workflow budgets and the ignore list can also live in `ALERT_RULES_FILE`. The server re-reads it on change or on `SIGHUP`, without a restart. See [configuration.md](configuration.md#alert_rules_file).
 - Set `ALERTS_ENABLED=false` to disable. Budget settings `ALERT_STALE_AFTER_MIN` and `ALERT_STUCK_AFTER_MIN` default to `0` (off), so default alerts cover only `failing` and `unreachable` states.
 - The `stale` rule derives its budget from the workflow's Schedule Trigger: the
   most recent run the schedule expected, plus `ALERT_STALE_GRACE_MIN`. A Mon–Fri

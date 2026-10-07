@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadAlertConfig } from './alert-config.mjs';
+import { loadAlertConfig, createAlertConfig } from './alert-config.mjs';
 
 // A rules file on disk, cleaned up by the caller.
 function rulesFile(obj) {
@@ -120,4 +120,130 @@ test('a malformed grace falls back to the default and says so', () => {
   const cfg = loadAlertConfig({ ALERT_STALE_GRACE_MIN: 'soon' }, (m) => said.push(m));
   assert.equal(cfg.staleGraceMin, 15);
   assert.match(said.join('\n'), /ALERT_STALE_GRACE_MIN="soon" is not a valid number/);
+});
+
+// ---- createAlertConfig: reload without a restart (#18) ----------------------
+// An in-memory "disk": the test edits `files` and bumps the stamp, the source
+// reads through the injected readFile/stat. No timing, no real fs.
+function fakeDisk(initial) {
+  const files = { '/data/rules.json': { text: JSON.stringify(initial), mtimeMs: 1 } };
+  const reads = [];
+  return {
+    files, reads,
+    write(obj, mtimeMs) { files['/data/rules.json'] = { text: typeof obj === 'string' ? obj : JSON.stringify(obj), mtimeMs }; },
+    readFile: (p) => { reads.push(p); if (!files[p]) throw new Error(`ENOENT: ${p}`); return files[p].text; },
+    stat: (p) => { if (!files[p]) throw new Error(`ENOENT: ${p}`); return { mtimeMs: files[p].mtimeMs, size: files[p].text.length }; },
+  };
+}
+const ENV = { ALERT_RULES_FILE: '/data/rules.json' };
+const source = (disk, env = ENV, logs = []) => createAlertConfig(env, { readFile: disk.readFile, stat: disk.stat, log: (m) => logs.push(m) });
+
+test('reload: an unchanged file is not re-read', () => {
+  const disk = fakeDisk({ perWorkflow: { A: { staleAfterMin: 60 } } });
+  const cfg = source(disk);
+  const before = disk.reads.length;
+  assert.equal(cfg.reloadIfChanged(), false);
+  assert.equal(disk.reads.length, before, 'stat only, no read');
+  assert.equal(cfg.current().perWorkflow.A.staleAfterMin, 60);
+});
+
+test('reload: a changed mtime re-reads the file and logs the counts', () => {
+  const disk = fakeDisk({ perWorkflow: { A: { staleAfterMin: 60 } } });
+  const logs = [];
+  const cfg = source(disk, ENV, logs);
+  disk.write({ perWorkflow: { A: { staleAfterMin: 90 }, B: { stuckAfterMin: 5 } }, ignore: ['C'] }, 2);
+  assert.equal(cfg.reloadIfChanged(), true);
+  assert.equal(cfg.current().perWorkflow.A.staleAfterMin, 90);
+  assert.deepEqual(cfg.current().ignore, ['C']);
+  assert.match(logs.at(-1), /reloaded — 2 perWorkflow, 1 ignore/);
+});
+
+test('reload: a changed size with the same mtime is still picked up', () => {
+  // `docker compose cp` can preserve the source file's timestamp.
+  const disk = fakeDisk({ perWorkflow: { A: { staleAfterMin: 60 } } });
+  const cfg = source(disk);
+  disk.write({ perWorkflow: { A: { staleAfterMin: 6000 } } }, 1);
+  assert.equal(cfg.reloadIfChanged(), true);
+  assert.equal(cfg.current().perWorkflow.A.staleAfterMin, 6000);
+});
+
+test('reload: a parse failure keeps the last good config and logs once', () => {
+  const disk = fakeDisk({ perWorkflow: { A: { staleAfterMin: 60 } } });
+  const logs = [];
+  const cfg = source(disk, ENV, logs);
+  disk.write('{ "perWorkflow": ', 2);
+  assert.equal(cfg.reloadIfChanged(), false);
+  assert.equal(cfg.reloadIfChanged(), false);
+  assert.equal(cfg.current().perWorkflow.A.staleAfterMin, 60, 'never falls back to env only at runtime');
+  assert.equal(logs.filter((m) => /not reloaded/.test(m)).length, 1);
+  disk.write({ perWorkflow: { A: { staleAfterMin: 75 } } }, 3);
+  assert.equal(cfg.reloadIfChanged(), true, 'the next good edit is picked up');
+  assert.equal(cfg.current().perWorkflow.A.staleAfterMin, 75);
+});
+
+test('reload: a file that fails validation keeps the last good config', () => {
+  const disk = fakeDisk({ perWorkflow: { A: { staleAfterMin: 60 } } });
+  const logs = [];
+  const cfg = source(disk, ENV, logs);
+  for (const [bad, i] of [[{ perWorkflow: { A: { staleAfterMin: 'soon' } } }, 2], [{ ignore: 'C' }, 3], [[], 4], [{ minErrors: -1 }, 5]]) {
+    disk.write(bad, i);
+    assert.equal(cfg.reloadIfChanged(), false, JSON.stringify(bad));
+  }
+  assert.equal(cfg.current().perWorkflow.A.staleAfterMin, 60);
+  assert.equal(logs.filter((m) => /not reloaded/.test(m)).length, 4);
+});
+
+test('reload: a deleted file keeps the last good config and logs once', () => {
+  const disk = fakeDisk({ perWorkflow: { A: { staleAfterMin: 60 } } });
+  const logs = [];
+  const cfg = source(disk, ENV, logs);
+  delete disk.files['/data/rules.json'];
+  cfg.reloadIfChanged();
+  cfg.reloadIfChanged();
+  assert.equal(cfg.current().perWorkflow.A.staleAfterMin, 60);
+  assert.equal(logs.filter((m) => /not reloaded/.test(m)).length, 1);
+});
+
+test('reload: env still wins over the file after a reload', () => {
+  const disk = fakeDisk({ staleAfterMin: 60, ignore: ['A'] });
+  const cfg = source(disk, { ...ENV, ALERT_STALE_AFTER_MIN: '30', ALERT_IGNORE: 'B', ALERTS_ENABLED: 'false' });
+  disk.write({ staleAfterMin: 90, ignore: ['C'], enabled: true }, 2);
+  assert.equal(cfg.reloadIfChanged(), true);
+  assert.equal(cfg.current().staleAfterMin, 30);
+  assert.deepEqual(cfg.current().ignore, ['B']);
+  assert.equal(cfg.current().enabled, false);
+});
+
+test('reload: SIGHUP re-reads even when the stamp did not change', () => {
+  const disk = fakeDisk({ perWorkflow: { A: { staleAfterMin: 60 } } });
+  const cfg = source(disk);
+  const before = disk.reads.length;
+  assert.equal(cfg.reload(), true);
+  assert.equal(disk.reads.length, before + 1);
+});
+
+test('reload: a file unreadable at boot is picked up once it appears', () => {
+  const disk = fakeDisk({});
+  delete disk.files['/data/rules.json'];
+  const logs = [];
+  const cfg = source(disk, ENV, logs);
+  assert.match(logs[0], /using env only/);
+  disk.write({ perWorkflow: { A: { staleAfterMin: 60 } } }, 2);
+  assert.equal(cfg.reloadIfChanged(), true);
+  assert.equal(cfg.current().perWorkflow.A.staleAfterMin, 60);
+});
+
+test('reload: without ALERT_RULES_FILE there is nothing to reload', () => {
+  const disk = fakeDisk({});
+  const cfg = source(disk, {});
+  assert.equal(cfg.reloadIfChanged(), false);
+  assert.equal(cfg.reload(), false);
+  assert.equal(disk.reads.length, 0);
+});
+
+test('numeric strings in the file still load, as they did before validation', () => {
+  const disk = fakeDisk({ staleAfterMin: '360', perWorkflow: { A: { staleAfterMin: '0' } } });
+  const cfg = source(disk);
+  assert.equal(cfg.current().staleAfterMin, 360);
+  assert.equal(cfg.current().perWorkflow.A.staleAfterMin, '0');
 });

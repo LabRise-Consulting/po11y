@@ -6,6 +6,16 @@ Notable changes to Po11y. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `ALERT_RULES_FILE` is re-read without a restart: when its mtime or size
+  changes (checked once per feed rebuild) and on `SIGHUP`. A file that fails
+  to parse or validate keeps the previous rules and logs the reason once;
+  each reload logs its `perWorkflow` and `ignore` counts. Env still wins over
+  the file. Adding a workflow to `ignore` drops its open alert without a
+  "recovered" entry. The file format is now documented in
+  `docs/configuration.md`. (#18)
+
 ### Fixed
 
 - An expectation whose query returns `NULL` can now report a third outcome,

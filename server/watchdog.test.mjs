@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, mergeNotifications, envNumber, unreachableAlert, DEFAULT_FEED_MAX , aiMapDegradedAlert } from './watchdog.mjs';
+import { summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, mergeNotifications, envNumber, unreachableAlert, DEFAULT_FEED_MAX , aiMapDegradedAlert, isIgnored } from './watchdog.mjs';
 
 const T = (iso) => new Date(iso).getTime();
 const NOW = T('2026-07-28T12:00:00Z');
@@ -589,4 +589,21 @@ test('alertsToNotifications maps severity onto the feed status, and guesses fail
   assert.equal(legacy.status, 'failure', 'a rule with no severity must not become info');
   const [done] = alertsToNotifications([{ rule: 'ai-map-degraded', workflowId: '', workflowName: 'Architecture map', severity: 'info', kind: 'resolved' }]);
   assert.equal(done.status, 'success', 'a recovery is a recovery whatever the severity was');
+});
+
+// ---- ignore added at runtime (#18) ------------------------------------------
+test('isIgnored matches a workflow by name or by id', () => {
+  assert.equal(isIgnored({ ignore: ['A'] }, { id: 'a', name: 'A' }), true);
+  assert.equal(isIgnored({ ignore: ['a'] }, { id: 'a', name: 'A' }), true);
+  assert.equal(isIgnored({ ignore: ['B'] }, { id: 'a', name: 'A' }), false);
+  assert.equal(isIgnored({}, { id: 'a', name: 'A' }), false);
+});
+
+test('an open alert on a workflow that became ignored is dropped, not recovered', () => {
+  // Ignoring a workflow is not evidence it recovered; a "recovered" message
+  // would be a false all-clear.
+  const first = reconcileAlerts([alert('failing', 'a'), alert('stale', 'b')], {}, { now: NOW });
+  const next = reconcileAlerts([alert('stale', 'b')], first.state, { now: NOW + 60_000, ignored: new Set(['a']) });
+  assert.deepEqual(next.fire, []);
+  assert.deepEqual(Object.keys(next.state), ['stale:b']);
 });

@@ -81,6 +81,12 @@ function budget(cfg, w, key) {
 /** The `perWorkflow` entry for a workflow, by name first and then by id. */
 const perWorkflow = (cfg, w) => cfg.perWorkflow?.[w.name] ?? cfg.perWorkflow?.[w.id];
 
+/** Whether a workflow is excluded from every rule, by name or by id. */
+export function isIgnored(cfg, w) {
+  const ignore = cfg?.ignore || [];
+  return ignore.includes(w.name) || ignore.includes(String(w.id ?? ''));
+}
+
 /**
  * A tunable that has a real default, so "absent" cannot read as 0.
  *
@@ -121,14 +127,13 @@ const DEFAULT_STALE_GRACE_FACTOR = 0;
 export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(), instanceTimezone = 'UTC', onScheduleError = null } = {}) {
   if (!cfg.enabled) return [];
   const out = [];
-  const ignore = new Set(cfg.ignore || []);
   const minErrors = Number(cfg.minErrors ?? 3);
   const errorRate = Number(cfg.errorRate ?? 0.5);
 
   for (const w of Array.isArray(workflows) ? workflows : []) {
     const id = String(w.id ?? '');
     const name = w.name || id;
-    if (ignore.has(name) || ignore.has(id)) continue;
+    if (isIgnored(cfg, { id, name })) continue;
     const s = summary.get(id);
 
     // failing — enough errors to matter AND a high enough share of the window.
@@ -362,10 +367,15 @@ export function alertLink(alert, baseUrl) {
  *
  * @param {object[]} alerts - current output of evaluateAlerts
  * @param {object|null} prevState - state from the previous call, or null
- * @param {{ now?: number, renotifyMin?: number, rules?: (string[]|null) }} [opts]
+ * `ignored` holds workflow ids now excluded from every rule. An open alert on
+ * one is dropped without a recovery: the rules stopped looking, which is not
+ * evidence the condition cleared (issue #18 — `ignore` can change at runtime).
+ *
+ * @param {{ now?: number, renotifyMin?: number, rules?: (string[]|null),
+ *   ignored?: (Set<string>|null) }} [opts]
  * @returns {{ fire: object[], state: object }} fire entries carry `kind`
  */
-export function reconcileAlerts(alerts, prevState, { now = Date.now(), renotifyMin = 0, rules = null } = {}) {
+export function reconcileAlerts(alerts, prevState, { now = Date.now(), renotifyMin = 0, rules = null, ignored = null } = {}) {
   const prev = (prevState && typeof prevState === 'object') ? prevState : {};
   const owns = Array.isArray(rules) ? new Set(rules) : null;
   const stamp = new Date(now).toISOString();
@@ -401,6 +411,7 @@ export function reconcileAlerts(alerts, prevState, { now = Date.now(), renotifyM
     // Outside this pass's scope: it had no data on that rule, so silence is not
     // evidence of recovery. Carry the entry forward untouched.
     if (owns && !owns.has(rule)) { state[k] = prev[k]; continue; }
+    if (ignored?.has(workflowId)) continue;
     fire.push({
       rule, workflowId, workflowName: prev[k].workflowName || workflowId,
       severity: 'success', title: `${prev[k].workflowName || workflowId} recovered`,

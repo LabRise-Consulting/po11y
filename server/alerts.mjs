@@ -16,7 +16,7 @@
 // process — two pushers means two messages.
 import {
   summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, unreachableAlert,
-  aiMapDegradedAlert,
+  aiMapDegradedAlert, isIgnored,
 } from './watchdog.mjs';
 import { isProduction } from './exec-status.mjs';
 import { getKv, setKv } from './db.mjs';
@@ -65,7 +65,8 @@ export function alertNotifications(db, {
   try {
     let prevState = null;
     try { prevState = JSON.parse(getKv(db, STATE_KEY) ?? 'null'); } catch { /* corrupt: start over */ }
-    const { fire, state } = reconcileAlerts(alerts, prevState, { now, renotifyMin, rules });
+    const ignored = new Set(workflows.filter((w) => isIgnored(cfg, w)).map((w) => String(w.id ?? '')));
+    const { fire, state } = reconcileAlerts(alerts, prevState, { now, renotifyMin, rules, ignored });
     setKv(db, STATE_KEY, JSON.stringify(state));
     return { notifications: alertsToNotifications(fire, { now, baseUrl }), fire };
   } catch (e) {
