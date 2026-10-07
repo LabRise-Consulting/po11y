@@ -68,23 +68,75 @@ export function summarizeExecutions(executions, { now = Date.now(), names = null
 const agoMin = (iso, now) => (iso ? Math.floor((now - new Date(iso).getTime()) / MIN) : Infinity);
 
 /**
- * Resolve a budget for one workflow: a `perWorkflow` entry keyed by name or by
- * id wins over the global default. An explicit 0 disables that rule for that
- * workflow, which is why this distinguishes "absent" from "zero".
+ * Resolve a budget for one workflow: the per-workflow override (see
+ * override()) wins over the global default. An explicit 0 disables that rule
+ * for that workflow, which is why this distinguishes "absent" from "zero".
  */
-function budget(cfg, w, key) {
-  const over = perWorkflow(cfg, w);
-  const v = over?.[key] ?? cfg[key];
+function budget(cfg, w, key, tags, warn) {
+  const v = override(cfg, w, key, tags, warn) ?? cfg[key];
   return Number(v) || 0; // absent/0/NaN all mean "rule off"
 }
 
 /** The `perWorkflow` entry for a workflow, by name first and then by id. */
 const perWorkflow = (cfg, w) => cfg.perWorkflow?.[w.name] ?? cfg.perWorkflow?.[w.id];
 
-/** Whether a workflow is excluded from every rule, by name or by id. */
+// n8n workflow tags as per-workflow settings (issue #19). Tags cross the
+// read-only boundary from n8n, so the grammar is strict: exact prefix, a whole
+// number of minutes or the literal `off`. Nothing in a tag reaches SQL, a URL
+// or a shell. n8n caps tag names at 24 characters; `po11y:stale=44640` is 17.
+const TAG_PREFIX = 'po11y:';
+const TAG_BUDGET = /^po11y:(stale|stuck)=(off|\d+)$/;
+const TAG_KEY = { stale: 'staleAfterMin', stuck: 'stuckAfterMin' };
+
+/**
+ * The po11y settings a workflow carries as n8n tags.
+ *
+ * @param {{tags?: (Array<{name?: string}|string>)}} w
+ * @returns {{ staleAfterMin?: number, stuckAfterMin?: number, ignore: boolean, malformed: string[] }}
+ */
+export function workflowTags(w) {
+  const out = { ignore: false, malformed: [] };
+  const seen = {};
+  for (const t of Array.isArray(w?.tags) ? w.tags : []) {
+    const name = typeof t === 'string' ? t : t?.name;
+    if (typeof name !== 'string' || !name.startsWith(TAG_PREFIX)) continue;
+    if (name === 'po11y:ignore') { out.ignore = true; continue; }
+    const m = TAG_BUDGET.exec(name);
+    if (!m) { out.malformed.push(name); continue; }
+    (seen[TAG_KEY[m[1]]] ||= []).push({ name, value: m[2] === 'off' ? 0 : Number(m[2]) });
+  }
+  // Two tags that disagree about one rule: neither is trusted.
+  for (const [key, found] of Object.entries(seen)) {
+    if (new Set(found.map((f) => f.value)).size > 1) out.malformed.push(...found.map((f) => f.name));
+    else out[key] = found[0].value;
+  }
+  return out;
+}
+
+/**
+ * The per-workflow value for one key, or undefined. The rules file wins over
+ * a tag on purpose: anyone who can edit the workflow in n8n can tag it, but
+ * only whoever runs po11y can edit the file, so a tag must not be able to
+ * silence the operator's override. A disagreement is reported, not hidden.
+ */
+function override(cfg, w, key, tags, warn) {
+  const file = perWorkflow(cfg, w)?.[key];
+  const tag = tags?.[key];
+  if (file === undefined || file === null) return tag;
+  if (tag !== undefined && Number(file) !== tag) {
+    const tagName = `po11y:${key === 'staleAfterMin' ? 'stale' : 'stuck'}=${tag === 0 ? 'off' : tag}`;
+    warn?.(`server: workflow "${w.name}" is tagged ${tagName} but ALERT_RULES_FILE sets ${key}: ${file} — using the file`);
+  }
+  return file;
+}
+
+/**
+ * Whether a workflow is excluded from every rule: by name or id in `ignore`,
+ * or by a `po11y:ignore` tag. The two are a union.
+ */
 export function isIgnored(cfg, w) {
   const ignore = cfg?.ignore || [];
-  return ignore.includes(w.name) || ignore.includes(String(w.id ?? ''));
+  return ignore.includes(w.name) || ignore.includes(String(w.id ?? '')) || workflowTags(w).ignore;
 }
 
 /**
@@ -120,11 +172,15 @@ const DEFAULT_STALE_GRACE_FACTOR = 0;
  *   expression: string}) => void)|null }} [opts] - instanceTimezone is the n8n
  *   instance default a workflow's own settings.timezone overrides;
  *   onScheduleError is called for each schedule this module could not parse,
- *   so the caller can log it without this one importing a logger.
+ *   so the caller can log it without this one importing a logger;
+ *   onTagWarning likewise gets one line per malformed po11y tag and per
+ *   tag that disagrees with the rules file.
  * @returns {{rule: string, workflowId: string, workflowName: string,
  *   severity: string, title: string, message: string, since: (string|null)}[]}
  */
-export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(), instanceTimezone = 'UTC', onScheduleError = null } = {}) {
+export function evaluateAlerts(summary, workflows, cfg = {}, {
+  now = Date.now(), instanceTimezone = 'UTC', onScheduleError = null, onTagWarning = null,
+} = {}) {
   if (!cfg.enabled) return [];
   const out = [];
   const minErrors = Number(cfg.minErrors ?? 3);
@@ -133,7 +189,12 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(),
   for (const w of Array.isArray(workflows) ? workflows : []) {
     const id = String(w.id ?? '');
     const name = w.name || id;
-    if (isIgnored(cfg, { id, name })) continue;
+    const target = { id, name, tags: w.tags };
+    const tags = workflowTags(target);
+    for (const bad of tags.malformed) {
+      onTagWarning?.(`server: workflow "${name}" has a malformed tag "${bad}" — ignored`);
+    }
+    if (isIgnored(cfg, target)) continue;
     const s = summary.get(id);
 
     // failing — enough errors to matter AND a high enough share of the window.
@@ -165,13 +226,15 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(),
     //      operators who never enabled it, on upgrade.
     //   2. an explicit perWorkflow staleAfterMin — the operator's override
     //      always wins, including an explicit 0 to silence one workflow.
+    //      Then a po11y:stale tag on the workflow (#19), same meaning.
     //   3. a parseable Schedule Trigger — expected fire time (or cadence)
     //      plus grace.
     //   4. anything else, including an unparseable schedule — the enabled
     //      global flat budget, as before.
     const globalStale = Number(cfg.staleAfterMin) || 0;
     if (globalStale > 0 && w.active !== false) {
-      const over = perWorkflow(cfg, { id, name });
+      const over = perWorkflow(cfg, target);
+      const pinned = override(cfg, target, 'staleAfterMin', tags, onTagWarning);
       const ref = s?.lastOkAt || w.updatedAt || null;
       const age = agoMin(ref, now);
       const refMs = ref ? new Date(ref).getTime() : -Infinity;
@@ -187,8 +250,8 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(),
       };
 
       let message = null;
-      if (over?.staleAfterMin !== undefined && over?.staleAfterMin !== null) {
-        message = flat(Number(over.staleAfterMin) || 0);
+      if (pinned !== undefined && pinned !== null) {
+        message = flat(Number(pinned) || 0);
       } else {
         const sched = expectedSchedule(w, { instanceTimezone, now });
         if (sched.unparseable) {
@@ -238,7 +301,7 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(),
     // stuck — an execution still `running` past the budget. Usually a webhook
     // or HTTP call that never resolved; it never becomes an error, so nothing
     // else in this file would ever notice it.
-    const stuckAfterMin = budget(cfg, { id, name }, 'stuckAfterMin');
+    const stuckAfterMin = budget(cfg, target, 'stuckAfterMin', tags, onTagWarning);
     if (stuckAfterMin && s?.running?.length) {
       const hung = s.running.filter((r) => r.ageMin >= stuckAfterMin);
       if (hung.length) {

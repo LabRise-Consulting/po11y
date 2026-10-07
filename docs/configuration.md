@@ -171,10 +171,12 @@ picks a budget per workflow in this order:
 
 1. An explicit `perWorkflow.<name>.staleAfterMin` in `ALERT_RULES_FILE`. `0`
    silences that workflow.
-2. The workflow's Schedule Trigger. po11y computes the most recent run the
+2. A `po11y:stale=<minutes>` or `po11y:stale=off` tag on the workflow (see
+   [Workflow tags](#workflow-tags)).
+3. The workflow's Schedule Trigger. po11y computes the most recent run the
    schedule expected. The workflow is stale when no success followed that run
    and the grace period has passed.
-3. The flat `ALERT_STALE_AFTER_MIN` budget.
+4. The flat `ALERT_STALE_AFTER_MIN` budget.
 
 po11y reads interval rules and cron expressions (5-field, and n8n's 6-field
 form with seconds). An expression it cannot read uses the flat budget and is
@@ -209,6 +211,21 @@ Optional JSON file for per-workflow budgets. Env variables win over the file.
 The server re-reads the file on every feed rebuild when its mtime or size changed, and on `SIGHUP` (`docker compose kill -s HUP server`). Each reload logs the number of `perWorkflow` and `ignore` entries. A file that does not parse or validate keeps the previous rules and logs the reason once. At startup the same failure falls back to env only.
 
 An open alert on a workflow you add to `ignore` is dropped without a "recovered" entry.
+
+##### Workflow tags
+
+A workflow's author can set its budgets in n8n, with tags:
+
+| Tag | Meaning |
+|---|---|
+| `po11y:stale=4320` | `staleAfterMin` for this workflow |
+| `po11y:stuck=30` | `stuckAfterMin` for this workflow |
+| `po11y:stale=off` / `po11y:stuck=off` | Rule off for this workflow (same as `0` in the file) |
+| `po11y:ignore` | Excluded from every rule (same as `ALERT_IGNORE`) |
+
+Tags survive a rename and need no reload. Matching is exact and case-sensitive. A value must be a whole number of minutes or `off`; any other `po11y:` tag, or two tags that disagree, is ignored and logged once.
+
+Precedence: `ALERT_RULES_FILE` entry, then tag, then Schedule Trigger (stale only), then the global budget. The file wins because anyone who can edit a workflow can tag it, and a tag must not silence the operator's override. A file entry that disagrees with a tag is logged once. `po11y:ignore` and `ignore` are a union. A tag cannot switch on a `stale` rule that `ALERT_STALE_AFTER_MIN=0` has off.
 
 #### Webhook Push Notifications
 

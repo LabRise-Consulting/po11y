@@ -37,6 +37,12 @@ Notable changes to Po11y. Format follows
   (`docs/configuration.md`). The message text is unchanged, and the `raw`
   webhook format and `po11y_incidents` pass the fields through. (#17)
 
+- Per-workflow budgets from n8n workflow tags: `po11y:stale=<minutes>`,
+  `po11y:stuck=<minutes>`, `=off`, and `po11y:ignore`. A tag survives a rename
+  and needs no reload. `ALERT_RULES_FILE` still wins, and a disagreement is
+  logged once; a malformed `po11y:` tag is ignored and logged once. No new n8n
+  API call: the workflow list already carries `tags`. (#19)
+
 - The `stale` watchdog rule now derives its budget from the workflow's own
   Schedule Trigger instead of a flat number of minutes. A Mon–Fri job on a
   six-hour budget raised `stale` every Saturday morning, and the only
