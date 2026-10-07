@@ -4,31 +4,7 @@ Notable changes to Po11y. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-
-- `ALERT_RULES_FILE` is re-read without a restart: when its mtime or size
-  changes (checked once per feed rebuild) and on `SIGHUP`. A file that fails
-  to parse or validate keeps the previous rules and logs the reason once;
-  each reload logs its `perWorkflow` and `ignore` counts. Env still wins over
-  the file. Adding a workflow to `ignore` drops its open alert without a
-  "recovered" entry. The file format is now documented in
-  `docs/configuration.md`. (#18)
-
-### Fixed
-
-- An expectation whose query returns `NULL` can now report a third outcome,
-  `pending`, instead of being coerced to `0` and failing. A delta over a
-  self-sampled series has no baseline on a fresh store, so the shipped "orders
-  grew in the last 26 hours" expectation raised a false alarm for one full
-  window after every fresh deployment. It is opt-in per expectation
-  (`nullIsPending: true`, validated at load and set on that one expectation):
-  `SUM(...)` over an empty window also returns `NULL`, and treating every
-  `NULL` as pending would turn a real failure into silence. `COUNT`-based
-  expectations and `max-age-minutes` are unchanged, and a genuine zero still
-  fails. A pending result notifies nothing and leaves reconciliation state
-  untouched, so it neither resolves nor re-fires an existing failure. (#16)
+## [0.3.0] - 2026-10-07
 
 ### Added
 
@@ -64,6 +40,30 @@ Notable changes to Po11y. Format follows
   and DST arithmetic are hand-written in `server/schedule.mjs`, since `server/`
   carries no npm dependencies. The Grafana `Po11yWorkflowStale` rule reads
   Postgres and keeps its flat six-hour window. (#15)
+
+### Changed
+
+- `ALERT_RULES_FILE` is re-read without a restart: when its mtime or size
+  changes (checked once per feed rebuild) and on `SIGHUP`. A file that fails
+  to parse or validate keeps the previous rules and logs the reason once;
+  each reload logs its `perWorkflow` and `ignore` counts. Env still wins over
+  the file. Adding a workflow to `ignore` drops its open alert without a
+  "recovered" entry. The file format is now documented in
+  `docs/configuration.md`. (#18)
+
+### Fixed
+
+- An expectation whose query returns `NULL` can now report a third outcome,
+  `pending`, instead of being coerced to `0` and failing. A delta over a
+  self-sampled series has no baseline on a fresh store, so the shipped "orders
+  grew in the last 26 hours" expectation raised a false alarm for one full
+  window after every fresh deployment. It is opt-in per expectation
+  (`nullIsPending: true`, validated at load and set on that one expectation):
+  `SUM(...)` over an empty window also returns `NULL`, and treating every
+  `NULL` as pending would turn a real failure into silence. `COUNT`-based
+  expectations and `max-age-minutes` are unchanged, and a genuine zero still
+  fails. A pending result notifies nothing and leaves reconciliation state
+  untouched, so it neither resolves nor re-fires an existing failure. (#16)
 
 ## [0.2.0] - 2026-08-27
 
@@ -940,5 +940,6 @@ and the README calls the deployments **bundled** and **read-only**.
   nothing.
 - `docs/superpowers/` (local planning output) removed and stripped from history.
 
+[0.3.0]: https://github.com/LabRise-Consulting/po11y/releases/tag/v0.3.0
 [0.2.0]: https://github.com/LabRise-Consulting/po11y/releases/tag/v0.2.0
 [0.1.0]: https://github.com/LabRise-Consulting/po11y/releases/tag/v0.1.0
