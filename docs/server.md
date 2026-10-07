@@ -256,6 +256,7 @@ the fourth expectation in the shipped pack, watching `orders`:
   "kind": "min-count",
   "min": 1,
   "windowMinutes": 1560,
+  "nullIsPending": true,
   "sql": "SELECT (SELECT rows FROM datatable_counts WHERE key = 'orders' ORDER BY sampled_at DESC LIMIT 1) - (SELECT rows FROM datatable_counts WHERE key = 'orders' AND sampled_at <= ? ORDER BY sampled_at DESC LIMIT 1)"
 }
 ```
