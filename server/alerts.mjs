@@ -29,6 +29,9 @@ const STATE_KEY = 'alert-state';
 // line to stderr every poll forever. Process-scoped on purpose: a restart is
 // exactly when an operator wants to see the boot-time complaint again.
 const reportedSchedules = new Set();
+// Tag warnings (malformed po11y tag, tag vs rules file), by full line, for
+// the same reason.
+const reportedTags = new Set();
 
 export function alertNotifications(db, {
   executions, workflows, names = null, cfg, now = Date.now(),
@@ -48,6 +51,12 @@ export function alertNotifications(db, {
     log(`server: workflow "${workflowName}" has an unparseable schedule "${expression}" — using the flat stale budget`);
   };
 
+  const onTagWarning = (line) => {
+    if (reportedTags.has(line)) return;
+    reportedTags.add(line);
+    log(line);
+  };
+
   let alerts;
   try {
     if (!Array.isArray(workflows)) throw new Error('workflows must be an array');
@@ -56,7 +65,7 @@ export function alertNotifications(db, {
     // exec-status.mjs for why `integrated` stays in.
     const production = (Array.isArray(executions) ? executions : []).filter(isProduction);
     const summary = summarizeExecutions(production, { now, names });
-    alerts = evaluateAlerts(summary, workflows, cfg, { now, instanceTimezone, onScheduleError });
+    alerts = evaluateAlerts(summary, workflows, cfg, { now, instanceTimezone, onScheduleError, onTagWarning });
   } catch (e) {
     log(`server: alert evaluation failed — ${e.message}`);
     return nothing;

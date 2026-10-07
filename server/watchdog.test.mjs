@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, mergeNotifications, envNumber, unreachableAlert, DEFAULT_FEED_MAX , aiMapDegradedAlert, isIgnored } from './watchdog.mjs';
+import { summarizeExecutions, evaluateAlerts, reconcileAlerts, alertsToNotifications, mergeNotifications, envNumber, unreachableAlert, DEFAULT_FEED_MAX , aiMapDegradedAlert, isIgnored, workflowTags } from './watchdog.mjs';
 
 const T = (iso) => new Date(iso).getTime();
 const NOW = T('2026-07-28T12:00:00Z');
@@ -687,4 +687,97 @@ test('an instance-level alert has a rule but no empty workflowId field', () => {
   assert.equal(n.rule, 'unreachable');
   assert.equal('workflowId' in n, false);
   assert.equal('threshold' in n, false);
+});
+
+// ---- per-workflow budgets from n8n tags (#19) -------------------------------
+const tagged = (...names) => ({ tags: names.map((name, i) => ({ id: String(i), name })) });
+const STALE_ON = { enabled: true, staleAfterMin: 60, minErrors: 99 };
+const lastOk400 = () => sum([{ workflowId: 'a', status: 'success', startedAt: '2026-07-28T05:20:00Z' }]); // 400 min ago
+
+test('workflowTags reads each row of the table, and nothing else', () => {
+  assert.deepEqual(workflowTags(tagged('po11y:stale=4320', 'po11y:stuck=30', 'po11y:ignore', 'billing')),
+    { staleAfterMin: 4320, stuckAfterMin: 30, ignore: true, malformed: [] });
+  assert.deepEqual(workflowTags(tagged('po11y:stale=off', 'po11y:stuck=off')),
+    { staleAfterMin: 0, stuckAfterMin: 0, ignore: false, malformed: [] });
+  assert.deepEqual(workflowTags({}), { ignore: false, malformed: [] });
+});
+
+test('workflowTags rejects anything but an exact prefix and a whole number or off', () => {
+  const bad = ['po11y:stale=soon', 'po11y:stale=-5', 'po11y:stale=1.5', 'po11y:stale= 60', 'Po11y:stale=60',
+    'po11y:stale=60m', 'po11y:ignore=yes', 'po11y:sleep=60', 'po11y:stale=OFF'];
+  const t = workflowTags(tagged(...bad));
+  assert.equal(t.staleAfterMin, undefined);
+  assert.equal(t.ignore, false);
+  assert.deepEqual(t.malformed, bad.filter((n) => n.startsWith('po11y:')));
+});
+
+test('two disagreeing tags for one rule cancel out and are reported', () => {
+  const t = workflowTags(tagged('po11y:stale=60', 'po11y:stale=120'));
+  assert.equal(t.staleAfterMin, undefined);
+  assert.deepEqual(t.malformed, ['po11y:stale=60', 'po11y:stale=120']);
+});
+
+test('a tag sets the stale budget when the file has no entry', () => {
+  const quiet = evaluateAlerts(lastOk400(), [wf('a', 'A', tagged('po11y:stale=4320'))], STALE_ON, { now: NOW });
+  assert.deepEqual(quiet, [], '400 min is inside a 4320 min tag budget');
+  const [a] = evaluateAlerts(lastOk400(), [wf('a', 'A', tagged('po11y:stale=300'))], STALE_ON, { now: NOW });
+  assert.deepEqual(a.threshold, { staleAfterMin: 300 });
+});
+
+test('a tag wins over the Schedule Trigger', () => {
+  const w = cronWf('0 9 * * *', tagged('po11y:stale=4320'));
+  assert.deepEqual(evaluateAlerts(sum(ok('2026-07-27T09:00:00Z')), [w], DERIVED, { now: NOW }), []);
+});
+
+test('the file entry wins over a tag, and the mismatch is reported', () => {
+  const seen = [];
+  const cfg = { ...STALE_ON, perWorkflow: { A: { staleAfterMin: 360 } } };
+  const [a] = evaluateAlerts(lastOk400(), [wf('a', 'A', tagged('po11y:stale=4320'))], cfg,
+    { now: NOW, onTagWarning: (m) => seen.push(m) });
+  assert.deepEqual(a.threshold, { staleAfterMin: 360 });
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], /"A".*po11y:stale=4320.*staleAfterMin: 360/);
+});
+
+test('a file entry that agrees with the tag is not reported', () => {
+  const seen = [];
+  const cfg = { ...STALE_ON, perWorkflow: { A: { staleAfterMin: 4320 } } };
+  evaluateAlerts(lastOk400(), [wf('a', 'A', tagged('po11y:stale=4320'))], cfg, { now: NOW, onTagWarning: (m) => seen.push(m) });
+  assert.deepEqual(seen, []);
+});
+
+test('po11y:stale=off turns the stale rule off for that workflow', () => {
+  assert.deepEqual(evaluateAlerts(lastOk400(), [wf('a', 'A', tagged('po11y:stale=off'))], STALE_ON, { now: NOW }), []);
+});
+
+test('a tag cannot switch on a stale rule that is off globally', () => {
+  const cfg = { enabled: true, staleAfterMin: 0, minErrors: 99 };
+  assert.deepEqual(evaluateAlerts(lastOk400(), [wf('a', 'A', tagged('po11y:stale=1'))], cfg, { now: NOW }), []);
+});
+
+test('po11y:stuck sets the stuck budget, and off silences it', () => {
+  const s = sum([{ id: 'e1', workflowId: 'a', status: 'running', startedAt: '2026-07-28T11:00:00Z' }]); // 60 min
+  const cfg = { enabled: true, stuckAfterMin: 120, minErrors: 99 };
+  assert.deepEqual(rules(evaluateAlerts(s, [wf('a', 'A', tagged('po11y:stuck=30'))], cfg, { now: NOW })), ['stuck:a']);
+  assert.deepEqual(evaluateAlerts(s, [wf('a', 'A', tagged('po11y:stuck=off'))], { ...cfg, stuckAfterMin: 30 }, { now: NOW }), []);
+});
+
+test('po11y:ignore excludes a workflow from every rule, alongside ALERT_IGNORE', () => {
+  const s = sum([
+    { workflowId: 'a', status: 'error', startedAt: '2026-07-28T11:00:00Z' },
+    { workflowId: 'b', status: 'error', startedAt: '2026-07-28T11:00:00Z' },
+  ]);
+  const cfg = { enabled: true, minErrors: 1, errorRate: 0.5, ignore: ['B'] };
+  const out = evaluateAlerts(s, [wf('a', 'A', tagged('po11y:ignore')), wf('b', 'B'), wf('c', 'C')], cfg, { now: NOW });
+  assert.deepEqual(out, []);
+  assert.equal(isIgnored(cfg, wf('a', 'A', tagged('po11y:ignore'))), true);
+});
+
+test('a malformed tag is ignored and reported', () => {
+  const seen = [];
+  const [a] = evaluateAlerts(lastOk400(), [wf('a', 'A', tagged('po11y:stale=soon'))], STALE_ON,
+    { now: NOW, onTagWarning: (m) => seen.push(m) });
+  assert.deepEqual(a.threshold, { staleAfterMin: 60 }, 'falls through to the global budget');
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], /"A".*po11y:stale=soon/);
 });

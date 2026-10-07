@@ -258,3 +258,20 @@ test('ignoring a workflow at runtime drops its open alert without a recovery', (
   assert.deepEqual(out.notifications, []);
   assert.deepEqual(JSON.parse(getKv(db, 'alert-state')), {});
 });
+
+test('a malformed po11y tag is logged once, not on every rebuild', () => {
+  const db = openDb(':memory:');
+  const logs = [];
+  const workflows = [{ ...WF[0], tags: [{ id: '1', name: 'po11y:stale=soon' }] }];
+  call(db, { workflows, log: (m) => logs.push(m) });
+  call(db, { workflows, log: (m) => logs.push(m), now: NOW + 60_000 });
+  assert.equal(logs.filter((m) => /malformed tag "po11y:stale=soon"/.test(m)).length, 1);
+});
+
+test('a po11y:ignore tag added at runtime drops the open alert without a recovery', () => {
+  const db = openDb(':memory:');
+  assert.equal(call(db).notifications.length, 1);
+  const workflows = [{ ...WF[0], tags: [{ id: '1', name: 'po11y:ignore' }] }];
+  assert.deepEqual(call(db, { workflows, now: NOW + 60_000 }).notifications, []);
+  assert.deepEqual(JSON.parse(getKv(db, 'alert-state')), {});
+});
