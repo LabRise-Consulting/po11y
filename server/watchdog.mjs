@@ -145,6 +145,9 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(),
         title: `${name} is failing`,
         message: `${s.errors} of the last ${s.count} executions errored.`,
         since: s.lastOkAt,
+        threshold: { minErrors, errorRate },
+        observed: { errors: s.errors, count: s.count },
+        window: { executions: s.count },
       });
     }
 
@@ -172,11 +175,16 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(),
       const ref = s?.lastOkAt || w.updatedAt || null;
       const age = agoMin(ref, now);
       const refMs = ref ? new Date(ref).getTime() : -Infinity;
-      const flat = (b) => (b > 0 && age >= b
-        ? (s?.lastOkAt
+      // The threshold that produced the verdict, recorded beside the message
+      // so a feed entry can be re-evaluated after the budget changes (#17).
+      let threshold = null;
+      const flat = (b) => {
+        if (!(b > 0 && age >= b)) return null;
+        threshold = { staleAfterMin: b };
+        return s?.lastOkAt
           ? `Last success was ${age} min ago (budget ${b} min).`
-          : `No successful execution on record (budget ${b} min).`)
-        : null);
+          : `No successful execution on record (budget ${b} min).`;
+      };
 
       let message = null;
       if (over?.staleAfterMin !== undefined && over?.staleAfterMin !== null) {
@@ -198,10 +206,13 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(),
             // had its grace to do so". Dropping the second would alert the
             // instant a schedule came due, before the run could finish.
             if (refMs < sched.at && now >= sched.at + graceMs) {
-              message = `No success since the expected run at ${new Date(sched.at).toISOString()} (grace ${graceMin} min).`;
+              const expectedAt = new Date(sched.at).toISOString();
+              threshold = { expectedAt, graceMin };
+              message = `No success since the expected run at ${expectedAt} (grace ${graceMin} min).`;
             }
           } else if (now - refMs >= sched.cadenceMs + graceMs) {
             const everyMin = Math.max(1, Math.round(sched.cadenceMs / MIN));
+            threshold = { cadenceMin: everyMin, graceMin };
             message = s?.lastOkAt
               ? `Last success was ${age} min ago (expected every ${everyMin} min, grace ${graceMin} min).`
               : `No successful execution on record (expected every ${everyMin} min, grace ${graceMin} min).`;
@@ -217,6 +228,9 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(),
           title: `${name} has not succeeded recently`,
           message,
           since: ref,
+          threshold,
+          // Infinity (no reference stamp at all) does not survive JSON.
+          observed: { ageMin: Number.isFinite(age) ? age : null },
         });
       }
     }
@@ -237,6 +251,8 @@ export function evaluateAlerts(summary, workflows, cfg = {}, { now = Date.now(),
           title: `${name} has a stuck execution`,
           message: `${hung.length} execution(s) running past ${stuckAfterMin} min: ${hung.map((r) => `#${r.id} (${r.ageMin}m)`).join(', ')}.`,
           since: hung[0].startedAt,
+          threshold: { stuckAfterMin },
+          observed: { running: hung.length, oldestAgeMin: Math.max(...hung.map((r) => r.ageMin)) },
         });
       }
     }
@@ -424,7 +440,8 @@ export function reconcileAlerts(alerts, prevState, { now = Date.now(), renotifyM
 
 /**
  * Render reconciled alerts as notifications.json entries (newest first).
- * Contract lives in docs/configuration.md: { ts, title, message, status, link }.
+ * Contract lives in docs/configuration.md: { ts, title, message, status, link },
+ * plus the optional structured fields documented there.
  *
  * @param {object[]} fire - `fire` from reconcileAlerts
  * @param {{ now?: number, baseUrl?: string }} [opts]
@@ -452,6 +469,14 @@ export function alertsToNotifications(fire, { now = Date.now(), baseUrl = '' } =
     // than none, because the dashboard renders it as a live button.
     const link = alertLink(a, root);
     if (link) n.link = link;
+    // Structured evidence beside the prose (#17), so a consumer never has to
+    // parse the message. Optional on purpose: the five fields above are the
+    // contract every existing reader relies on, and an instance-level alert
+    // has no workflow and no threshold to report.
+    if (a.rule) n.rule = a.rule;
+    if (a.workflowId) n.workflowId = a.workflowId;
+    if (a.since) n.since = a.since;
+    for (const k of ['threshold', 'observed', 'window']) if (a[k]) n[k] = a[k];
     return n;
   });
 }

@@ -293,3 +293,15 @@ test('targetsHost: unparseable URLs are false — the fetch must be what fails l
   assert.equal(targetsHost('http://ok:1', 'not a url'), false);
   assert.equal(targetsHost('', 'http://n8n:5678'), false);
 });
+
+test('raw carries the structured evidence; the chat formats do not (#17)', () => {
+  const a = {
+    ...firing('Alpha'), rule: 'failing', since: '2026-08-01T08:00:00Z',
+    threshold: { minErrors: 3, errorRate: 0.5 }, observed: { errors: 3, count: 5 }, window: { executions: 5 },
+  };
+  const [sent] = buildPushPayload([a], { format: 'raw' }).alerts;
+  assert.deepEqual([sent.rule, sent.since, sent.threshold, sent.observed, sent.window],
+    [a.rule, a.since, a.threshold, a.observed, a.window]);
+  assert.deepEqual(Object.keys(buildPushPayload([a], { format: 'slack' })), ['text']);
+  assert.doesNotMatch(buildPushPayload([a], { format: 'slack' }).text, /minErrors|errorRate/);
+});

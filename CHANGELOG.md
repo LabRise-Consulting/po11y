@@ -32,6 +32,11 @@ Notable changes to Po11y. Format follows
 
 ### Added
 
+- Feed entries carry the evidence behind an alert as optional fields: `rule`,
+  `workflowId`, `name`, `since`, `threshold`, `observed` and `window`
+  (`docs/configuration.md`). The message text is unchanged, and the `raw`
+  webhook format and `po11y_incidents` pass the fields through. (#17)
+
 - The `stale` watchdog rule now derives its budget from the workflow's own
   Schedule Trigger instead of a flat number of minutes. A Mon–Fri job on a
   six-hour budget raised `stale` every Saturday morning, and the only

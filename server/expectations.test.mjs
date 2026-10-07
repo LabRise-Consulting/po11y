@@ -102,7 +102,7 @@ test('a broken query fails its expectation instead of the whole evaluation', () 
 test('toNotifications renders a firing entry in the dashboard feed contract', () => {
   const notes = toNotifications([{ name: 'b', detail: 'broken', kind: 'firing' }], NOW);
   assert.equal(notes.length, 1);
-  assert.deepEqual(Object.keys(notes[0]).sort(), ['message', 'status', 'title', 'ts']);
+  assert.deepEqual(Object.keys(notes[0]).sort(), ['message', 'name', 'rule', 'status', 'title', 'ts']);
   assert.equal(notes[0].status, 'failure');
   assert.match(notes[0].title, /Expectation failed: b/);
   assert.match(notes[0].message, /broken/);
@@ -207,7 +207,8 @@ test('a NULL min-count still fails when the expectation did not opt in', () => {
   // means "nothing happened" — the failure expectation packs exist to catch.
   const db = seed('2026-08-11T05:00:00.000Z');
   const pack = one({ sql: "SELECT SUM(1) FROM executions WHERE status = 'error'" });
-  assert.deepEqual(evaluate(db, pack, NOW), [{ name: 'x', ok: false, detail: '0 < 1' }]);
+  const [r] = evaluate(db, pack, NOW);
+  assert.deepEqual([r.ok, r.detail], [false, '0 < 1']);
 });
 
 test('an opted-in expectation reports NULL as pending, not as a failure', () => {
@@ -222,7 +223,8 @@ test('an opted-in expectation reports NULL as pending, not as a failure', () => 
 test('a genuine zero still fails even with nullIsPending set', () => {
   const db = seed('2026-08-11T05:00:00.000Z');
   const pack = one({ nullIsPending: true, sql: "SELECT COUNT(*) FROM executions WHERE status = 'error'" });
-  assert.deepEqual(evaluate(db, pack, NOW), [{ name: 'x', ok: false, detail: '0 < 1' }]);
+  const [r] = evaluate(db, pack, NOW);
+  assert.deepEqual([r.ok, r.detail], [false, '0 < 1']);
 });
 
 test('a broken query fails rather than going pending', () => {
@@ -277,4 +279,42 @@ test('the shipped growth expectation passes once a baseline straddles the window
 test('the shipped growth expectation still fails on a warmed store that did not grow', () => {
   const db = withSamples([120, '2026-08-09T00:00:00.000Z'], [120, '2026-08-11T05:00:00.000Z']);
   assert.equal(growth(db, NOW).ok, false);
+});
+
+// ---- structured evidence (#17) ----------------------------------------------
+test('a min-count result carries its threshold, the observed value and the window', () => {
+  const db = withSamples([120, '2026-08-11T05:00:00.000Z'], [120, '2026-08-09T00:00:00.000Z']);
+  const r = growth(db, NOW);
+  assert.deepEqual([r.threshold, r.observed, r.window], [{ min: 1 }, { value: 0 }, { minutes: 1560 }]);
+});
+
+test('a max-age result carries its threshold and the observed age', () => {
+  const db = seed('2026-08-11T05:00:00.000Z');
+  const pack = loadPack(JSON.stringify({ expectations: [{
+    name: 'fresh', kind: 'max-age-minutes', maxAgeMinutes: 30, sql: 'SELECT MAX(started_at) FROM executions' }] }));
+  const [r] = evaluate(db, pack, NOW);
+  assert.deepEqual([r.threshold, r.observed, r.window], [{ maxAgeMinutes: 30 }, { ageMin: 60 }, undefined]);
+});
+
+test('a failed query carries a threshold but no observed value', () => {
+  const db = seed('2026-08-11T05:00:00.000Z');
+  const [r] = evaluate(db, one({ sql: 'SELECT nope FROM executions' }), NOW);
+  assert.deepEqual(r.threshold, { min: 1 });
+  assert.equal(r.observed, undefined);
+});
+
+test('the evidence survives reconciliation into the feed entry', () => {
+  const result = { name: 'x', ok: false, detail: '0 < 1', threshold: { min: 1 }, observed: { value: 0 }, window: { minutes: 60 } };
+  const { fire } = reconcileExpectations([result], null, { now: NOW });
+  const [n] = toNotifications(fire, NOW);
+  assert.deepEqual(
+    [n.rule, n.name, n.threshold, n.observed, n.window],
+    ['expectation', 'x', { min: 1 }, { value: 0 }, { minutes: 60 }],
+  );
+});
+
+test('a recovery entry carries rule and name', () => {
+  const [n] = toNotifications([{ name: 'x', detail: '3 >= 1', kind: 'resolved', threshold: { min: 1 }, observed: { value: 3 } }], NOW);
+  assert.deepEqual([n.rule, n.name, n.status], ['expectation', 'x', 'success']);
+  assert.deepEqual(n.observed, { value: 3 });
 });
